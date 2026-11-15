@@ -25,6 +25,13 @@ jobs:
           "$SDKM" "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-33" > /dev/null
       - name: Third-party sources
         run: tools/setup.sh
+      - name: FFmpeg cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/ffmpeg-android
+          key: ffmpeg-android-${{ hashFiles('tools/build_ffmpeg.sh') }}
+      - name: FFmpeg (video fallback)
+        run: bash tools/build_ffmpeg.sh
       - name: Build signed APK
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
