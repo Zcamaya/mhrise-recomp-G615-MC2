@@ -316,6 +316,59 @@ struct Decoder::Impl {
     bool logged_first_frame = false;
     int decoded = 0, sent = 0, released = 0;  // DEPURACIÓN
 
+    // Vídeo por software (FFmpeg): imita al codec asíncrono. Los índices de entrada y de salida son huecos propios.
+    static constexpr int kSwIn = 4, kSwOut = 8;
+    static constexpr size_t kSwInCap = 2 << 20;
+    movie_ff::SwVideo* sw = nullptr;
+    int sw_w = 0, sw_h = 0;
+    bool sw_format_sent = false;
+    std::vector<uint8_t> sw_in[kSwIn];
+    std::vector<uint8_t> sw_out[kSwOut];
+    bool sw_busy[kSwOut] = {};
+    std::deque<movie_ff::SwFrame> sw_pending;
+
+    // Con m tomado: pasa los frames pendientes a los huecos de salida libres.
+    void sw_pump() {
+        while (!sw_pending.empty()) {
+            int slot = -1;
+            for (int i = 0; i < kSwOut; i++)
+                if (!sw_busy[i]) {
+                    slot = i;
+                    break;
+                }
+            if (slot < 0) return;
+            movie_ff::SwFrame f = std::move(sw_pending.front());
+            sw_pending.pop_front();
+            AMediaCodecBufferInfo info{};
+            if (f.eos) {
+                sw_out[slot].clear();
+                info.flags = 4;
+            } else {
+                sw_w = f.width;
+                sw_h = f.height;
+                sw_out[slot] = std::move(f.nv12);
+                info.size = static_cast<int32_t>(sw_out[slot].size());
+                info.presentationTimeUs = f.pts_us;
+                if (!sw_format_sent) {
+                    sw_format_sent = true;
+                    printf("[movie] salida por software %dx%d\n", sw_w, sw_h);
+                    signal(events.format_changed);
+                }
+            }
+            sw_busy[slot] = true;
+            outputs.emplace_back(slot, info);
+            if (++decoded % 60 == 0)
+                printf("[movie] %d frames decodificados (t=%lld us), %d entradas enviadas, %d liberados\n", decoded,
+                       static_cast<long long>(info.presentationTimeUs), sent, released);
+            signal(events.output_available);
+        }
+    }
+    // Con m tomado: todas las entradas libres otra vez.
+    void sw_give_inputs() {
+        inputs.clear();
+        for (int i = 0; i < kSwIn; i++) inputs.push_back(i);
+        signal(events.input_available);
+    }
     void signal(nn::os::EventType* e) {
         if (e) nn::os::SignalEvent(e);
     }
@@ -331,6 +384,9 @@ struct Decoder::Impl {
         inputs.clear();
         outputs.clear();
         given.clear();
+        sw_pending.clear();
+        for (bool& b : sw_busy) b = false;
+        sw_format_sent = false;
         clear(events.input_available);
         clear(events.output_available);
     }
@@ -452,6 +508,7 @@ static void trace(const char* what, int n) {  // DEPURACIÓN
 Decoder::Decoder(DecoderType, DecoderOutputFormat, DecoderMode, int) : impl_(new Impl) {}
 
 Decoder::~Decoder() {
+    if (impl_->sw) movie_ff::sw_close(impl_->sw);
     if (impl_->codec) {
         AMediaCodec_stop(impl_->codec);
         AMediaCodec_delete(impl_->codec);
@@ -476,6 +533,32 @@ Status Decoder::Configure(MediaData* format) {
         AMediaCodec_delete(impl_->codec);
         impl_->codec = nullptr;
         impl_->clear_queues();
+    }
+    if (impl_->sw) {
+        movie_ff::sw_close(impl_->sw);
+        impl_->sw = nullptr;
+        impl_->clear_queues();
+    }
+    if (type == "video/avc") {  // vídeo H.264 por software con FFmpeg (el decoder por hardware se atasca en algunos móviles)
+        AMediaFormat* f0 = to_format(format);
+        int32_t w = 0, h = 0;
+        AMediaFormat_getInt32(f0, "width", &w);
+        AMediaFormat_getInt32(f0, "height", &h);
+        void *c0 = nullptr, *c1 = nullptr;
+        size_t n0 = 0, n1 = 0;
+        AMediaFormat_getBuffer(f0, "csd-0", &c0, &n0);
+        AMediaFormat_getBuffer(f0, "csd-1", &c1, &n1);
+        movie_ff::SwVideo* sw = movie_ff::sw_open(static_cast<const uint8_t*>(c0), n0, static_cast<const uint8_t*>(c1), n1);
+        AMediaFormat_delete(f0);
+        if (sw) {
+            impl_->sw = sw;
+            impl_->video = true;
+            impl_->sw_w = w;
+            impl_->sw_h = h;
+            printf("[movie] decoder video/avc por software (FFmpeg) %dx%d\n", w, h);
+            return kOk;
+        }
+        printf("[movie] sin decoder por software: se usa MediaCodec\n");
     }
     static int failures = 0;
     AMediaCodec* codec = AMediaCodec_createDecoderByType(type.c_str());
@@ -517,6 +600,23 @@ Status Decoder::Configure(MediaData* format) {
 Status Decoder::GetOutputFormat(MediaData* out) {
     static int calls = 0;
     trace("GetOutputFormat", ++calls);
+    if (impl_->sw) {
+        int w, h;
+        {
+            std::lock_guard lock(impl_->m);
+            w = impl_->sw_w;
+            h = impl_->sw_h;
+        }
+        AMediaFormat* sf = AMediaFormat_new();
+        AMediaFormat_setInt32(sf, "width", w);
+        AMediaFormat_setInt32(sf, "height", h);
+        AMediaFormat_setInt32(sf, "stride", w);
+        AMediaFormat_setInt32(sf, "slice-height", h);
+        AMediaFormat_setInt32(sf, "color-format", kColorYuv420SemiPlanar);
+        fill_from(out, sf);
+        AMediaFormat_delete(sf);
+        return kOk;
+    }
     if (!impl_->codec) return kError;
     AMediaFormat* f = AMediaCodec_getOutputFormat(impl_->codec);
     fill_from(out, f);
@@ -525,6 +625,11 @@ Status Decoder::GetOutputFormat(MediaData* out) {
 }
 
 Status Decoder::Start() {
+    if (impl_->sw) {
+        std::lock_guard lock(impl_->m);
+        impl_->sw_give_inputs();
+        return kOk;
+    }
     media_status_t r = impl_->codec ? AMediaCodec_start(impl_->codec) : AMEDIA_ERROR_UNKNOWN;
     return from_media(r);
 }
@@ -539,6 +644,13 @@ Status Decoder::Reset() { return Stop(); }
 
 // En modo asíncrono, tras flush hay que volver a llamar a start.
 Status Decoder::Flush() {
+    if (impl_->sw) {
+        movie_ff::sw_flush(impl_->sw);
+        impl_->clear_queues();
+        std::lock_guard lock(impl_->m);
+        impl_->sw_give_inputs();
+        return kOk;
+    }
     if (!impl_->codec) return kError;
     AMediaCodec_flush(impl_->codec);
     impl_->clear_queues();
@@ -561,6 +673,15 @@ Status Decoder::AcquireInputBufferIndex(int* index, int* remaining) {
 }
 
 Status Decoder::GetInputBuffer(int index, Buffer* out) {
+    if (impl_->sw) {
+        if (index < 0 || index >= Impl::kSwIn) return kError;
+        std::lock_guard lock(impl_->m);
+        auto& v = impl_->sw_in[index];
+        if (v.size() < Impl::kSwInCap) v.resize(Impl::kSwInCap);
+        out->SetDataAndCapacity(v.data(), v.size());
+        out->SetRange(0, 0);
+        return kOk;
+    }
     size_t capacity = 0;
     uint8_t* data = impl_->codec ? AMediaCodec_getInputBuffer(impl_->codec, index, &capacity) : nullptr;
     if (!data) return kError;
@@ -570,6 +691,27 @@ Status Decoder::GetInputBuffer(int index, Buffer* out) {
 }
 
 Status Decoder::SendInputBufferForDecode(int index, int offset, int size, long time_us, unsigned flags) {
+    if (impl_->sw) {
+        if (index < 0 || index >= Impl::kSwIn) return kError;
+        std::lock_guard lock(impl_->m);
+        if (impl_->sent++ < 40 || (flags & 4))
+            printf("[movie] entrada %d: %d bytes t=%ld flags 0x%x (software)\n", impl_->sent, size, time_us, flags);
+        auto& v = impl_->sw_in[index];
+        std::vector<movie_ff::SwFrame> frames;
+        if (size > 0 && offset >= 0 && static_cast<size_t>(offset) + size <= v.size())
+            movie_ff::sw_decode(impl_->sw, v.data() + offset, static_cast<size_t>(size), time_us < 0 ? 0 : time_us, &frames);
+        if (flags & 4) {
+            movie_ff::sw_decode(impl_->sw, nullptr, 0, 0, &frames);
+            movie_ff::SwFrame e;
+            e.eos = true;
+            frames.push_back(std::move(e));
+        }
+        for (auto& f : frames) impl_->sw_pending.push_back(std::move(f));
+        impl_->sw_pump();
+        impl_->inputs.push_back(index);
+        impl_->signal(impl_->events.input_available);
+        return kOk;
+    }
     if (!impl_->codec) return kError;
     if (impl_->sent++ < 40 || (flags & 4))
         printf("[movie] entrada %d: %d bytes t=%ld flags 0x%x\n", impl_->sent, size, time_us, flags);
@@ -601,6 +743,20 @@ Status Decoder::AcquireOutputBufferIndex(int* index, long* time_us, unsigned* fl
 // con los offsets nv12-* del formato de salida: se le copia tal cual. MH Rise reserva justo el NV12 compacto
 // del vídeo (menos que el frame con relleno) y lo lee sin preguntar: se recoloca.
 Status Decoder::GetOutputBuffer(int index, Buffer* out) {
+    if (impl_->sw) {
+        std::lock_guard lock(impl_->m);
+        if (index < 0 || index >= Impl::kSwOut || !impl_->sw_busy[index]) return kError;
+        auto& v = impl_->sw_out[index];
+        if (!out->Base() || !out->Capacity()) {
+            out->SetDataAndCapacity(v.data(), v.size());
+            out->SetRange(0, static_cast<int>(v.size()));
+            return kOk;
+        }
+        size_t n = std::min(out->Capacity(), v.size());
+        memcpy(out->Base(), v.data(), n);
+        out->SetRange(0, static_cast<int>(n));
+        return kOk;
+    }
     size_t capacity = 0;
     uint8_t* data = impl_->codec ? AMediaCodec_getOutputBuffer(impl_->codec, index, &capacity) : nullptr;
     if (!data) return kError;
@@ -637,6 +793,13 @@ Status Decoder::GetOutputBuffer(int index, Buffer* out) {
 // del decoder, redondeado a 4 KB como lo entrega el de Qualcomm (1600x904 -> 2170880). En audio no hay
 // dimensiones: manda el tamaño de los buffers de PCM que ya ha dado el decoder.
 Status Decoder::GetOutputBufferSize(int* size, int* count) {
+    if (impl_->sw) {
+        std::lock_guard lock(impl_->m);
+        size_t bytes = size_t(impl_->sw_w) * impl_->sw_h * 3 / 2;
+        *size = static_cast<int>((bytes + 4095) & ~size_t{4095});
+        *count = 1;
+        return kOk;
+    }
     int32_t width = 0, height = 0, stride = 0, slice = 0;
     if (impl_->codec) {
         AMediaFormat* f = AMediaCodec_getOutputFormat(impl_->codec);
@@ -663,6 +826,14 @@ Status Decoder::GetOutputBufferSize(int* size, int* count) {
 Status Decoder::ReleaseOutputBufferIndex(int index) {
     static int calls = 0;
     trace("ReleaseOutput", ++calls);
+    if (impl_->sw) {
+        std::lock_guard lock(impl_->m);
+        impl_->given.erase(index);
+        impl_->released++;
+        if (index >= 0 && index < Impl::kSwOut) impl_->sw_busy[index] = false;
+        impl_->sw_pump();
+        return kOk;
+    }
     {
         std::lock_guard lock(impl_->m);
         impl_->given.erase(index);

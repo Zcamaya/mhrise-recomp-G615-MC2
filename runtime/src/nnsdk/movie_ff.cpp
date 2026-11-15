@@ -4,6 +4,7 @@
 #include <media/NdkMediaFormat.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -28,6 +29,10 @@ AMediaFormat* track_format(Demuxer*, int) { return nullptr; }
 bool select_track(Demuxer*, int, bool) { return false; }
 int next_track(Demuxer*) { return -1; }
 int64_t sample_time(Demuxer*) { return -1; }
+SwVideo* sw_open(const uint8_t*, size_t, const uint8_t*, size_t) { return nullptr; }
+void sw_close(SwVideo*) {}
+void sw_flush(SwVideo*) {}
+void sw_decode(SwVideo*, const uint8_t*, size_t, int64_t, std::vector<SwFrame>*) {}
 bool sample_sync(Demuxer*) { return false; }
 ssize_t sample_size(Demuxer*) { return -1; }
 ssize_t read_sample(Demuxer*, uint8_t*, size_t) { return -1; }
@@ -335,6 +340,109 @@ int64_t duration_us(Demuxer* d) {
         end = std::max(end, dur);
     }
     return end;
+}
+
+struct SwVideo {
+    AVCodecContext* ctx = nullptr;
+    AVPacket* pkt = nullptr;
+    AVFrame* frame = nullptr;
+    int errors = 0;
+};
+
+void sw_close(SwVideo* s) {
+    if (!s) return;
+    if (s->ctx) avcodec_free_context(&s->ctx);
+    if (s->pkt) av_packet_free(&s->pkt);
+    if (s->frame) av_frame_free(&s->frame);
+    delete s;
+}
+
+SwVideo* sw_open(const uint8_t* csd0, size_t n0, const uint8_t* csd1, size_t n1) {
+    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    if (!codec) {
+        printf("[movie] ffmpeg: sin decoder H.264\n");
+        return nullptr;
+    }
+    auto* s = new SwVideo;
+    s->ctx = avcodec_alloc_context3(codec);
+    s->pkt = av_packet_alloc();
+    s->frame = av_frame_alloc();
+    if (!s->ctx || !s->pkt || !s->frame) {
+        sw_close(s);
+        return nullptr;
+    }
+    size_t total = (csd0 ? n0 : 0) + (csd1 ? n1 : 0);
+    if (total) {
+        s->ctx->extradata = static_cast<uint8_t*>(av_mallocz(total + AV_INPUT_BUFFER_PADDING_SIZE));
+        if (!s->ctx->extradata) {
+            sw_close(s);
+            return nullptr;
+        }
+        size_t o = 0;
+        if (csd0 && n0) memcpy(s->ctx->extradata + o, csd0, n0), o += n0;
+        if (csd1 && n1) memcpy(s->ctx->extradata + o, csd1, n1), o += n1;
+        s->ctx->extradata_size = static_cast<int>(total);
+    }
+    s->ctx->pkt_timebase = AVRational{1, 1000000};
+    s->ctx->thread_count = 1;
+    int r = avcodec_open2(s->ctx, codec, nullptr);
+    if (r < 0) {
+        printf("[movie] ffmpeg: avcodec_open2 falló (%d)\n", r);
+        sw_close(s);
+        return nullptr;
+    }
+    return s;
+}
+
+void sw_flush(SwVideo* s) {
+    if (s && s->ctx) avcodec_flush_buffers(s->ctx);
+}
+
+void sw_decode(SwVideo* s, const uint8_t* data, size_t size, int64_t pts_us, std::vector<SwFrame>* out) {
+    if (!s || !s->ctx) return;
+    int r;
+    if (data) {
+        s->pkt->data = const_cast<uint8_t*>(data);
+        s->pkt->size = static_cast<int>(size);
+        s->pkt->pts = pts_us;
+        s->pkt->dts = pts_us;
+        r = avcodec_send_packet(s->ctx, s->pkt);
+        s->pkt->data = nullptr;
+        s->pkt->size = 0;
+    } else {
+        r = avcodec_send_packet(s->ctx, nullptr);
+    }
+    if (r < 0 && r != AVERROR(EAGAIN) && r != AVERROR_EOF && s->errors++ < 8)
+        printf("[movie] ffmpeg: send_packet %d\n", r);
+    while (avcodec_receive_frame(s->ctx, s->frame) >= 0) {
+        AVFrame* f = s->frame;
+        int w = f->width & ~1, h = f->height & ~1;
+        bool nv12 = f->format == AV_PIX_FMT_NV12;
+        bool i420 = f->format == AV_PIX_FMT_YUV420P || f->format == AV_PIX_FMT_YUVJ420P;
+        if ((nv12 || i420) && w > 0 && h > 0) {
+            SwFrame o;
+            o.width = w;
+            o.height = h;
+            o.pts_us = f->pts != AV_NOPTS_VALUE ? f->pts : (f->best_effort_timestamp != AV_NOPTS_VALUE ? f->best_effort_timestamp : pts_us);
+            o.nv12.resize(size_t(w) * h * 3 / 2);
+            uint8_t* y = o.nv12.data();
+            for (int row = 0; row < h; row++) memcpy(y + size_t(row) * w, f->data[0] + size_t(row) * f->linesize[0], w);
+            uint8_t* uv = y + size_t(w) * h;
+            for (int row = 0; row < h / 2; row++, uv += w) {
+                if (nv12) {
+                    memcpy(uv, f->data[1] + size_t(row) * f->linesize[1], w);
+                } else {
+                    const uint8_t* u = f->data[1] + size_t(row) * f->linesize[1];
+                    const uint8_t* v = f->data[2] + size_t(row) * f->linesize[2];
+                    for (int x = 0; x < w / 2; x++) uv[2 * x] = u[x], uv[2 * x + 1] = v[x];
+                }
+            }
+            out->push_back(std::move(o));
+        } else if (s->errors++ < 8) {
+            printf("[movie] ffmpeg: formato de pixel %d no soportado\n", f->format);
+        }
+        av_frame_unref(f);
+    }
 }
 
 #endif  // MHRISE_FFMPEG
