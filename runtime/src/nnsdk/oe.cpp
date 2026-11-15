@@ -110,7 +110,7 @@ settings::LanguageCode GetDesiredLanguage() {
 
 void GetDisplayVersion(DisplayVersion* out) {
     memset(out, 0, sizeof *out);
-    strcpy(out->value, "16.0.2");
+    strcpy(out->value, "16.0.1");
 }
 
 OperationMode GetOperationMode() { return OperationMode_Handheld; }
