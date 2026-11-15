@@ -23,7 +23,7 @@ if [ -n "${INSTALL_ONLY:-}" ]; then exit 0; fi
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell rm -f "$DATA/log.txt"
 adb logcat -c
-adb shell am start -n "$PKG/android.app.NativeActivity" > /dev/null && echo "started"
+adb shell am start -n "$PKG/.GameActivity" > /dev/null && echo "started"
 
 # Wait until the game ends, crashes or the watchdog fires.
 for _ in $(seq "$(( ${SECS:-60} / 2 ))"); do

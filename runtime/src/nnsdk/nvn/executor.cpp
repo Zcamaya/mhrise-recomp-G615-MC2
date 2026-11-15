@@ -10,6 +10,7 @@
 
 #include <pthread.h>
 #include <sys/resource.h>
+#include <sys/sysinfo.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -36,6 +37,7 @@
 #include <type_traits>
 #include <unordered_map>
 
+#include "nnsdk/nvn/bcn.h"
 #include "nnsdk/nvn/commands.h"
 #include "nnsdk/watch.h"
 #include "nnsdk/nvn/fsr.h"
@@ -87,6 +89,19 @@ constexpr int kMaxUniforms = 18, kMaxTextures = 32, kMaxStorage = 16, kMaxVertex
 constexpr uint32_t kImageHandleBase = 0x128;
 constexpr VkDeviceSize kStagingChunk = 16 << 20;  // también lo más grande que cabe en una reserva
 constexpr VkDeviceSize kFreeStagingBytes = 128 << 20;  // trozos de staging sueltos que se guardan para reutilizar
+// Un teléfono con poca RAM (menos de 5 GB en total, o <datos>/memoria_baja): lo que se guarda por si acaso (los trozos de
+// staging sueltos y los espejos de buffers), a la mitad. Lo que hace falta en cada frame (las arenas) no cambia: con
+// menos, la fábrica bajaba a 1 fps.
+bool low_memory() {
+    static const bool low = [] {
+        struct sysinfo si {};
+        const uint64_t total = sysinfo(&si) == 0 ? uint64_t{si.totalram} * si.mem_unit : 0;
+        const bool on = (total && total < (5ull << 30)) || NVN_FLAG("memoria_baja");
+        if (on) NVN_LOG("poca memoria (%llu MB): reservas de staging y espejos a la mitad\n", (unsigned long long)(total >> 20));
+        return on;
+    }();
+    return low;
+}
 constexpr int kLoggedDraws = 12;
 
 std::recursive_mutex g_mutex;  // el estado del ejecutor (y lo que lee de las texturas y samplers del juego)
@@ -516,7 +531,7 @@ private:
         FreeChunks& f = free_chunks();
         {
             std::lock_guard lock(f.m);
-            if (f.bytes + ch.size <= kFreeStagingBytes) {
+            if (f.bytes + ch.size <= (low_memory() ? kFreeStagingBytes / 2 : kFreeStagingBytes)) {
                 f.chunks.push_back(ch);
                 f.bytes += ch.size;
                 return;
@@ -1152,6 +1167,8 @@ private:
     void end_render_pass();
     bool ensure_image(Texture& t, VkCommandBuffer cmd);
     void upload(Texture& t);
+    bool decode_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
+                      std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
     // ¿Hay que volver a subir una textura que sube la CPU, antes de enlazarla? Vigilada, las páginas escritas desde la
     // última revisión (una vez por envío); si no, la huella muestreada (una vez por frame).
     bool cpu_texture_changed(Texture& t);
@@ -2180,6 +2197,7 @@ private:
     std::unordered_set<uint64_t> async_abandoned_;          // las creó NvnSubmit mientras el hilo seguía con ellas
     bool async_started_ = false;                            // solo el hilo del ejecutor
     bool async_pipelines_ = true;                           // read_flags
+    bool serial_pipelines_ = false;                         // init: PowerVR (o pipelines_un_hilo), todo en este hilo
     bool low_table_ = true;                                 // read_flags: la tabla baja de c2 (resolve_texture)
     bool separate_tables_ = true;  // read_flags (<datos>/sin_tablas_separadas: un array, como antes): StageBindings::combined_textures
     std::atomic<uint64_t> prof_async_ns_{0};                // driver en los hilos (para pipelines.bin y el log)
@@ -2378,8 +2396,15 @@ bool Executor::init() {
     VkContext* c = vk();
     if (!c) return false;
     load_pipeline_cache();
-    warm_started_ = true;
-    std::thread([this] { warm_up(); }).detach();  // vive lo que el proceso (como el de NvnSubmit)
+    // PowerVR: su compilador de shaders se cae creando pipelines en varios hilos a la vez (lo vieron los ports de MHGU y
+    // MH4U: el juego se cerraba, y en cada arranque siguiente al precalentar los guardados). Ahí todo en el hilo del
+    // ejecutor, cuando hace falta: sin precalentado y sin los hilos de pipelines async. <datos>/pipelines_un_hilo hace
+    // lo mismo en cualquier GPU; <datos>/pipelines_en_paralelo lo quita también en una PowerVR.
+    serial_pipelines_ = NVN_FLAG("pipelines_un_hilo") ||
+                        (strstr(c->props.deviceName, "PowerVR") && !NVN_FLAG("pipelines_en_paralelo"));
+    if (serial_pipelines_) NVN_LOG("pipelines en un solo hilo (%s): sin precalentado ni async\n", c->props.deviceName);
+    warm_started_ = !serial_pipelines_;
+    if (warm_started_) std::thread([this] { warm_up(); }).detach();  // vive lo que el proceso (como el de NvnSubmit)
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pci.queueFamilyIndex = c->queue_family;
@@ -3381,7 +3406,7 @@ void Executor::read_flags() {
     opt_.ubwc = !NVN_FLAG("sin_ubwc");  // solo para las imágenes que se creen a partir de ahora
     pass_end_is_barrier_ = NVN_FLAG("barreras_justas_pase");
     merge_passes_ = NVN_FLAG("pases_unidos");
-    async_pipelines_ = !NVN_FLAG("sin_pipelines_async");
+    async_pipelines_ = !NVN_FLAG("sin_pipelines_async") && !serial_pipelines_;
     low_table_ = !NVN_FLAG("sin_tabla_baja");
     separate_tables_ = !NVN_FLAG("sin_tablas_separadas");
     scan_per_pass_ = NVN_FLAG("mirada_por_pase");
@@ -3728,6 +3753,18 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
     VkFormat format = f->vk;
     VkFormatProperties fp;
     vkGetPhysicalDeviceFormatProperties(c->gpu, format, &fp);
+    // BCn en una GPU que no lo lee (Mali, PowerVR…): la imagen, sin comprimir, y cada nivel se descomprime al subirlo
+    // (bcn.h). <datos>/bc_en_cpu hace lo mismo en cualquier GPU (para probar esa ruta en un Adreno).
+    uint8_t bcn_kind = bcn::kNone;
+    if (bcn::kind_of(format) != bcn::kNone &&
+        (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) || NVN_FLAG("bc_en_cpu"))) {
+        bcn_kind = bcn::kind_of(format);
+        static std::set<VkFormat> told;
+        if (told.insert(format).second)
+            NVN_LOG("formato %s: la GPU no lo lee, se descomprime en la CPU al subirlo\n", f->name);
+        format = bcn::decoded_format(format);
+        vkGetPhysicalDeviceFormatProperties(c->gpu, format, &fp);
+    }
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
         !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
         NVN_LOG("formato %s sin soporte de imagen en la GPU\n", f->name);
@@ -3800,6 +3837,7 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
                 (unsigned long long)(g_texture_gpu_bytes.load() >> 20));
     vkBindImageMemory(c->device, t.image, t.memory.memory, t.memory.offset);
     t.vk_format = format;
+    t.bcn = bcn_kind;
     t.aspect = depth ? (VK_IMAGE_ASPECT_DEPTH_BIT | (has_stencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0))
                      : VK_IMAGE_ASPECT_COLOR_BIT;
     if (format == VK_FORMAT_S8_UINT) t.aspect = VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -3823,6 +3861,45 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
 }
 
 // Sube los texels que el juego dejó en su memoria (disposición Tegra) a la imagen. Fuera de render pass.
+// Un nivel de una textura descomprimida en la CPU (Texture::bcn): `blocks`, sus bloques ya en orden lineal, salen como
+// texels en trozos de staging (cada uno de las filas que quepan en kStagingChunk), descomprimidos por filas de bloques
+// entre los hilos de row_pool, y una copia por trozo. false: el staging se acabó (se reintenta como cualquier subida).
+bool Executor::decode_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
+                            std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
+    const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
+    const uint32_t bb = bcn::block_bytes(kind), tb = bcn::texel_bytes(kind);
+    const size_t pitch = size_t{lv.width} * tb, block_row = size_t{lv.width_blocks} * bb;
+    const uint32_t per_chunk = static_cast<uint32_t>(std::max<size_t>(1, kStagingChunk / std::max<size_t>(pitch * 4, 1)));
+    LoadTimer timer(*this, kLdDeswizzle, size_t{lv.width} * lv.height * tb);
+    for (uint32_t z = 0; z < std::max(lv.depth, 1u); z++) {
+        const uint8_t* slice = blocks + size_t{z} * lv.height_blocks * block_row;
+        for (uint32_t by = 0; by < lv.height_blocks; by += per_chunk) {
+            const uint32_t hb = std::min(per_chunk, lv.height_blocks - by);
+            const uint32_t rows = std::min(hb * 4, lv.height - std::min(lv.height, by * 4));
+            if (!rows) break;
+            Staging::Alloc a = staging_->alloc(pitch * rows, 16);
+            if (!a.data) return false;
+            const std::function<void(size_t, size_t)> fn = [&](size_t r0, size_t r1) {
+                const uint32_t first = by + static_cast<uint32_t>(r0), count = static_cast<uint32_t>(r1 - r0);
+                const uint32_t y0 = first * 4 - by * 4;
+                bcn::decode(kind, slice + size_t{first} * block_row, lv.width_blocks, count, a.data + y0 * pitch, pitch, lv.width,
+                            rows - y0);
+            };
+            if (hb > 4 && !NVN_FLAG("subida_un_hilo")) row_pool().run(hb, std::max<size_t>(1, hb / 8), fn);
+            else fn(0, hb);
+            VkBufferImageCopy r{};
+            r.bufferOffset = a.offset;
+            r.bufferRowLength = lv.width;
+            r.bufferImageHeight = rows;
+            r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, 1};
+            r.imageOffset = {0, static_cast<int32_t>(by * 4), static_cast<int32_t>(z)};
+            r.imageExtent = {lv.width, rows, 1};
+            regions.emplace_back(a.buffer, r);
+        }
+    }
+    return true;
+}
+
 void Executor::upload(Texture& t) {
     if (t.gpu_written || !t.storage || !t.image) return;
     LoadTimer timer(*this, kLdUpload, t.layout.total_size());
@@ -3943,8 +4020,17 @@ void Executor::upload(Texture& t) {
                 }
                 slot = print;
             }
-            Staging::Alloc a = staging_->alloc(linear_size, 16);
-            if (!a.data) return;
+            // Descomprimida en la CPU (t.bcn): los bloques van primero a una memoria de paso, y lo que llega a la GPU son
+            // los texels (decode_level, más abajo)
+            Staging::Alloc a{};
+            static thread_local std::vector<uint8_t> bc_scratch;
+            if (t.bcn) {
+                bc_scratch.resize(linear_size);
+                a.data = bc_scratch.data();
+            } else {
+                a = staging_->alloc(linear_size, 16);
+                if (!a.data) return;
+            }
             // ASTC: un bloque a cero no lo produce ningún codificador (es inválido: magenta). Un nivel con más del 1%
             // así no está cargado aún (MH Rise crea sus texturas con todos los mips y trae los grandes por streaming);
             // lo muestreado empieza después (Texture::min_level). Los bloques a cero se cuentan al copiarlos, en la
@@ -3988,6 +4074,10 @@ void Executor::upload(Texture& t) {
                 }
             }
             if (count_zeros && zeros * 100 > linear_size / 16) astc_missing = std::max<int>(astc_missing, static_cast<int>(level));
+            if (t.bcn) {
+                if (!decode_level(t, lv, a.data, level, layer, regions)) return;
+                continue;
+            }
             VkBufferImageCopy r{};
             r.bufferOffset = a.offset;
             r.bufferRowLength = lv.width_blocks * L.block_w;
@@ -4127,7 +4217,13 @@ VkImageView Executor::view(Texture& t, const TextureViewDesc& requested, bool at
             if (seen.insert({t.desc.format, v.format}).second)
                 NVN_LOG("vista con otro formato: textura 0x%x vista 0x%x (%dx%d)%s\n", t.desc.format, v.format, t.desc.width,
                         t.desc.height, t.mutable_format ? "" : ", sin MUTABLE: con el formato de la textura");
-            if (t.mutable_format) vi.format = f->vk;
+            VkFormat want = f->vk;
+            if (t.bcn) {  // (descomprimida: la vista BC es su formato sin comprimir, si mide lo mismo por texel)
+                const VkFormat plain = bcn::decoded_format(want);
+                want = plain != VK_FORMAT_UNDEFINED && bcn::texel_bytes(bcn::kind_of(want)) == bcn::texel_bytes(
+                           static_cast<bcn::Kind>(t.bcn)) ? plain : vi.format;
+            }
+            if (t.mutable_format) vi.format = want;
         }
     if (storage) {
         // Como imagen: el UNORM de un sRGB, y solo si la GPU admite ese formato en storage (si no, nulo: la de reserva).
@@ -5093,14 +5189,45 @@ bool Executor::apply_texel_writes(Texture& t) {
         const LevelLayout& lv = L.levels[w.level];
         const size_t row = size_t{w.box.width} * bpb, bytes = row * w.box.height * w.box.depth;
         for (uint32_t k = 0; k < w.layers && w.layer + k < std::min(L.layers, t.layers); k++) {
-            Staging::Alloc a = staging_->alloc(bytes, 16);
-            if (!a.data) return true;
+            // Descomprimida en la CPU (t.bcn): los bloques a una memoria de paso y, de ahí, los texels al staging
+            static thread_local std::vector<uint8_t> bc_scratch;
+            Staging::Alloc a{};
+            if (t.bcn) {
+                bc_scratch.resize(bytes);
+                a.data = bc_scratch.data();
+            } else {
+                a = staging_->alloc(bytes, 16);
+                if (!a.data) return true;
+            }
             const uint8_t* level = t.storage + size_t{w.layer + k} * L.layer_size + lv.offset;
             if (L.linear) {
                 for (uint32_t y = 0; y < w.box.height; y++)
                     memcpy(a.data + y * row, level + size_t{w.box.y + y} * L.stride + size_t{w.box.x} * bpb, row);
             } else {
                 deswizzle_region(lv, bpb, w.box, level, a.data, row, row * w.box.height);
+            }
+            if (t.bcn) {
+                const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
+                const uint32_t tw = w.box.width * 4, th = w.box.height * 4, tb = bcn::texel_bytes(kind);
+                const uint32_t x0 = w.box.x * 4, y0 = w.box.y * 4;
+                const uint32_t cw = std::min(tw, lv.width - std::min(lv.width, x0)), ch = std::min(th, lv.height - std::min(lv.height, y0));
+                if (!cw || !ch) continue;
+                for (uint32_t z = 0; z < std::max(w.box.depth, 1u); z++) {
+                    Staging::Alloc d = staging_->alloc(size_t{cw} * ch * tb, 16);
+                    if (!d.data) return true;
+                    bcn::decode(kind, a.data + size_t{z} * row * w.box.height, w.box.width, w.box.height, d.data, size_t{cw} * tb,
+                                cw, ch);
+                    VkBufferImageCopy r{};
+                    r.bufferOffset = d.offset;
+                    r.bufferRowLength = cw;
+                    r.bufferImageHeight = ch;
+                    r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, w.level, w.layer + k, 1};
+                    r.imageOffset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), static_cast<int32_t>(w.box.z + z)};
+                    r.imageExtent = {cw, ch, 1};
+                    note_gpu_work();
+                    vkCmdCopyBufferToImage(cmd_, d.buffer, t.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+                }
+                continue;
             }
             VkBufferImageCopy r{};
             r.bufferOffset = a.offset;
@@ -7667,7 +7794,7 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
             retired_mirrors_.push_back(std::move(it->second));
             mirrors_.erase(it);
         }
-        if (mirror_bytes_ + size > kMirrorBudget) {
+        if (mirror_bytes_ + size > (low_memory() ? kMirrorBudget / 2 : kMirrorBudget)) {
             static int logged = 0;
             if (logged++ < 4) NVN_LOG("espejos: sin presupuesto para %llu MB más\n", static_cast<unsigned long long>(size >> 20));
             return nullptr;

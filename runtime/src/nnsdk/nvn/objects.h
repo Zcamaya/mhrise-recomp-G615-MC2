@@ -76,6 +76,7 @@ struct Texture {
     GpuAllocation memory;  // dentro de un bloque compartido o propia (gpu_memory.h)
     uint64_t gpu_bytes = 0;
     VkFormat vk_format = VK_FORMAT_UNDEFINED;
+    uint8_t bcn = 0;  // bcn::Kind: la GPU no tiene ese BC, se guarda descomprimida (bcn.h); 0, como viene
     VkImageAspectFlags aspect = 0;
     uint32_t layers = 1;
     bool vk_failed = false;    // no se pudo crear en Vulkan (formato sin soporte…): no reintentar

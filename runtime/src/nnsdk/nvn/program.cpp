@@ -245,6 +245,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.subgroup_operations);
     h.u32(o.broken_subgroup_shuffle);
     h.u32(o.broken_unreachable);
+    if (!o.multi_viewport) h.u32(0x4D56);  // (solo sin multiViewport: las claves de siempre no cambian)
     h.u32(o.shared_to_local);
     h.u32(o.optimize_stages);
     h.u32(o.constants ? o.constants_size : ~0u);
@@ -310,6 +311,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         options.broken_unreachable = c->props.vendorID == 0x5143 && !NVN_FLAG("sin_return_qualcomm");
         // <datos>/sin_no_uniforme al traducir: sin la decoración NonUniform (si el driver se lleva mal con ella).
         options.nonuniform_indexing = c->nonuniform_sampled && !NVN_FLAG("sin_no_uniforme");
+        options.multi_viewport = c->multi_viewport;
     }
     // Bindless de los uniform buffers del juego (arrays hasta el final del cbuf, máscara y sampler fijo del handle; ver
     // nvnshader::Options). <datos>/sin_bindless_arrays al traducir (al arrancar): como antes; los arrays que ya hacía Eden

@@ -21,6 +21,7 @@ add_library(nnsdk SHARED
   src/nnsdk/oe.cpp
   src/nnsdk/swkbd.cpp
   src/nnsdk/time.cpp
+  src/nnsdk/nvn/bcn.cpp
   src/nnsdk/nvn/buffer.cpp
   src/nnsdk/nvn/device.cpp
   src/nnsdk/nvn/cmdbuf.cpp

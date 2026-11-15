@@ -179,6 +179,7 @@ bool create(VkContext& c) {
     VkPhysicalDeviceFeatures features{};
     vkGetPhysicalDeviceFeatures(c.gpu, &features);
     features.robustBufferAccess = VK_FALSE;
+    c.multi_viewport = features.multiViewport == VK_TRUE;
     // DEPURACIÓN: <datos>/robusto al arrancar: con robustBufferAccess (los accesos fuera de un buffer devuelven 0, como
     // los cbuf de Maxwell, en vez de leer memoria cualquiera).
     bool robust = false;

@@ -406,7 +406,7 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         Shader::Profile profile{};
         profile.supported_spirv = options.spirv_version;
         profile.unified_descriptor_binding = true;
-        profile.support_multi_viewport = true;  // el Adreno lo tiene (y el dispositivo activa todas sus features)
+        profile.support_multi_viewport = options.multi_viewport;  // (el dispositivo activa todas las que tenga)
         // Subgrupos: votos y ballot solo si el dispositivo los tiene, y en las etapas que los admite; si el
         // subgrupo es mayor que el warp de 32 de Maxwell, Eden emula los votos con ballot.
         constexpr uint32_t kVote = 0x2, kBallot = 0x8, kShuffle = 0x10, kShuffleRelative = 0x20, kQuad = 0x80;

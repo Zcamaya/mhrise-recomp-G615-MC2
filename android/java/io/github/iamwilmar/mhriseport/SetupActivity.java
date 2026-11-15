@@ -1,7 +1,6 @@
 package io.github.iamwilmar.mhriseport;
 
 import android.app.Activity;
-import android.app.NativeActivity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -29,7 +28,7 @@ import java.util.Locale;
 
 // Pantalla de inicio. La primera vez pide el permiso de archivos y la carpeta donde el usuario copió los archivos de
 // su juego (ExeFS y RomFS ya extraídos de su propia consola); DumpScanner dice qué hay y qué falta, y si está todo se
-// apunta en files/carpeta.txt. Las siguientes, directa en "Iniciar juego". El juego es la NativeActivity (libnier.so):
+// apunta en files/carpeta.txt. Las siguientes, directa en "Iniciar juego". El juego es GameActivity, una NativeActivity (libnier.so):
 // usa esa carpeta como <datos> (partidas, cachés, log). La app no descifra nada ni acepta NSP/XCI.
 // Con el mando: la cruceta mueve el foco y A pulsa (Android traduce A a DPAD_CENTER). Textos en español o inglés según
 // el idioma del sistema.
@@ -224,7 +223,7 @@ public final class SetupActivity extends Activity {
     }
 
     private void startGame() {
-        startActivity(new Intent(this, NativeActivity.class));
+        startActivity(new Intent(this, GameActivity.class));
         finish();
     }
 

@@ -40,8 +40,19 @@ trying to run everywhere:
 - **Optional frame generation** to show ~60 fps, only when the GPU has room left after the real 30.
 
 Developed and tested on the **Retroid Pocket Flip 2** (Android 13). The **Retroid Pocket 5** has the same chip, memory and
-driver, so it should behave the same. Other Snapdragon 865 / Adreno 650 devices might work but are untested; devices
-with other GPUs (other Adreno generations, Mali, PowerVR…) are not supported.
+driver, so it should behave the same. Other Snapdragon 865 / Adreno 650 devices might work but are untested.
+
+**Other phones (experimental, untested).** The port now also tries to run on other GPUs and on weaker phones:
+
+- **Mali (MediaTek, Exynos) and PowerVR** can't read the BC texture formats the game uses. On those, each texture is
+  decompressed on the CPU as it loads (BC1 to BC7, checked against a reference decoder) and kept uncompressed. Loading
+  takes longer and textures use 4 to 8 times the memory.
+- **PowerVR:** pipelines are built on one thread, because its shader compiler crashes building several at once.
+- **GPUs without multi-viewport** get shaders that don't ask for it.
+- **Phones with less than 5 GB of RAM** keep smaller caches (spare staging and buffer mirrors at half).
+- Other Adreno generations (6xx, 7xx) use the same Qualcomm paths as the Adreno 650.
+
+None of this has been tested on such a device yet: the log (`log.txt` in the game folder) says what the port chose.
 
 ## What you need
 
@@ -83,6 +94,19 @@ may stutter while its shaders are translated and compiled; they are cached for t
   and a panel slides out over the game. It has a switch for the FPS counter (your choice is remembered) and *Change
   folder*, which brings the folder screen back the next time you open the app. The same swipe, a tap outside the panel
   or a few seconds without touching it hide it again.
+- **Touch controls.** A full controller on the screen, laid out like a traditional one: both sticks, the D-pad, A B X Y,
+  L R ZL ZR, − and +, and L3 / R3 (also a short tap on a stick, without moving it). A finger can slide from one button to
+  the next. Touches that land on no control still reach the settings panel above.
+- **Controls menu.** The gear between − and + opens it:
+  - *Touch:* on or off, opacity, size, vibration (off, light, medium, strong), sliding between buttons, the sticks' dead
+    zone, and the tap for L3 / R3.
+  - *Edit layout:* drag each control where you want it, change its size or hide it from the bar at the top, or put the
+    traditional layout back.
+  - *Combos:* up to four. Each presses several buttons at once (A+X, say), from its own button on the screen and, if you
+    choose one, from a controller button or a pair of them (L3, −+R…).
+  - *Controller:* the sticks' dead zone, how far an analog trigger travels before it is ZL / ZR, and where the right stick
+    is read from. *By controller* picks Z/RZ or RX/RY from the axes each pad says it has, with triggers on LTRIGGER /
+    RTRIGGER, BRAKE / GAS or Z/RZ, so Xbox, DualSense and generic pads all work. The log says what it chose for each pad.
 
 ## Options
 
@@ -95,6 +119,10 @@ at start-up.
 | `60fps` | Unlocks 60 fps mode (the Flip 2 GPU reaches ~45 in the village, less in hunts). |
 | `sin_fps` | Hides the FPS counter (the same switch as in the settings panel). |
 | `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |
+| `bc_en_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
+| `memoria_baja` | Smaller caches, as on a phone with less than 5 GB of RAM. |
+| `sin_af` | No anisotropic filtering: a little cheaper for a weak GPU, a little blurrier at a distance. |
+| `pipelines_un_hilo` | Builds every pipeline on the renderer's own thread, with no background threads or warm-up (on by itself on a PowerVR GPU, whose shader compiler crashes building several at once). `pipelines_en_paralelo` turns that off. |
 | `registro` | Verbose log (line by line) plus a watchdog that prints the game's stack if it hangs. Slower: for debugging. |
 
 ## How it works

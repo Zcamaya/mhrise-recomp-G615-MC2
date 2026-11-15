@@ -27,6 +27,7 @@ struct VkContext {
     bool nonuniform_sampled = false;
     // VK_EXT_custom_border_color (sin formato) y VK_EXT_sampler_filter_minmax: bordes exactos y reducción MIN/MAX.
     bool custom_border_color = false, filter_minmax = false;
+    bool multi_viewport = true;  // la feature multiViewport (vk.cpp): los shaders que la usan, sin ella si no está
     uint32_t max_custom_border_samplers = 0;
     // VK_KHR_draw_indirect_count: los multi-draw de NVN con el número de draws en la GPU (nulos sin la extensión).
     PFN_vkCmdDrawIndexedIndirectCountKHR draw_indexed_indirect_count = nullptr;

@@ -102,6 +102,9 @@ struct Options {
     // skinning de la cara del cazador (793657b4) tomaba el caso que pone los pesos a cero (1/0 → NaN, la cabeza no se
     // ve). Se emite OpReturn: nunca se ejecuta y no le da al compilador nada que suponer.
     bool broken_unreachable = false;
+    // El dispositivo tiene multiViewport (gl_ViewportIndex fuera del geometry shader). Sin él, Eden no lo escribe y el
+    // driver acepta el shader (antes se daba por hecho: lo tiene el Adreno, no todas las GPU de gama baja).
+    bool multi_viewport = true;
     // Memoria compartida que solo es privada de cada invocación (el compilador de NVN derrama registros ahí, en
     // tid·28 + k en el skinning de la cara) a la memoria local (Private): con esos stores a Workgroup dentro de los casos
     // de un switch, el driver de Qualcomm dejaba los pesos a cero (NaN en todo el grupo). Solo si se demuestra que las

@@ -123,7 +123,9 @@ bool start_log_pipe() {
     return true;
 }
 NnsdkInput g_input;
-uint64_t g_key_buttons = 0, g_axis_buttons = 0;
+// Lo que suma cada fuente; publish() los junta en g_input. Atómicos: los toques llegan desde el hilo de la interfaz de
+// Java (GameActivity), las teclas y los ejes desde el de android_main.
+std::atomic<uint64_t> g_key_buttons{0}, g_axis_buttons{0};
 
 // Bits de nn::hid::NpadButton.
 enum : uint64_t {
@@ -156,6 +158,11 @@ struct PadInfo {
     std::string name;
     int vendor = 0, product = 0;
     int layout = -1;  // el último elegido (para avisar en el log cuando cambia)
+    // Los ejes que dice tener (InputDevice.getMotionRange), para saber dónde están su stick derecho y sus gatillos:
+    // cada mando los pone en un sitio (ver pad_axes).
+    bool z = false, rz = false, rx = false, ry = false, ltrigger = false, rtrigger = false, brake = false, gas = false;
+    bool z_signed = false;  // Z/RZ de -1 a 1 (en reposo -1) cuando hacen de gatillos
+    bool axes_logged = false;
 };
 // El nombre y los ids USB del mando por JNI (InputDevice.getDevice(id)), una vez por id.
 PadInfo device_info(ANativeActivity* activity, int32_t id) {
@@ -178,6 +185,22 @@ PadInfo device_info(ANativeActivity* activity, int32_t id) {
             }
             info.vendor = env->CallIntMethod(device, get_vendor);
             info.product = env->CallIntMethod(device, get_product);
+            jmethodID range = env->GetMethodID(cls, "getMotionRange", "(I)Landroid/view/InputDevice$MotionRange;");
+            jclass range_cls = env->FindClass("android/view/InputDevice$MotionRange");
+            jmethodID get_min = range_cls ? env->GetMethodID(range_cls, "getMin", "()F") : nullptr;
+            auto has = [&](int32_t axis, float* min = nullptr) {
+                jobject r = range ? env->CallObjectMethod(device, range, axis) : nullptr;
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                if (r && min && get_min) *min = env->CallFloatMethod(r, get_min);
+                if (r) env->DeleteLocalRef(r);
+                return r != nullptr;
+            };
+            float z_min = 0;
+            info.z = has(AMOTION_EVENT_AXIS_Z, &z_min), info.rz = has(AMOTION_EVENT_AXIS_RZ);
+            info.rx = has(AMOTION_EVENT_AXIS_RX), info.ry = has(AMOTION_EVENT_AXIS_RY);
+            info.ltrigger = has(AMOTION_EVENT_AXIS_LTRIGGER), info.rtrigger = has(AMOTION_EVENT_AXIS_RTRIGGER);
+            info.brake = has(AMOTION_EVENT_AXIS_BRAKE), info.gas = has(AMOTION_EVENT_AXIS_GAS);
+            info.z_signed = z_min < -0.5f;
         }
     }
     if (env->ExceptionCheck()) env->ExceptionClear();
@@ -192,11 +215,14 @@ int retroid_pad_mode() {
 constexpr int kRetroidVendor = 0x2022;
 // true: los botones de ese mando se leen por posición (Xbox). Se mira en cada tecla: el modo de la Flip cambia con el
 // juego abierto y sin que el mando cambie de id.
-bool xbox_layout(ANativeActivity* activity, int32_t device) {
+PadInfo& pad_info(ANativeActivity* activity, int32_t device) {
     static std::map<int32_t, PadInfo> pads;
     auto it = pads.find(device);
     if (it == pads.end()) it = pads.emplace(device, device > 0 ? device_info(activity, device) : PadInfo{}).first;
-    PadInfo& pad = it->second;
+    return it->second;
+}
+bool xbox_layout(ANativeActivity* activity, int32_t device) {
+    PadInfo& pad = pad_info(activity, device);
     const int forced = forced_layout();
     // El mando de la consola. El sistema de la Retroid vuelve a crear los mandos externos como dispositivos suyos, con
     // el vendor de la consola (un DualSense por Bluetooth llega como 2022:3001 "DualSense Wireless Controller") pero
@@ -299,9 +325,60 @@ void record_input() {
     g_rec_buffer += line;
 }
 
+// Los controles táctiles (GameActivity.java): sus botones, y los sticks que lleva un dedo (bit 0 el izquierdo, bit 1 el
+// derecho). Un stick tocado manda sobre el del mando; al soltarlo vuelve el del mando (g_pad_sticks).
+std::atomic<uint64_t> g_touch_buttons{0};
+std::atomic<uint32_t> g_touch_sticks_on{0};
+std::atomic<int32_t> g_pad_sticks[4] = {};
+
+// Ajustes del mando físico, del menú de controles (GameActivity.nativePad): la zona muerta de los sticks (radial), desde
+// dónde un gatillo analógico cuenta como ZL / ZR, dónde está el stick derecho, y los combos: un botón (o dos a la vez)
+// del mando que pulsa varios de la consola. Los lee el hilo de android_main; los escribe el de la interfaz.
+enum RightAxes { kAxesAuto = 0, kAxesZ = 1, kAxesRx = 2 };
+struct PadSettings {
+    float deadzone = 0.12f, trigger = 0.35f;
+    int right_axes = kAxesAuto;
+    std::vector<std::pair<uint64_t, uint64_t>> combos;  // (los botones del mando que lo disparan, los que pulsa)
+};
+std::mutex g_pad_mutex;
+PadSettings g_pad;
+
+std::mutex g_publish_mutex;
 void publish() {
-    g_input.buttons = g_key_buttons | g_axis_buttons | g_auto_buttons;
+    std::lock_guard lock(g_publish_mutex);
+    uint64_t pad = g_key_buttons | g_axis_buttons;
+    {
+        std::lock_guard pad_lock(g_pad_mutex);
+        // Un combo cambia los botones que lo disparan por los suyos; con dos combos sobre el mismo botón, el de más
+        // botones primero (L+R antes que L solo), que el usuario los pone en ese orden en el menú
+        uint64_t out = 0;
+        for (const auto& [chord, buttons] : g_pad.combos)
+            if (chord && (pad & chord) == chord) pad &= ~chord, out |= buttons;
+        pad |= out;
+    }
+    const uint64_t touch = g_touch_buttons;
+    g_input.buttons = pad | g_auto_buttons | touch;
     record_input();
+}
+
+// Un botón tocado que se suelta antes de que el juego lo lea: que cuente unos frames (como las teclas)
+void latch(uint64_t bits) {
+    if (!bits) return;
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    g_input.latched |= bits;
+    g_input.latched_until_ns = int64_t{ts.tv_sec} * 1'000'000'000 + ts.tv_nsec + 60'000'000;  // ~4 frames
+}
+
+// La zona muerta radial: dentro, quieto; fuera, de 0 a 1 otra vez, para no perder la finura cerca del centro
+void dead_zone(float* x, float* y, float zone) {
+    const float m = std::hypot(*x, *y);
+    if (m <= zone || m <= 0.0f) {
+        *x = *y = 0.0f;
+        return;
+    }
+    const float k = std::fmin(1.0f, (m - zone) / (1.0f - zone)) / m;
+    *x *= k, *y *= k;
 }
 
 void* recorder(void*) {
@@ -441,6 +518,28 @@ int64_t g_edge_touch_ns = 0;
 constexpr int32_t kEdgePixels = 160;                // lo que Android cuenta como borde, con margen (hasta 48 dp)
 constexpr int64_t kEdgeGestureNs = 3'000'000'000;  // de posar el dedo a soltarlo con el gesto hecho
 
+// Un toque de la pantalla para el panel del HUD, en píxeles de la ventana del juego (action: AMOTION_EVENT_ACTION_*)
+void touch_point(int32_t action, float x, float y, int64_t time_ns, int32_t width) {
+    const uint64_t point = static_cast<uint64_t>(static_cast<uint32_t>(std::lround(y))) << 32 |
+                           static_cast<uint32_t>(std::lround(x));
+    if (action == AMOTION_EVENT_ACTION_DOWN) {
+        g_input.touch_start = point;
+        g_input.touch_last = point;
+        g_input.touch_state = 1;
+        g_input.touch_serial++;  // lo último: quien lo lea ya tiene el toque entero
+        // ¿Se posó en el borde derecho? (el gesto de "atrás" del sistema: ver la tecla BACK más abajo)
+        g_edge_touch_ns = x >= static_cast<float>(width - kEdgePixels) ? time_ns : 0;
+    } else if (action == AMOTION_EVENT_ACTION_MOVE || action == AMOTION_EVENT_ACTION_UP) {
+        g_input.touch_last = point;
+        if (action == AMOTION_EVENT_ACTION_UP) {
+            g_input.touch_state = 0;
+            g_edge_touch_ns = 0;  // se levantó como un toque normal: no era el gesto del sistema (ese acaba en CANCEL)
+        }
+    } else if (action == AMOTION_EVENT_ACTION_CANCEL) {
+        g_input.touch_state = 2;
+    }
+}
+
 int32_t on_input(android_app* app, AInputEvent* event) {
     take_over(event);
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY) {
@@ -479,10 +578,7 @@ int32_t on_input(android_app* app, AInputEvent* event) {
         if (!bit) return 0;
         if (AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN) {
             g_key_buttons |= bit;
-            timespec ts;
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-            g_input.latched |= bit;
-            g_input.latched_until_ns = int64_t{ts.tv_sec} * 1'000'000'000 + ts.tv_nsec + 60'000'000;  // ~4 frames
+            latch(bit);
         }
         else if (AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_UP)
             g_key_buttons &= ~bit;
@@ -490,49 +586,66 @@ int32_t on_input(android_app* app, AInputEvent* event) {
         return 1;  // si no, Android convierte B en "atrás" y cierra la app
     }
     // La pantalla táctil: el toque de un dedo, para el panel del HUD (deslizar de derecha a izquierda: nvn/hud.cpp).
+    // Con los controles táctiles los toques los recibe su ventana (GameActivity) y los que no son de un control llegan
+    // por nativeTouchPoint; sin ella (tools/apk.sh abre la NativeActivity sola), llegan aquí.
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION &&
         (AInputEvent_getSource(event) & AINPUT_SOURCE_TOUCHSCREEN) == AINPUT_SOURCE_TOUCHSCREEN) {
-        const int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
-        const uint64_t point = static_cast<uint64_t>(static_cast<uint32_t>(std::lround(AMotionEvent_getY(event, 0)))) << 32 |
-                               static_cast<uint32_t>(std::lround(AMotionEvent_getX(event, 0)));
-        if (action == AMOTION_EVENT_ACTION_DOWN) {
-            g_input.touch_start = point;
-            g_input.touch_last = point;
-            g_input.touch_state = 1;
-            g_input.touch_serial++;  // lo último: quien lo lea ya tiene el toque entero
-            // ¿Se posó en el borde derecho? (el gesto de "atrás" del sistema: ver la tecla BACK más arriba)
-            const int32_t width = app->window ? ANativeWindow_getWidth(app->window) : 1920;
-            g_edge_touch_ns = AMotionEvent_getX(event, 0) >= static_cast<float>(width - kEdgePixels) ? AMotionEvent_getEventTime(event) : 0;
-        } else if (action == AMOTION_EVENT_ACTION_MOVE || action == AMOTION_EVENT_ACTION_UP) {
-            g_input.touch_last = point;
-            if (action == AMOTION_EVENT_ACTION_UP) {
-                g_input.touch_state = 0;
-                g_edge_touch_ns = 0;  // se levantó como un toque normal: no era el gesto del sistema (ese acaba en CANCEL)
-            }
-        } else if (action == AMOTION_EVENT_ACTION_CANCEL) {
-            g_input.touch_state = 2;
-        }
+        const int32_t width = app->window ? ANativeWindow_getWidth(app->window) : 1920;
+        touch_point(AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK, AMotionEvent_getX(event, 0),
+                    AMotionEvent_getY(event, 0), AMotionEvent_getEventTime(event), width);
         return 1;
     }
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION &&
         (AInputEvent_getSource(event) & AINPUT_SOURCE_JOYSTICK) == AINPUT_SOURCE_JOYSTICK) {
         auto axis = [&](int32_t a) { return AMotionEvent_getAxisValue(event, a, 0); };
+        PadSettings set;
+        {
+            std::lock_guard lock(g_pad_mutex);
+            set.deadzone = g_pad.deadzone, set.trigger = g_pad.trigger, set.right_axes = g_pad.right_axes;
+        }
+        // Dónde están el stick derecho y los gatillos de este mando. Lo normal en Android: stick en Z/RZ y gatillos en
+        // LTRIGGER/RTRIGGER (o BRAKE/GAS). Los mandos genéricos por USB / Bluetooth (DirectInput) suelen traer el stick
+        // en RX/RY y los gatillos en Z/RZ, de -1 a 1; algunos, el stick en RX/RY y sin gatillos analógicos.
+        PadInfo& pad = pad_info(app->activity, AInputEvent_getDeviceId(event));
+        const bool analog_triggers = pad.ltrigger || pad.rtrigger || pad.brake || pad.gas;
+        bool right_on_rx = set.right_axes == kAxesRx;
+        if (set.right_axes == kAxesAuto) right_on_rx = pad.rx && pad.ry && (!pad.z || !pad.rz || !analog_triggers);
+        const bool triggers_on_z = right_on_rx && pad.z && pad.rz && !analog_triggers;
+        if (!pad.axes_logged) {
+            pad.axes_logged = true;
+            printf("[entrada] mando %d \"%s\": stick derecho en %s, gatillos en %s (Z/RZ %s, RX/RY %s, LTRIGGER/RTRIGGER %s, "
+                   "BRAKE/GAS %s)\n", AInputEvent_getDeviceId(event), pad.name.c_str(), right_on_rx ? "RX/RY" : "Z/RZ",
+                   triggers_on_z ? "Z/RZ" : analog_triggers ? "LTRIGGER/RTRIGGER" : "botones", pad.z && pad.rz ? "sí" : "no",
+                   pad.rx && pad.ry ? "sí" : "no", pad.ltrigger || pad.rtrigger ? "sí" : "no", pad.brake || pad.gas ? "sí" : "no");
+            fflush(stdout);
+        }
         float lx = axis(AMOTION_EVENT_AXIS_X), ly = axis(AMOTION_EVENT_AXIS_Y);
-        float rx = axis(AMOTION_EVENT_AXIS_Z), ry = axis(AMOTION_EVENT_AXIS_RZ);
-        g_input.sticks[0] = to_stick(lx);
-        g_input.sticks[1] = to_stick(-ly);  // en Android abajo es positivo
-        g_input.sticks[2] = to_stick(rx);
-        g_input.sticks[3] = to_stick(-ry);
+        float rx = axis(right_on_rx ? AMOTION_EVENT_AXIS_RX : AMOTION_EVENT_AXIS_Z);
+        float ry = axis(right_on_rx ? AMOTION_EVENT_AXIS_RY : AMOTION_EVENT_AXIS_RZ);
+        dead_zone(&lx, &ly, set.deadzone);
+        dead_zone(&rx, &ry, set.deadzone);
+        g_pad_sticks[0] = to_stick(lx);
+        g_pad_sticks[1] = to_stick(-ly);  // en Android abajo es positivo
+        g_pad_sticks[2] = to_stick(rx);
+        g_pad_sticks[3] = to_stick(-ry);
+        const uint32_t touched = g_touch_sticks_on;  // (un stick que lleva un dedo no se toca desde aquí)
+        for (int k = 0; k < 4; k++)
+            if (!(touched & (1u << (k / 2)))) g_input.sticks[k] = g_pad_sticks[k].load();
         float hx = axis(AMOTION_EVENT_AXIS_HAT_X), hy = axis(AMOTION_EVENT_AXIS_HAT_Y);
         float lt = std::fmax(axis(AMOTION_EVENT_AXIS_LTRIGGER), axis(AMOTION_EVENT_AXIS_BRAKE));
         float rt = std::fmax(axis(AMOTION_EVENT_AXIS_RTRIGGER), axis(AMOTION_EVENT_AXIS_GAS));
+        if (triggers_on_z) {
+            const float z = axis(AMOTION_EVENT_AXIS_Z), rz = axis(AMOTION_EVENT_AXIS_RZ);
+            lt = std::fmax(lt, pad.z_signed ? (z + 1.0f) * 0.5f : z);
+            rt = std::fmax(rt, pad.z_signed ? (rz + 1.0f) * 0.5f : rz);
+        }
         uint64_t b = 0;
         if (hx < -0.5f) b |= kLeft;
         if (hx > 0.5f) b |= kRight;
         if (hy < -0.5f) b |= kUp;
         if (hy > 0.5f) b |= kDown;
-        if (lt > 0.5f) b |= kZL;
-        if (rt > 0.5f) b |= kZR;
+        if (lt > set.trigger) b |= kZL;
+        if (rt > set.trigger) b |= kZR;
         if (lx < -0.5f) b |= kStickLLeft;
         if (lx > 0.5f) b |= kStickLRight;
         if (ly < -0.5f) b |= kStickLUp;
@@ -588,6 +701,62 @@ void on_cmd(android_app* app, int32_t cmd) {
 }
 
 }  // namespace
+
+// ---- los controles táctiles y el menú de controles (android/java: GameActivity, TouchPad, ControlsMenu) ----------
+
+// Lo que tocan los dedos: los botones de la consola (bits de NpadButton), qué sticks lleva un dedo (bit 0 el izquierdo,
+// bit 1 el derecho) y dónde (de -1 a 1, y hacia arriba positivo).
+extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivity_nativeTouch(JNIEnv*, jclass, jlong buttons,
+                                                                                              jint sticks_on, jfloat lx,
+                                                                                              jfloat ly, jfloat rx, jfloat ry) {
+    const uint64_t now = static_cast<uint64_t>(buttons);
+    latch(now & ~g_touch_buttons.exchange(now));
+    const uint32_t on = static_cast<uint32_t>(sticks_on) & 3u;
+    const uint32_t was = g_touch_sticks_on.exchange(on);
+    const float v[4] = {lx, ly, rx, ry};
+    for (int k = 0; k < 4; k++) {
+        if (on & (1u << (k / 2))) g_input.sticks[k] = to_stick(v[k]);
+        else if (was & (1u << (k / 2))) g_input.sticks[k] = g_pad_sticks[k].load();  // (soltado: vuelve el del mando)
+    }
+    publish();
+}
+
+// Un toque que no es de ningún control, para el panel del HUD: en píxeles de la vista, que mide view_w x view_h
+extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivity_nativeTouchPoint(
+    JNIEnv*, jclass, jint action, jfloat x, jfloat y, jlong time_ns, jint view_w, jint view_h) {
+    ANativeWindow* window = static_cast<ANativeWindow*>(g_window_state.window.load());
+    const int32_t w = window ? ANativeWindow_getWidth(window) : view_w, h = window ? ANativeWindow_getHeight(window) : view_h;
+    const float sx = view_w > 0 ? static_cast<float>(w) / static_cast<float>(view_w) : 1.0f;
+    const float sy = view_h > 0 ? static_cast<float>(h) / static_cast<float>(view_h) : 1.0f;
+    touch_point(action, x * sx, y * sy, time_ns, w);
+}
+
+// Los ajustes del mando físico. combos: pares (botones del mando que lo disparan, botones que pulsa)
+extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivity_nativePad(JNIEnv* env, jclass, jfloat deadzone,
+                                                                                            jfloat trigger, jint right_axes,
+                                                                                            jlongArray combos) {
+    PadSettings set;
+    set.deadzone = std::fmin(0.6f, std::fmax(0.0f, deadzone));
+    set.trigger = std::fmin(0.95f, std::fmax(0.05f, trigger));
+    set.right_axes = right_axes >= kAxesAuto && right_axes <= kAxesRx ? right_axes : kAxesAuto;
+    if (combos) {
+        const jsize n = env->GetArrayLength(combos);
+        if (jlong* p = env->GetLongArrayElements(combos, nullptr)) {
+            for (jsize k = 0; k + 1 < n; k += 2)
+                if (p[k] && p[k + 1]) set.combos.emplace_back(static_cast<uint64_t>(p[k]), static_cast<uint64_t>(p[k + 1]));
+            env->ReleaseLongArrayElements(combos, p, JNI_ABORT);
+        }
+    }
+    {
+        std::lock_guard lock(g_pad_mutex);
+        g_pad = std::move(set);
+        printf("[entrada] mando: zona muerta %.0f %%, gatillos desde %.0f %%, stick derecho %s, %zu combo(s)\n",
+               g_pad.deadzone * 100.0f, g_pad.trigger * 100.0f,
+               g_pad.right_axes == kAxesZ ? "en Z/RZ" : g_pad.right_axes == kAxesRx ? "en RX/RY" : "según el mando",
+               g_pad.combos.size());
+    }
+    publish();
+}
 
 void android_main(android_app* app) {
     if (FILE* f = fopen((std::string(app->activity->internalDataPath) + "/carpeta.txt").c_str(), "r")) {
