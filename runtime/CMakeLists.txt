@@ -57,6 +57,7 @@ add_library(nnsdk SHARED
   src/nnsdk/ldn.cpp
   src/nnsdk/libc_file.cpp
   src/nnsdk/libc_thread.cpp
+  src/nnsdk/movie_ff.cpp
   src/nnsdk/nfp.cpp
   src/nnsdk/ngc.cpp
   src/nnsdk/nifm.cpp
@@ -79,6 +80,17 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(recompiler)
 target_link_libraries(nnsdk PRIVATE eden_shader)
 target_link_libraries(nnsdk PRIVATE vulkan android mediandk aaudio z)
+# FFmpeg (LGPL, solo el demuxer MP4; tools/build_ffmpeg.sh): respaldo cuando AMediaExtractor no encuentra pistas en un
+# vídeo. Sin esa carpeta se compila igual, sin el respaldo.
+set(FFMPEG_DIR ${CMAKE_CURRENT_LIST_DIR}/../third_party/ffmpeg-android)
+if(EXISTS ${FFMPEG_DIR}/lib/libavformat.a)
+  target_include_directories(nnsdk PRIVATE ${FFMPEG_DIR}/include)
+  target_compile_definitions(nnsdk PRIVATE MHRISE_FFMPEG=1)
+  target_link_libraries(nnsdk PRIVATE ${FFMPEG_DIR}/lib/libavformat.a ${FFMPEG_DIR}/lib/libavcodec.a
+                                      ${FFMPEG_DIR}/lib/libavutil.a m)
+else()
+  message(WARNING "third_party/ffmpeg-android not found: building without the FFmpeg video fallback (run tools/build_ffmpeg.sh)")
+endif()
 # Su libc++ estática no se exporta: el juego debe usar una sola copia de libc++abi (la del loader).
 target_link_options(nnsdk PRIVATE -Wl,--exclude-libs,ALL)
 

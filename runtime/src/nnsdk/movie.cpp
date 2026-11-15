@@ -26,6 +26,7 @@
 #include <vector>
 #include <unistd.h>
 
+#include "nnsdk/movie_ff.h"
 #include "nnsdk/os.h"
 #include "nnsdk/runtime.h"
 
@@ -768,13 +769,33 @@ void source_close(void* user) {
 
 }  // namespace
 
+// Diagnóstico: las cajas del primer nivel del contenedor (tamaño y tipo), para saber qué clase de archivo es.
+static void dump_boxes(const uint8_t* d, size_t n) {
+    size_t p = 0;
+    for (int i = 0; i < 12 && p + 8 <= n; i++) {
+        uint64_t sz = (uint64_t(d[p]) << 24) | (uint64_t(d[p + 1]) << 16) | (uint64_t(d[p + 2]) << 8) | d[p + 3];
+        char type[5] = {};
+        for (int k = 0; k < 4; k++) type[k] = (d[p + 4 + k] >= 32 && d[p + 4 + k] < 127) ? char(d[p + 4 + k]) : '?';
+        printf("[movie] caja @%zu: '%s' tamaño %llu\n", p, type, (unsigned long long)sz);
+        if (sz == 1 && p + 16 <= n) {
+            sz = 0;
+            for (int k = 0; k < 8; k++) sz = (sz << 8) | d[p + 8 + k];
+        }
+        if (sz < 8) break;
+        p += static_cast<size_t>(sz);
+    }
+}
+
 struct Extractor::Impl {
     AMediaExtractor* ex = nullptr;
     AMediaDataSource* data_source = nullptr;
     Source* source = nullptr;
+    movie_ff::Demuxer* ff = nullptr;  // FFmpeg en lugar de AMediaExtractor (si este no encontró pistas)
 
     // Una fuente nueva sustituye a la anterior (SetDataSource se puede repetir): el extractor se rehace.
     void reset() {
+        if (ff) movie_ff::destroy(ff);  // (lee del bloque de source: antes de soltarlo)
+        ff = nullptr;
         if (ex) AMediaExtractor_delete(ex);
         ex = nullptr;
         if (data_source) AMediaDataSource_delete(data_source);
@@ -803,13 +824,24 @@ struct Extractor::Impl {
         return report(AMediaExtractor_setDataSourceCustom(ex, data_source));
     }
 
+    // AMediaExtractor no encontró nada: prueba con FFmpeg sobre el bloque de memoria (si hay).
+    Status try_ffmpeg() {
+        if (!source || !source->memory || source->size <= 0) return kUnsupported;
+        ff = movie_ff::open(source->memory, static_cast<size_t>(source->size));
+        if (!ff) return kUnsupported;
+        printf("[movie] FFmpeg abre el vídeo: %d pistas\n", movie_ff::track_count(ff));
+        return kOk;
+    }
+
     Status report(media_status_t r) {
         if (r != AMEDIA_OK) {
             printf("[movie] el extractor no abre el vídeo: %d\n", r);
-            return from_media(r);
+            Status st = try_ffmpeg();
+            return st == kOk ? st : from_media(r);
         }
         size_t tracks = AMediaExtractor_getTrackCount(ex);
         printf("[movie] extractor: %zu pistas\n", tracks);
+        if (tracks == 0) return try_ffmpeg();
         for (size_t i = 0; i < tracks; i++) {
             AMediaFormat* f = AMediaExtractor_getTrackFormat(ex, i);
             printf("[movie]   pista %zu: %s\n", i, AMediaFormat_toString(f));
@@ -878,6 +910,7 @@ Status Extractor::SetDataSource(ClientStreamReader* reader, const char* path) {
             s->reader = nullptr;
             s->handle = nullptr;
             printf("[movie] vídeo copiado a memoria (%ld bytes)\n", size);
+            dump_boxes(s->memory, static_cast<size_t>(size));
             return impl_->open(s);
         }
         printf("[movie] copia a memoria incompleta (%ld de %ld bytes): se lee por streaming\n", got, size);
@@ -887,12 +920,23 @@ Status Extractor::SetDataSource(ClientStreamReader* reader, const char* path) {
 }
 
 Status Extractor::GetTrackCount(int* count) {
+    if (impl_->ff) {
+        *count = movie_ff::track_count(impl_->ff);
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     *count = static_cast<int>(AMediaExtractor_getTrackCount(impl_->ex));
     return kOk;
 }
 
 Status Extractor::GetTrackConfiguration(int index, MediaData* out) {
+    if (impl_->ff) {
+        AMediaFormat* f = movie_ff::track_format(impl_->ff, index);
+        if (!f) return kError;
+        out->Clear();
+        out->store_->format = f;
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     AMediaFormat* f = AMediaExtractor_getTrackFormat(impl_->ex, index);
     if (!f) return kError;
@@ -902,16 +946,22 @@ Status Extractor::GetTrackConfiguration(int index, MediaData* out) {
 }
 
 Status Extractor::SelectTrack(int index) {
+    if (impl_->ff) return movie_ff::select_track(impl_->ff, index, true) ? kOk : kError;
     return impl_->ex ? from_media(AMediaExtractor_selectTrack(impl_->ex, index)) : kError;
 }
 
 Status Extractor::UnselectTrack(int index) {
+    if (impl_->ff) return movie_ff::select_track(impl_->ff, index, false) ? kOk : kError;
     return impl_->ex ? from_media(AMediaExtractor_unselectTrack(impl_->ex, index)) : kError;
 }
 
 // Como NnExtractor::SeekTo (subsdk0+0x1028e8): hacia delante al siguiente fotograma clave, hacia atrás al
 // anterior.
 Status Extractor::SeekTo(long time_us) {
+    if (impl_->ff) {
+        int64_t now = movie_ff::sample_time(impl_->ff);
+        return movie_ff::seek(impl_->ff, time_us, now < time_us) ? kOk : kError;
+    }
     if (!impl_->ex) return kError;
     SeekMode mode = AMediaExtractor_getSampleTime(impl_->ex) < time_us ? AMEDIAEXTRACTOR_SEEK_NEXT_SYNC
                                                                         : AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC;
@@ -921,6 +971,12 @@ Status Extractor::SeekTo(long time_us) {
 // La pista de la próxima muestra; al acabarse todas, fin de stream (el juego lo manda entonces a los
 // decoders). AMediaExtractor da -1 tanto al final como si falla la lectura: las dos cierran el vídeo.
 Status Extractor::GetTrackIndexForAvailableData(size_t* index) {
+    if (impl_->ff) {
+        int track = movie_ff::next_track(impl_->ff);
+        if (track < 0) return kEndOfStream;
+        *index = track;
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     int track = AMediaExtractor_getSampleTrackIndex(impl_->ex);
     if (track < 0) return kEndOfStream;
@@ -930,6 +986,18 @@ Status Extractor::GetTrackIndexForAvailableData(size_t* index) {
 
 // La muestra actual al principio del buffer (NuMediaExtractor::readSampleData deja el rango en [0, tamaño]).
 Status Extractor::Read(Buffer* out) {
+    if (impl_->ff) {
+        ssize_t need = movie_ff::sample_size(impl_->ff);
+        if (need < 0) return kEndOfStream;
+        if (!out->Base() || need > static_cast<ssize_t>(out->Capacity())) {
+            printf("[movie] la muestra no cabe: %zd bytes en %zu\n", need, out->Capacity());
+            return kError;
+        }
+        ssize_t n = movie_ff::read_sample(impl_->ff, static_cast<uint8_t*>(out->Base()), out->Capacity());
+        if (n < 0) return kEndOfStream;
+        out->SetRange(0, static_cast<int>(n));
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     if (AMediaExtractor_getSampleTrackIndex(impl_->ex) < 0) return kEndOfStream;
     ssize_t need = AMediaExtractor_getSampleSize(impl_->ex);
@@ -944,11 +1012,18 @@ Status Extractor::Read(Buffer* out) {
 }
 
 Status Extractor::Advance() {
+    if (impl_->ff) return movie_ff::advance(impl_->ff) ? kOk : kEndOfStream;
     if (!impl_->ex) return kError;
     return AMediaExtractor_advance(impl_->ex) ? kOk : kEndOfStream;
 }
 
 Status Extractor::GetSampleTime(long* time_us) {
+    if (impl_->ff) {
+        int64_t t = movie_ff::sample_time(impl_->ff);
+        if (t < 0) return kEndOfStream;
+        *time_us = t;
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     int64_t t = AMediaExtractor_getSampleTime(impl_->ex);
     if (t < 0) return kEndOfStream;
@@ -957,6 +1032,13 @@ Status Extractor::GetSampleTime(long* time_us) {
 }
 
 Status Extractor::GetSampleMetaData(MediaData* out) {
+    if (impl_->ff) {
+        AMediaFormat* f = AMediaFormat_new();
+        AMediaFormat_setInt32(f, "is-sync-frame", movie_ff::sample_sync(impl_->ff) ? 1 : 0);
+        out->Clear();
+        out->store_->format = f;
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     AMediaFormat* f = AMediaFormat_new();
     media_status_t r = AMediaExtractor_getSampleFormat(impl_->ex, f);
@@ -971,6 +1053,11 @@ Status Extractor::GetSampleMetaData(MediaData* out) {
 
 // Todo está ya "en caché": los datos son locales. El final es la duración más larga de las pistas.
 Status Extractor::GetBufferedRange(long* start_us, long* end_us) {
+    if (impl_->ff) {
+        *start_us = 0;
+        *end_us = movie_ff::duration_us(impl_->ff);
+        return kOk;
+    }
     if (!impl_->ex) return kError;
     int64_t end = 0;
     for (size_t i = 0, n = AMediaExtractor_getTrackCount(impl_->ex); i < n; i++) {
