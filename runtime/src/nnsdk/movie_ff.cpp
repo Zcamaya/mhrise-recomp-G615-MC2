@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <vector>
 
@@ -128,7 +129,27 @@ struct Demuxer {
     std::vector<uint8_t> sample;  // la muestra actual, ya convertida
     int sample_track = -1;
 
+    // Muestras leídas del contenedor y aún no entregadas, por pista. El orden de entrega es el de AMediaExtractor
+    // (siempre la de menor tiempo entre las pistas elegidas), no el de posición en el archivo: con éste el audio
+    // iba muchos frames por delante del vídeo y el juego se quedaba esperando.
+    struct Pend {
+        AVPacket* pkt = nullptr;
+        std::vector<uint8_t> sample;
+        int track = -1;
+        int64_t time_us = 0;
+    };
+    std::deque<Pend> queue[kMaxTracks];
+
+    void drop_queues() {
+        for (auto& q : queue) {
+            for (auto& p : q)
+                if (p.pkt) av_packet_free(&p.pkt);
+            q.clear();
+        }
+    }
+
     ~Demuxer() {
+        drop_queues();
         if (pkt) av_packet_free(&pkt);
         if (fmt) avformat_close_input(&fmt);
         if (avio) {
@@ -137,40 +158,78 @@ struct Demuxer {
         }
     }
 
-    // Deja en `sample` la próxima muestra de una pista elegida. Con m cogido.
-    void fill() {
-        while (fmt && !have && !eof) {
-            int r = av_read_frame(fmt, pkt);
-            if (r < 0) {
-                eof = true;
-                break;
+    // Lee del contenedor la próxima muestra de una pista elegida (ya convertida a Annex B). Con m cogido.
+    bool read_one(Pend* out) {
+        for (;;) {
+            AVPacket* p = av_packet_alloc();
+            if (!p) return false;
+            if (av_read_frame(fmt, p) < 0) {
+                av_packet_free(&p);
+                return false;
             }
             int track = -1;
             for (int i = 0; i < ntracks; i++)
-                if (map[i] == pkt->stream_index) track = i;
-            if (track < 0 || !(selected & (1ull << pkt->stream_index))) {
-                av_packet_unref(pkt);
+                if (map[i] == p->stream_index) track = i;
+            if (track < 0 || !(selected & (1ull << p->stream_index))) {
+                av_packet_free(&p);
                 continue;
             }
-            sample.clear();
-            sample_track = track;
-            const uint8_t* d = pkt->data;
-            int n = pkt->size;
+            out->track = track;
+            out->sample.clear();
+            const uint8_t* d = p->data;
+            int n = p->size;
             if (nal_len[track] > 0) {  // H.264 con prefijos de longitud -> Annex B
                 int L = nal_len[track];
-                int p = 0;
-                while (p + L <= n) {
+                int q = 0;
+                while (q + L <= n) {
                     uint32_t len = 0;
-                    for (int i = 0; i < L; i++) len = (len << 8) | d[p + i];
-                    p += L;
-                    if (len == 0 || p + static_cast<int64_t>(len) > n) break;
-                    append_start_code(sample);
-                    sample.insert(sample.end(), d + p, d + p + len);
-                    p += static_cast<int>(len);
+                    for (int i = 0; i < L; i++) len = (len << 8) | d[q + i];
+                    q += L;
+                    if (len == 0 || q + static_cast<int64_t>(len) > n) break;
+                    append_start_code(out->sample);
+                    out->sample.insert(out->sample.end(), d + q, d + q + len);
+                    q += static_cast<int>(len);
                 }
             } else {
-                sample.assign(d, d + n);
+                out->sample.assign(d, d + n);
             }
+            AVStream* st = fmt->streams[p->stream_index];
+            int64_t ts = p->pts != AV_NOPTS_VALUE ? p->pts : p->dts;
+            int64_t start = st->start_time != AV_NOPTS_VALUE ? st->start_time : 0;
+            out->time_us = ts == AV_NOPTS_VALUE ? 0 : av_rescale_q(ts - start, st->time_base, AVRational{1, 1000000});
+            out->pkt = p;
+            return true;
+        }
+    }
+
+    // Deja en `pkt` y `sample` la muestra de menor tiempo entre las pistas elegidas. Con m cogido.
+    void fill() {
+        while (fmt && !have) {
+            // Cada pista elegida necesita su próxima muestra en cola (salvo que el archivo se haya acabado).
+            while (!eof) {
+                bool need = false;
+                for (int i = 0; i < ntracks; i++)
+                    if ((selected & (1ull << map[i])) && queue[i].empty()) need = true;
+                if (!need) break;
+                Pend p;
+                if (!read_one(&p)) {
+                    eof = true;
+                    break;
+                }
+                int t = p.track;
+                queue[t].push_back(std::move(p));
+            }
+            int best = -1;
+            for (int i = 0; i < ntracks; i++)
+                if (!queue[i].empty() && (best < 0 || queue[i].front().time_us < queue[best].front().time_us)) best = i;
+            if (best < 0) break;
+            Pend p = std::move(queue[best].front());
+            queue[best].pop_front();
+            av_packet_unref(pkt);
+            av_packet_move_ref(pkt, p.pkt);
+            av_packet_free(&p.pkt);
+            sample = std::move(p.sample);
+            sample_track = p.track;
             have = true;
         }
     }
@@ -328,6 +387,7 @@ bool seek(Demuxer* d, int64_t time_us, bool forward) {
         d->have = false;
     }
     d->eof = false;
+    d->drop_queues();
     return av_seek_frame(d->fmt, -1, time_us, forward ? 0 : AVSEEK_FLAG_BACKWARD) >= 0;
 }
 
