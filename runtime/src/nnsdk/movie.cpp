@@ -399,6 +399,16 @@ void on_output(AMediaCodec*, void* user, int32_t index, AMediaCodecBufferInfo* i
     auto* d = static_cast<Impl*>(user);
     {
         std::lock_guard lock(d->m);
+        if (d->video && d->layout.width == 0 && d->codec) {  // PARCHE: sin on_format (Snapdragon 7+ Gen 2)
+            AMediaFormat* pf = AMediaCodec_getOutputFormat(d->codec);
+            if (pf) {
+                d->layout = layout_of(pf);
+                AMediaFormat_delete(pf);
+                printf("[movie] salida forzada %dx%d, stride %d, corte %d, color %d\n", d->layout.width,
+                       d->layout.height, d->layout.stride, d->layout.slice, d->layout.color);
+                d->signal(d->events.format_changed);
+            }
+        }
         d->outputs.emplace_back(index, *info);
         static int n = 0;
         if (++n <= 40) printf("[movie] on_output %d (índice %d, t=%lld, flags %u)\n", n, index, static_cast<long long>(info->presentationTimeUs), info->flags);
