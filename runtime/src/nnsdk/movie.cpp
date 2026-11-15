@@ -23,6 +23,8 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <vector>
+#include <unistd.h>
 
 #include "nnsdk/os.h"
 #include "nnsdk/runtime.h"
@@ -723,6 +725,7 @@ struct Source {
     ClientStreamReader* reader = nullptr;
     void* handle = nullptr;
     const uint8_t* memory = nullptr;
+    std::vector<uint8_t> owned;  // el vídeo entero copiado (si memory apunta aquí)
     int64_t size = -1;
     std::atomic<int> refs{2};
     std::atomic<bool> closed{false};
@@ -745,6 +748,10 @@ ssize_t source_read(void* user, off64_t offset, void* buffer, size_t size) {
     } else if (s->reader) {
         n = s->reader->ReadAt(s->handle, offset, buffer, size);
     }
+    // Diagnóstico: las primeras lecturas por el lector del juego (hilo, offset, tamaño, resultado).
+    static std::atomic<int> logged{0};
+    if (s->reader && logged++ < 24)
+        printf("[movie] source_read tid %d offset %lld size %zu -> %ld\n", gettid(), (long long)offset, size, n);
     return n > 0 ? n : -1;
 }
 
@@ -850,6 +857,31 @@ Status Extractor::SetDataSource(ClientStreamReader* reader, const char* path) {
     s->reader = reader;
     s->handle = handle;
     s->size = size;
+    // Copia el vídeo entero a memoria desde ESTE hilo (el del juego) y se lo da al extractor como bloque. Así
+    // AMediaExtractor nunca llama de vuelta al lector del juego por binder desde otro hilo, que según el
+    // Android/ROM deja el vídeo con 0 pistas. Los vídeos de Rise son pequeños; los enormes siguen por streaming.
+    constexpr long kMaxSlurp = 128L << 20;
+    if (size > 0 && size <= kMaxSlurp) {
+        std::vector<uint8_t> buf;
+        buf.resize(static_cast<size_t>(size));
+        long got = 0;
+        while (got < size) {
+            long want = std::min<long>(size - got, 1L << 20);
+            long n = reader->ReadAt(handle, got, buf.data() + got, static_cast<size_t>(want));
+            if (n <= 0) break;
+            got += n;
+        }
+        if (got == size) {
+            reader->Close(handle);
+            s->owned = std::move(buf);
+            s->memory = s->owned.data();
+            s->reader = nullptr;
+            s->handle = nullptr;
+            printf("[movie] vídeo copiado a memoria (%ld bytes)\n", size);
+            return impl_->open(s);
+        }
+        printf("[movie] copia a memoria incompleta (%ld de %ld bytes): se lee por streaming\n", got, size);
+    }
     printf("[movie] extractor sobre el lector del juego (%s, %ld bytes)\n", path ? path : "", size);
     return impl_->open(s);
 }
