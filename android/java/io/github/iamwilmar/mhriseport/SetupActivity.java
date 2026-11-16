@@ -24,20 +24,13 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 
 // Pantalla de inicio. La primera vez pide el permiso de archivos y la carpeta donde el usuario copió los archivos de
 // su juego (ExeFS y RomFS ya extraídos de su propia consola); DumpScanner dice qué hay y qué falta, y si está todo se
 // apunta en files/carpeta.txt. Las siguientes, directa en "Iniciar juego". El juego es GameActivity, una NativeActivity (libnier.so):
 // usa esa carpeta como <datos> (partidas, cachés, log). La app no descifra nada ni acepta NSP/XCI.
-// Con el mando: la cruceta mueve el foco y A pulsa (Android traduce A a DPAD_CENTER). Textos en español o inglés según
-// el idioma del sistema.
+// Con el mando: la cruceta mueve el foco y A pulsa (Android traduce A a DPAD_CENTER).
 public final class SetupActivity extends Activity {
-    private static final boolean ES = Locale.getDefault().getLanguage().equals("es");
-
-    static String tr(String es, String en) {
-        return ES ? es : en;
-    }
 
     private LinearLayout root;
     private File browsing;  // carpeta del explorador; null: la lista de almacenamientos
@@ -108,9 +101,8 @@ public final class SetupActivity extends Activity {
 
     private void showPermission() {
         clear(Game.NAME);
-        text(tr("Para leer tu juego, la app necesita permiso para ver los archivos. Actívalo en la siguiente pantalla y vuelve.",
-                "To read your game files the app needs the \"All files access\" permission. Turn it on in the next screen and come back."));
-        Button grant = button(tr("Dar permiso", "Grant permission"));
+        text("To read your game files the app needs the \"All files access\" permission. Turn it on in the next screen and come back.");
+        Button grant = button("Grant permission");
         grant.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                 Uri.parse("package:" + getPackageName()))));
         grant.requestFocus();
@@ -118,13 +110,10 @@ public final class SetupActivity extends Activity {
 
     private void showBrowser(File dir) {
         browsing = dir;
-        clear(tr("Elige la carpeta de tu juego", "Choose your game folder"));
-        text(tr("La carpeta donde copiaste el ExeFS y la RomFS de tu copia del juego (versión " + Game.VERSION
-                        + "), ya extraídos de tu consola" + (Game.DLC_MARKER != null ? ", y los DLC si los tienes" : "")
-                        + ". Ahí se guardarán también tus partidas.",
-                "The folder where you copied the ExeFS and RomFS of your own copy of the game (version " + Game.VERSION
+        clear("Choose your game folder");
+        text("The folder where you copied the ExeFS and RomFS of your own copy of the game (version " + Game.VERSION
                         + "), already extracted on your console" + (Game.DLC_MARKER != null ? ", plus any DLC you own" : "")
-                        + ". Your saves will be stored there too."));
+                        + ". Your saves will be stored there too.");
         final List<File> targets = new ArrayList<>();
         List<String> labels = new ArrayList<>();
         if (dir == null) {
@@ -136,10 +125,10 @@ public final class SetupActivity extends Activity {
             }
         } else {
             text(dir.getPath());
-            Button use = button(tr("Usar esta carpeta", "Use this folder"));
+            Button use = button("Use this folder");
             use.setOnClickListener(v -> scan(dir));
             targets.add(null);
-            labels.add(tr("⬆  Atrás", "⬆  Back"));
+            labels.add("⬆  Back");
             File[] subs = dir.listFiles(File::isDirectory);
             if (subs != null) {
                 Arrays.sort(subs, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
@@ -162,7 +151,7 @@ public final class SetupActivity extends Activity {
 
     private void scan(File dir) {
         browsing = null;
-        clear(tr("Buscando tu juego…", "Looking for your game…"));
+        clear("Looking for your game…");
         text(dir.getPath());
         root.addView(new ProgressBar(this));
         new Thread(() -> {
@@ -173,7 +162,7 @@ public final class SetupActivity extends Activity {
                     DumpScanner.writePaths(dir, r);
                     saveFolder(dir);
                 } catch (IOException e) {
-                    error = tr("No puedo escribir en ", "Cannot write to ") + dir + ": " + e.getMessage();
+                    error = "Cannot write to " + dir + ": " + e.getMessage();
                 }
             }
             String failure = error;
@@ -188,30 +177,27 @@ public final class SetupActivity extends Activity {
         browsing = null;
         clear(Game.NAME);
         text(dir.getPath());
-        if (r.exefs != null) text(tr("✓  Juego, versión ", "✓  Game, version ") + Game.VERSION);
+        if (r.exefs != null) text("✓  Game, version " + Game.VERSION);
         else text("✗  " + (r.exefsProblem != null ? r.exefsProblem
-                : tr("No encuentro el ExeFS del juego (la carpeta con main y main.npdm).",
-                     "Game ExeFS not found (the folder that contains main and main.npdm).")));
-        if (r.romfs != null) text(tr("✓  RomFS del juego", "✓  Game RomFS"));
+                : "Game ExeFS not found (the folder that contains main and main.npdm)."));
+        if (r.romfs != null) text("✓  Game RomFS");
         else text("✗  " + (r.romfsProblem != null ? r.romfsProblem
-                : tr("No encuentro la RomFS del juego.", "Game RomFS not found.")));
+                : "Game RomFS not found."));
         if (Game.DLC_MARKER != null) {
-            text(r.dlc.isEmpty() ? tr("·  Sin DLC (son opcionales)", "·  No DLC (optional)") : "✓  " + r.dlc.size() + " DLC");
+            text(r.dlc.isEmpty() ? "·  No DLC (optional)" : "✓  " + r.dlc.size() + " DLC");
             if (r.unknownDlc > 0)
-                text("·  " + r.unknownDlc + tr(" DLC sin su id de título en el nombre de la carpeta: no los cargo. "
-                        + "Deja las carpetas de los DLC con el nombre que les puso la herramienta con la que los extrajiste.",
-                        " DLC without their title ID in the folder name were skipped. "
-                        + "Keep the DLC folders named as your extraction tool created them."));
+                text("·  " + r.unknownDlc + " DLC without their title ID in the folder name were skipped. "
+                        + "Keep the DLC folders named as your extraction tool created them.");
         }
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(row);
         Button change = new Button(this);
-        change.setText(r.ready() ? tr("Cambiar carpeta", "Change folder") : tr("Elegir otra carpeta", "Choose another folder"));
+        change.setText(r.ready() ? "Change folder" : "Choose another folder");
         change.setOnClickListener(v -> showBrowser(dir));
         if (r.ready()) {
             Button start = new Button(this);
-            start.setText(tr("Iniciar juego", "Start game"));
+            start.setText("Start game");
             start.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
             start.setOnClickListener(v -> startGame());
             row.addView(start);
@@ -221,7 +207,7 @@ public final class SetupActivity extends Activity {
         }
         row.addView(change);
         Button driver = new Button(this);
-        driver.setText(tr("Driver de GPU", "GPU driver"));
+        driver.setText("GPU driver");
         driver.setOnClickListener(v -> startActivity(new Intent(this, DriverActivity.class)));
         row.addView(driver);
     }

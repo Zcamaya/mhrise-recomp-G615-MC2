@@ -109,7 +109,7 @@ const FsContext g_default_context{};
 struct File {
     int fd;
     int mode;
-    std::string path;  // DEPURACIÓN: para traza_fs
+    std::string path;  // DEPURACIÓN: para fs_trace
 };
 struct Directory {
     std::vector<DirectoryEntry> entries;
@@ -343,10 +343,10 @@ Result ReadFile(size_t* out, FileHandle h, int64_t offset, void* buffer, size_t 
         done += n;
     }
     if (out) *out = done;
-    // DEPURACIÓN: <datos>/traza_fs registra las primeras lecturas (ruta, offset, tamaño, leído y un hash del
+    // DEPURACIÓN: <datos>/fs_trace registra las primeras lecturas (ruta, offset, tamaño, leído y un hash del
     // contenido) para compararlas con el archivo de verdad en el Mac.
     static std::atomic<int> traced{0};
-    if (NVN_FLAG("traza_fs") && traced++ < 3000) {
+    if (NVN_FLAG("fs_trace") && traced++ < 3000) {
         uint64_t hash = 1469598103934665603ull;
         for (size_t k = 0; k < done; k++) hash = (hash ^ static_cast<uint8_t*>(buffer)[k]) * 1099511628211ull;
         timespec t1;

@@ -5,7 +5,7 @@
 // a abrir. Quien copia vuelve a cerrar las páginas abiertas antes de leerlas, así ninguna escritura se pierde.
 //
 // Lo que escribe el kernel (pread, recv…) en memoria vigilada no salta: falla con EFAULT. Quien haga eso en memoria
-// del juego llama antes a before_kernel_write. <datos>/sin_vigilancia lo apaga (los espejos vuelven al hash).
+// del juego llama antes a before_kernel_write. <datos>/no_write_watch lo apaga (los espejos vuelven al hash).
 
 #include <cstddef>
 #include <cstdint>

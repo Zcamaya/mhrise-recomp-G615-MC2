@@ -53,7 +53,7 @@ Result GetActiveAudioDeviceName(AudioDeviceName* out) {
 // (main+0x7a41510, en su actualización) lo miran con TryWaitSystemEvent y nunca lo limpian. Sin crearlo se quedaba
 // ManualClear: una vez señalado, TryWait daba true para siempre y Wwise rehacía el cambio de dispositivo
 // (SetPanningRule y el recálculo de los listeners) en cada buffer. Y devuelve Result: antes devolvía lo que
-// quedase en w0 (0 la primera vez, 1 las demás) y Wwise lo mira. Interruptor audio_aviso_v1: como antes.
+// quedase en w0 (0 la primera vez, 1 las demás) y Wwise lo mira. Interruptor audio_warning_v1: como antes.
 Result AcquireAudioDeviceNotificationForOutput(os::SystemEvent* event) {
     preparar_salida();
     static std::atomic<bool> notified{false};
@@ -66,7 +66,7 @@ Result AcquireAudioDeviceNotificationForOutput(os::SystemEvent* event) {
     pthread_getname_np(pthread_self(), name, sizeof name);
     printf("[audio] AcquireAudioDeviceNotificationForOutput %p en '%s' (desde %p): %s\n", static_cast<void*>(event), name,
            __builtin_return_address(0), first ? "primera, con aviso" : "sin aviso");
-    if (NVN_FLAG("audio_aviso_v1")) {
+    if (NVN_FLAG("audio_warning_v1")) {
         if (!first) return Result{1};
         nnsdk::signal_system_event(e);
         return ResultSuccess;
@@ -191,7 +191,7 @@ public:
             if (!next_report_ns_) next_report_ns_ = t + kInformeNs;
             if (t >= next_report_ns_) informe_locked(t, informe, sizeof informe);
         }
-        if (informe[0] && NVN_FLAG("registro")) fputs(informe, stdout);
+        if (informe[0] && NVN_FLAG("verbose_log")) fputs(informe, stdout);
         if (dead_.exchange(false)) std::thread([this] { reopen(); }).detach();
         return b;
     }
@@ -354,7 +354,7 @@ int x29_chain(const void** pcs, int max) {
 // dispositivo caído main+0x259a4d4...; restar "main en 0x…" del principio del log). Append y Released solo los
 // primeros, que son cientos por segundo.
 void trace_out(const char* what, const AudioOut* out, const void* caller) {
-    if (!NVN_FLAG("registro")) return;
+    if (!NVN_FLAG("verbose_log")) return;
     const bool vida = what[0] == 'O' || what[0] == 'S' || what[0] == 'C';
     static std::atomic<int> n_vida{0}, n_cola{0};
     if ((vida ? n_vida : n_cola)++ >= (vida ? 800 : 64)) return;

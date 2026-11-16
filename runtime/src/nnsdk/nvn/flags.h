@@ -31,7 +31,7 @@ public:
     const char* name() const { return name_; }
     // Desde el hilo de los interruptores.
     void set(bool v) {
-        if (v != value_.exchange(v, std::memory_order_relaxed)) NVN_LOG("interruptor %s: %s\n", name_, v ? "sí" : "no");
+        if (v != value_.exchange(v, std::memory_order_relaxed)) NVN_LOG("switch %s: %s\n", name_, v ? "on" : "off");
     }
 
 private:
@@ -89,7 +89,7 @@ inline LiveFlag::LiveFlag(const char* name) : name_(name) {
     const char* data = getenv("NIER_DATA");
     const bool v = access((std::string(data ? data : ".") + "/" + name_).c_str(), F_OK) == 0;
     value_.store(v, std::memory_order_relaxed);
-    NVN_LOG("interruptor %s: %s\n", name_, v ? "sí" : "no");
+    NVN_LOG("switch %s: %s\n", name_, v ? "on" : "off");
     LiveFlags::instance().add(this);
 }
 

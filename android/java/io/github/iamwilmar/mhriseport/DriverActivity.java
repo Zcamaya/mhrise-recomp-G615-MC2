@@ -32,14 +32,13 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-import static io.github.iamwilmar.mhriseport.ControlsMenu.CREAM;
-import static io.github.iamwilmar.mhriseport.ControlsMenu.DIM;
-import static io.github.iamwilmar.mhriseport.ControlsMenu.EDGE;
-import static io.github.iamwilmar.mhriseport.ControlsMenu.GOLD;
-import static io.github.iamwilmar.mhriseport.ControlsMenu.GREEN;
-import static io.github.iamwilmar.mhriseport.ControlsMenu.RED;
-import static io.github.iamwilmar.mhriseport.ControlsMenu.ROW;
-import static io.github.iamwilmar.mhriseport.SetupActivity.tr;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.CREAM;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.DIM;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.EDGE;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.GOLD;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.GREEN;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.RED;
+import static io.github.iamwilmar.mhriseport.SettingsMenu.ROW;
 
 // "Driver de GPU": un driver Vulkan propio para una Adreno (Turnip, o una versión de Qualcomm más nueva), en vez del
 // del sistema. Acepta los .zip de siempre de estos drivers (meta.json y la librería .so, como los de AdrenoTools). Cada uno
@@ -66,9 +65,9 @@ public final class DriverActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setPadding(dp(18), dp(10), dp(10), dp(10));
-        TextView title = text(tr("AJUSTES", "SETTINGS"), 22, GOLD, true);
+        TextView title = text("SETTINGS", 22, GOLD, true);
         title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
-        TextView sub = text("  ◆  " + tr("Driver de GPU", "GPU driver"), 17, CREAM, false);
+        TextView sub = text("  ◆  GPU driver", 17, CREAM, false);
         TextView close = text("✕", 22, CREAM, false);
         close.setPadding(dp(14), dp(4), dp(14), dp(4));
         close.setBackground(plate(0xFF1A0C09, 1, 2));
@@ -100,26 +99,23 @@ public final class DriverActivity extends Activity {
 
     private void build() {
         list.removeAllViews();
-        note(tr("Solo para GPU Adreno (Snapdragon), a tu riesgo. Agrega un .zip de driver (meta.json y la librería .so, como "
-                        + "los de Turnip para AdrenoTools) y elígelo. Vale desde el siguiente arranque del juego; si con él no "
-                        + "llega a dibujar, vuelve solo al del sistema.",
-                "Adreno GPUs (Snapdragon) only, at your own risk. Add a driver .zip (meta.json and the .so library, like the "
+        note("Adreno GPUs (Snapdragon) only, at your own risk. Add a driver .zip (meta.json and the .so library, like the "
                         + "Turnip ones for AdrenoTools) and pick it. It takes effect the next time the game starts; if the game "
-                        + "can't draw with it, it goes back to the system's by itself."));
+                        + "can't draw with it, it goes back to the system's by itself.");
         status = text("", 14, CREAM, false);
         status.setPadding(dp(4), dp(6), dp(4), 0);
         status.setVisibility(View.GONE);
         list.addView(status);
         File failed = new File(root(), "fallo");
         if (failed.isFile()) {
-            say(tr("El último no funcionó: ", "The last one didn't work: ") + firstLine(failed)
-                    + tr(". Se usa el del sistema.", ". The system's is in use."), true);
+            say("The last one didn't work: " + firstLine(failed)
+                    + ". The system's is in use.", true);
             failed.delete();
         }
 
         String chosen = selected()[0];
-        header(tr("Drivers", "Drivers"));
-        entry(tr("Del sistema", "System driver"), tr("El que trae el teléfono", "The one that came with the phone"),
+        header("Drivers");
+        entry("System driver", "The one that came with the phone",
                 chosen == null, () -> choose(null), null);
         File[] folders = root().listFiles(File::isDirectory);
         if (folders != null) {
@@ -130,7 +126,7 @@ public final class DriverActivity extends Activity {
                 entry(info[0], info[1], dir.getName().equals(chosen), () -> choose(dir), () -> remove(dir));
             }
         }
-        TextView add = button(tr("Agregar un driver (.zip)", "Add a driver (.zip)"), true);
+        TextView add = button("Add a driver (.zip)", true);
         add.setOnClickListener(v -> pick());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
         lp.topMargin = dp(14);
@@ -139,9 +135,8 @@ public final class DriverActivity extends Activity {
         String now = selected()[0];
         boolean changed = now == null ? startedWith != null : !now.equals(startedWith);
         if (getIntent().getBooleanExtra(FROM_GAME, false) && changed) {
-            note(tr("El juego sigue con el driver con el que arrancó. Ciérralo y vuelve a abrir la app para usar el nuevo.",
-                    "The game keeps the driver it started with. Close it and open the app again to use the new one."));
-            TextView quit = button(tr("Cerrar el juego", "Close the game"), false);
+            note("The game keeps the driver it started with. Close it and open the app again to use the new one.");
+            TextView quit = button("Close the game", false);
             quit.setOnClickListener(v -> {
                 finishAffinity();
                 Process.killProcess(Process.myPid());
@@ -167,7 +162,7 @@ public final class DriverActivity extends Activity {
         if (detail != null && !detail.isEmpty()) words.addView(text(detail, 13, DIM, false));
         r.addView(words, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         if (remove != null) {
-            TextView x = button(tr("Quitar", "Remove"), false);
+            TextView x = button("Remove", false);
             x.setOnClickListener(v -> remove.run());
             r.addView(x, new LinearLayout.LayoutParams(dp(92), dp(40)));
         }
@@ -204,7 +199,7 @@ public final class DriverActivity extends Activity {
             try (FileWriter w = new FileWriter(chosen)) {
                 w.write(dir.getName() + "\n" + info.get(1) + "\n");
             } catch (IOException e) {
-                say(tr("No se pudo guardar: ", "Could not save it: ") + e.getMessage(), true);
+                say("Could not save it: " + e.getMessage(), true);
                 return;
             }
         }
@@ -228,7 +223,7 @@ public final class DriverActivity extends Activity {
         try {
             startActivityForResult(i, PICK);
         } catch (android.content.ActivityNotFoundException e) {
-            say(tr("No hay un selector de archivos en este teléfono.", "There's no file picker on this phone."), true);
+            say("There's no file picker on this phone.", true);
         }
     }
 
@@ -237,7 +232,7 @@ public final class DriverActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (request != PICK || result != RESULT_OK || data == null || data.getData() == null) return;
         Uri zip = data.getData();
-        say(tr("Agregando…", "Adding…"), false);
+        say("Adding…", false);
         new Thread(() -> {
             String shown, error = null;
             try {
@@ -249,8 +244,8 @@ public final class DriverActivity extends Activity {
             final String ok = shown, bad = error;
             runOnUiThread(() -> {
                 build();
-                if (ok != null) say(tr("Agregado: ", "Added: ") + ok + tr(". Tócalo para usarlo.", ". Tap it to use it."), false);
-                else say(tr("No se pudo agregar: ", "Couldn't add it: ") + bad, true);
+                if (ok != null) say("Added: " + ok + ". Tap it to use it.", false);
+                else say("Couldn't add it: " + bad, true);
             });
         }, "AgregarDriver").start();
     }
@@ -260,7 +255,7 @@ public final class DriverActivity extends Activity {
     private String unpack(Uri zip) throws IOException {
         File dir = new File(root(), "nuevo");
         deleteTree(dir);
-        if (!dir.mkdirs()) throw new IOException(tr("no se pudo crear la carpeta", "couldn't create the folder"));
+        if (!dir.mkdirs()) throw new IOException("couldn't create the folder");
         JSONObject meta = null;
         List<String> libraries = new ArrayList<>();
         try (InputStream in = getContentResolver().openInputStream(zip); ZipInputStream z = new ZipInputStream(in)) {
@@ -271,7 +266,7 @@ public final class DriverActivity extends Activity {
                     try {
                         meta = new JSONObject(new String(readAll(z), "UTF-8"));
                     } catch (JSONException bad) {
-                        throw new IOException(tr("meta.json no se entiende", "meta.json can't be read"));
+                        throw new IOException("meta.json can't be read");
                     }
                 } else if (name.endsWith(".so") && !name.contains("..")) {
                     try (OutputStream out = new FileOutputStream(new File(dir, name))) {
@@ -286,7 +281,7 @@ public final class DriverActivity extends Activity {
         }
         if (libraries.isEmpty()) {
             deleteTree(dir);
-            throw new IOException(tr("el zip no trae ninguna librería .so", "the zip has no .so library"));
+            throw new IOException("the zip has no .so library");
         }
         String library = meta != null ? meta.optString("libraryName", "") : "";
         if (library.isEmpty() || !libraries.contains(library)) library = libraries.get(0);
@@ -306,7 +301,7 @@ public final class DriverActivity extends Activity {
         }
         if (!dir.renameTo(target)) {
             deleteTree(dir);
-            throw new IOException(tr("no se pudo guardar", "couldn't save it"));
+            throw new IOException("couldn't save it");
         }
         return name;
     }
@@ -409,7 +404,7 @@ public final class DriverActivity extends Activity {
 
     private float scale = -1;  // (el tamaño del menú de ajustes, el mismo aquí)
     private float scale() {
-        if (scale < 0) scale = ControlsMenu.menuScale(this) / 100f;
+        if (scale < 0) scale = SettingsMenu.menuScale(this) / 100f;
         return scale;
     }
 

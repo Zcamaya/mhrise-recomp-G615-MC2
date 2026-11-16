@@ -277,15 +277,15 @@ void queue_present(Window& window, int index);
 void release_command_list(CommandList* list);
 // Una lista que ya no se va a reproducir (la cola ya la soltó): vuelve al pool de cmdbuf.cpp para que la
 // próxima grabación reutilice su memoria. Barato: se puede llamar con el mutex de la cola tomado (no vacía ni
-// libera nada ahí; con el interruptor sin_reciclar la borra, como antes).
+// libera nada ahí; con el interruptor no_recycle la borra, como antes).
 void recycle_command_list(CommandList* list);
 // Afinidad (os.cpp): el hilo que llama pasa a los núcleos grandes junto con los demás hilos críticos (el
 // principal del juego, MainDraw y NvnSubmit). refresh_critical_threads, una vez por frame desde el hilo que
-// presenta: como mucho una vez por segundo mira el interruptor sin_afinidad, rehace las máscaras que se hayan
+// presenta: como mucho una vez por segundo mira el interruptor no_affinity, rehace las máscaras que se hayan
 // perdido o cambiado y devuelve la completa a los hilos no críticos que heredaron la de los grandes.
 void pin_critical_thread();
 // Los hilos de trabajo de fondo (precarga de shaders, pipelines en segundo plano) a los núcleos pequeños: su CPU no se
-// la quita a los críticos ni calienta los grandes (el SoC caliente baja la GPU). sin_afinidad: como estén.
+// la quita a los críticos ni calienta los grandes (el SoC caliente baja la GPU). no_affinity: como estén.
 void pin_background_thread();
 void refresh_critical_threads();
 // Los tids de los hilos críticos de ahora (los que sigan vivos)

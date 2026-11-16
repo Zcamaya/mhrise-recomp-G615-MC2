@@ -39,10 +39,10 @@ std::string g_data;
 RunConfig g_cfg;
 
 // El log pasa por una tubería de 1 MB que vacía un hilo propio ("LogSD"). Antes cada printf escribía en la SD (FUSE →
-// MediaProvider → exFAT) desde el hilo que lo hacía, y con <datos>/registro línea a línea: ~100 escrituras por segundo
+// MediaProvider → exFAT) desde el hilo que lo hacía, y con <datos>/verbose_log línea a línea: ~100 escrituras por segundo
 // desde el executor, el hilo del juego (las instantáneas del vigilante, 100 líneas) y el del audio. Cuando la SD se
 // atascaba (guardando pipelines.bin, 4-7 s) esos hilos esperaban con ella: de 30 a 1-3 fps y el audio a saltos con el
-// juego quieto. Ahora solo espera si la tubería se llena (~100 s del log normal). <datos>/log_directo: como antes.
+// juego quieto. Ahora solo espera si la tubería se llena (~100 s del log normal). <datos>/log_direct: como antes.
 int g_log_file = -1;  // log.txt
 int g_log_pipe = -1;  // extremo de lectura de la tubería
 std::atomic<uint64_t> g_log_read{0}, g_log_written{0};  // bytes que LogSD sacó de la tubería y que ya escribió
@@ -147,10 +147,10 @@ enum : uint64_t {
 // Cualquier otro mando, y las teclas que inyecta adb: por posición, que es como Android entrega los mandos (BUTTON_A es el
 // botón de abajo también en los mandos de otras consolas). La consola sin esa propiedad (otro firmware): por nombre solo
 // si su mando se presenta como el del modo Retro (2022:3001, "Retroid Pocket Controller").
-// <datos>/botones_xbox y <datos>/botones_retro (en vivo) fuerzan una u otra para todos.
+// <datos>/xbox_buttons y <datos>/retro_buttons (en vivo) fuerzan una u otra para todos.
 int forced_layout() {  // 1: Xbox (por posición), 0: Retro (por nombre), -1: sin forzar
-    static const std::string xbox = g_data + "/botones_xbox";
-    static const std::string retro = g_data + "/botones_retro";
+    static const std::string xbox = g_data + "/xbox_buttons";
+    static const std::string retro = g_data + "/retro_buttons";
     static int checks = 0, forced = -1;
     if (checks++ % 32 == 0) forced = access(xbox.c_str(), F_OK) == 0 ? 1 : access(retro.c_str(), F_OK) == 0 ? 0 : -1;
     return forced;
@@ -236,7 +236,7 @@ bool xbox_layout(ANativeActivity* activity, int32_t device) {
     const int mode = console ? retroid_pad_mode() : -1;
     bool xbox;
     const char* why;
-    if (forced >= 0) xbox = forced == 1, why = "forzado por <datos>/botones_xbox o botones_retro";
+    if (forced >= 0) xbox = forced == 1, why = "forzado por <datos>/xbox_buttons o retro_buttons";
     else if (!console) xbox = true, why = "no es el mando de la consola: los externos llegan por posición";
     else if (mode == 1) xbox = true, why = "modo Xbox de la consola";
     else if (mode == 0) xbox = false, why = "modo Retro de la consola";
@@ -298,9 +298,9 @@ void take_over(AInputEvent* event) {
     printf("[entrada] el jugador toma el mando: autojuego desactivado\n");
 }
 
-// DEPURACIÓN: grabación del mando. Con <datos>/grabar al arrancar, cada cambio (botones y sticks) se apunta con su
+// DEPURACIÓN: grabación del mando. Con <datos>/record al arrancar, cada cambio (botones y sticks) se apunta con su
 // segundo desde el arranque en <datos>/grabacion.txt ("t botones lx ly rx ry"); un hilo lo escribe cada segundo, así
-// ningún evento espera a la SD. Con <datos>/reproducir al arrancar, se vuelve a tocar igual desde el arranque (para
+// ningún evento espera a la SD. Con <datos>/replay al arrancar, se vuelve a tocar igual desde el arranque (para
 // repetir una sesión del jugador en las pruebas). Tocar el mando físico durante la reproducción la para.
 const auto g_boot = std::chrono::steady_clock::now();
 bool g_recording = false, g_replaying = false;
@@ -451,13 +451,13 @@ void* autoplay(void*) {
     return nullptr;
 }
 
-// DEPURACIÓN: mientras exista <datos>/paseo, el personaje camina en zigzag y la cámara gira despacio (para medir el
+// DEPURACIÓN: mientras exista <datos>/walk, el personaje camina en zigzag y la cámara gira despacio (para medir el
 // mundo abierto sin el jugador). Al quitar el fichero se sueltan los sticks; tocar el mando físico lo para del todo.
-// DEPURACIÓN: <datos>/mando con "lx ly rx ry botones" (sticks de -1 a 1, botones en hex con los bits de NpadButton:
+// DEPURACIÓN: <datos>/scripted_pad con "lx ly rx ry botones" (sticks de -1 a 1, botones en hex con los bits de NpadButton:
 // 1 = A, 2 = B, 0x400 = +…): el mando lo pone ese fichero mientras exista (pruebas sin tocar la consola; un evento de
 // entrada de adb cuenta como el jugador y pararía esto).
 bool scripted_pad() {
-    static const std::string file = g_data + "/mando";
+    static const std::string file = g_data + "/scripted_pad";
     static bool active = false;
     FILE* f = fopen(file.c_str(), "r");
     if (!f) {
@@ -486,7 +486,7 @@ bool scripted_pad() {
 }
 
 void* walk(void*) {
-    const std::string file = g_data + "/paseo";
+    const std::string file = g_data + "/walk";
     bool active = false;
     double t = 0;
     for (;;) {
@@ -703,7 +703,7 @@ void on_cmd(android_app* app, int32_t cmd) {
 
 }  // namespace
 
-// ---- los controles táctiles y el menú de controles (android/java: GameActivity, TouchPad, ControlsMenu) ----------
+// ---- los controles táctiles y el menú de controles (android/java: GameActivity, TouchPad, SettingsMenu) ----------
 
 // Lo que tocan los dedos: los botones de la consola (bits de NpadButton), qué sticks lleva un dedo (bit 0 el izquierdo,
 // bit 1 el derecho) y dónde (de -1 a 1, y hacia arriba positivo).
@@ -806,7 +806,7 @@ void* text_asker(void*) {
         g_activity->vm->DetachCurrentThread();
     }
     if (!asked) {
-        printf("[teclado] la actividad no puede abrir el cuadro de texto\n");
+        printf("[keyboard] the activity can't open the text box\n");
         answer_text(serial, -1, nullptr, 0);
     }
     return nullptr;
@@ -861,13 +861,13 @@ void android_main(android_app* app) {
     setenv("NIER_SONDA_MEMORIA", "", 1);  // DEPURACIÓN: "1": mide los límites del driver al arrancar  // DEPURACIÓN: trazas sin volcar render targets ni shaders
     std::string log = g_data + "/log.txt";
     if (freopen(log.c_str(), "w", stdout)) {
-        // Por bloques: línea a línea, cada printf era una escritura en la SD. <datos>/registro o <datos>/log_lineas: línea
+        // Por bloques: línea a línea, cada printf era una escritura en la SD. <datos>/verbose_log o <datos>/log_lines: línea
         // a línea (para leerlo en vivo, y lo último no se pierde si el proceso se cae).
         static char buffer[1 << 16];
-        const bool verbose = access((g_data + "/registro").c_str(), F_OK) == 0 ||
-                             access((g_data + "/log_lineas").c_str(), F_OK) == 0;
+        const bool verbose = access((g_data + "/verbose_log").c_str(), F_OK) == 0 ||
+                             access((g_data + "/log_lines").c_str(), F_OK) == 0;
         setvbuf(stdout, verbose ? nullptr : buffer, verbose ? _IOLBF : _IOFBF, verbose ? 0 : sizeof buffer);
-        const bool direct = access((g_data + "/log_directo").c_str(), F_OK) == 0;
+        const bool direct = access((g_data + "/log_direct").c_str(), F_OK) == 0;
         const bool piped = !direct && start_log_pipe();
         dup2(fileno(stdout), STDERR_FILENO);
         __android_log_print(ANDROID_LOG_INFO, "NieR", "log en %s (%s)", log.c_str(), piped ? "por tubería" : "directo");
@@ -878,8 +878,8 @@ void android_main(android_app* app) {
     g_cfg.exefs = rutas::get().exefs;
     g_cfg.nnsdk = "libnnsdk.so";
     // DEPURACIÓN: el vigilante interrumpe el hilo del juego cada 15 s para volcar su pila (un tirón y más de 100 líneas en
-    // la SD cada vez): solo con <datos>/registro.
-    g_cfg.watchdog_seconds = access((g_data + "/registro").c_str(), F_OK) == 0 ? 15 : 0;
+    // la SD cada vez): solo con <datos>/verbose_log.
+    g_cfg.watchdog_seconds = access((g_data + "/verbose_log").c_str(), F_OK) == 0 ? 15 : 0;
     g_cfg.input = &g_input;
     g_cfg.window_state = &g_window_state;
     g_cfg.text_input = &g_text;
@@ -889,8 +889,8 @@ void android_main(android_app* app) {
         pthread_create(&thread, nullptr, autoplay, nullptr);
         pthread_detach(thread);
     }
-    g_recording = access((g_data + "/grabar").c_str(), F_OK) == 0;
-    g_replaying = access((g_data + "/reproducir").c_str(), F_OK) == 0;
+    g_recording = access((g_data + "/record").c_str(), F_OK) == 0;
+    g_replaying = access((g_data + "/replay").c_str(), F_OK) == 0;
     if (g_recording && !g_replaying) {
         pthread_t thread;
         pthread_create(&thread, nullptr, recorder, nullptr);

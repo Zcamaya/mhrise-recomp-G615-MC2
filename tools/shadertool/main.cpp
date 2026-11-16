@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
     options.bindless_arrays = !getenv("SIN_BINDLESS");
     options.nonuniform_indexing = !getenv("SIN_NONUNIFORM");
     // CON_BARRERA=1: deja las barreras de grupo dentro de ifs y bucles, como program.cpp con las huellas de
-    // kUniformBarrierShaders o de <datos>/con_barrera (para comparar y validar ese SPIR-V).
+    // kUniformBarrierShaders o de <datos>/keep_barrier (para comparar y validar ese SPIR-V).
     options.keep_conditional_barriers = getenv("CON_BARRERA") != nullptr;
     // SIN_COMPARTIDA_PRIVADA=1: la memoria compartida privada de cada invocación se queda en Workgroup (como antes).
     options.shared_to_local = !getenv("SIN_COMPARTIDA_PRIVADA");

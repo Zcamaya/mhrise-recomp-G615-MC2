@@ -251,6 +251,17 @@ bool create(VkContext& c, bool system_driver) {
     }
     NVN_LOG("shaderDrawParameters: %s, draw_indirect_count: %s\n", draw_parameters.shaderDrawParameters ? "sí" : "no",
             draw_indirect_count ? "sí" : "no");
+    // Punteros variables a storage buffers (los bucles CAS de Eden que sí se llaman: un puntero como parámetro). Antes no
+    // se activaban y los shaders que declaran la capacidad no eran válidos; el driver de Qualcomm los rechazaba.
+    VkPhysicalDeviceVariablePointersFeatures variable_pointers{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES};
+    {
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        f2.pNext = &variable_pointers;
+        vkGetPhysicalDeviceFeatures2(c.gpu, &f2);
+        variable_pointers.pNext = const_cast<void*>(dci.pNext);
+        if (variable_pointers.variablePointersStorageBuffer) dci.pNext = &variable_pointers;
+        NVN_LOG("variablePointersStorageBuffer: %s\n", variable_pointers.variablePointersStorageBuffer ? "yes" : "no");
+    }
     // Bindless (arrays de texturas con índice por píxel), bordes exactos y reducción MIN/MAX: solo lo que se usa.
     auto has_ext = [&](const char* name) {
         for (const VkExtensionProperties& e : exts)
@@ -338,7 +349,7 @@ VkContext* vk() {
     std::call_once(once, [] {
         ok = create(context, false);
         if (!ok && driver::custom()) {  // con el driver del usuario no arrancó: el del sistema, en este mismo arranque
-            driver::give_up("no creó la instancia, la GPU o el dispositivo");
+            driver::give_up("could not create the instance, GPU or device");
             if (context.device) vkDestroyDevice(context.device, nullptr);
             if (context.instance) vkDestroyInstance(context.instance, nullptr);
             context = VkContext{};

@@ -127,7 +127,7 @@ bool create_swapchain(nvn::Window& w) {
 }
 
 // --- Detector de destellos (DEPURACIÓN) ---
-// <datos>/captura_destello (en vivo): el fuego del Aknosom salía como un disco amarillo plano que tapaba media pantalla
+// <datos>/capture_flash (en vivo): el fuego del Aknosom salía como un disco amarillo plano que tapaba media pantalla
 // durante ~0,5 s (5-11), demasiado poco para pedir la traza a mano. Cada frame se copian 16x9 texels de la textura de la
 // ventana (dentro de su recorte) a un buffer de la CPU; al volver a ese juego de present (kPresentSlots frames después, con
 // su fence ya esperado) se miran: con un sexto o más de amarillo saturado se pide la traza completa del frame siguiente
@@ -403,10 +403,10 @@ GameClock* game_clock() {
 // pasan del 100 %, como pronto 0,5 s después del cambio anterior y solo si el ejecutor cabe (si el frame lo limita la CPU,
 // bajar la resolución no lo arregla). Sube tras 3 s sin cambios si el peor de esos 90 frames, escalado por los píxeles
 // del paso de arriba, cabe en el 78 % (con 2 s y el 80 % subía y bajaba 7 veces en 10 s al entrar en la misión).
-// <datos>/sin_resolucion_dinamica (en vivo): quieta en la resolución base.
+// <datos>/no_dynamic_resolution (en vivo): quieta en la resolución base.
 // Resolución base (en vivo, el menú de opciones): la escena de portátil es 960x540 dentro de la salida de 1280x720, y la
-// profundidad y el resto de la escena ya son de 1280x720, así que el ratio puede subir hasta llenarla. <datos>/resolucion_576,
-// resolucion_648 o resolucion_720: la escena a 1024x576, 1152x648 o 1280x720 (720p de verdad, sin escalar del juego), y
+// profundidad y el resto de la escena ya son de 1280x720, así que el ratio puede subir hasta llenarla. <datos>/resolution_576,
+// resolution_648 o resolution_720: la escena a 1024x576, 1152x648 o 1280x720 (720p de verdad, sin escalar del juego), y
 // la dinámica baja desde ahí con los mismos pasos. Sin ninguno, 960x540 como el juego.
 constexpr size_t kRendererPointer = 0x12950538;  // via.render.Renderer* (dato de main)
 constexpr size_t kRateField = 0x1a78;
@@ -423,9 +423,9 @@ struct BaseResolution {
     int lines;
 };
 BaseResolution base_resolution() {
-    if (NVN_FLAG("resolucion_720")) return {1.33334f, 720};
-    if (NVN_FLAG("resolucion_648")) return {1.20001f, 648};
-    if (NVN_FLAG("resolucion_576")) return {1.06668f, 576};
+    if (NVN_FLAG("resolution_720")) return {1.33334f, 720};
+    if (NVN_FLAG("resolution_648")) return {1.20001f, 648};
+    if (NVN_FLAG("resolution_576")) return {1.06668f, 576};
     return {1.0f, 540};
 }
 
@@ -473,10 +473,10 @@ void dynamic_resolution(int64_t period_ns) {
     static int base_logged = 0;
     if (base.lines != base_logged) {
         NVN_LOG("resolución base: %dp (escena %dx%d)%s\n", base.lines, static_cast<int>(960 * base.rate),
-                static_cast<int>(540 * base.rate), NVN_FLAG("sin_resolucion_dinamica") ? ", fija" : ", la dinámica baja desde ahí");
+                static_cast<int>(540 * base.rate), NVN_FLAG("no_dynamic_resolution") ? ", fija" : ", la dinámica baja desde ahí");
         base_logged = base.lines;
     }
-    if (NVN_FLAG("sin_resolucion_dinamica")) {
+    if (NVN_FLAG("no_dynamic_resolution")) {
         d.level = 0;
         if (now != base.rate) *rate = base.rate;
         d.written = base.rate != 1.0f;
@@ -522,7 +522,7 @@ void dynamic_resolution(int64_t period_ns) {
     }
 }
 
-// Registro de ritmo (siempre, sin <datos>/registro): cada 10 s, si hubo algún frame de más de 40 ms (por debajo de 30 fps,
+// Registro de ritmo (siempre, sin <datos>/verbose_log): cada 10 s, si hubo algún frame de más de 40 ms (por debajo de 30 fps,
 // con el intervalo 2 del juego), una línea con por qué pudo ser: la GPU del frame del juego (media y peor), el ejecutor
 // por frame (y lo que esperó a la GPU), las pipelines que se crearon en NvnSubmit con el frame parado, las que fueron al
 // hilo de segundo plano (y los draws que no se dibujaron esperándolas) y las traducciones en NvnSubmit y en la precarga.
@@ -744,7 +744,7 @@ void nvn::present(Window& w, int index) {
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdClearColorImage(slot.cmd, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
     }
-    if (t && NVN_FLAG("captura_destello")) record_probe(probe, slot.cmd, *t, w.crop);
+    if (t && NVN_FLAG("capture_flash")) record_probe(probe, slot.cmd, *t, w.crop);
     hud::record(slot.cmd, w.images[image], w.extent, w.format);  // FPS y gráfica, encima del frame
     barrier(slot.cmd, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     vkEndCommandBuffer(slot.cmd);
@@ -802,7 +802,7 @@ void nvn::present(Window& w, int index) {
     auto now = std::chrono::steady_clock::now();
     double secs = std::chrono::duration<double>(now - window_start).count();
     if (secs >= 5.0) {
-        if (NVN_FLAG("registro")) {
+        if (NVN_FLAG("verbose_log")) {
             NVN_LOG("%.1f fps (frame %llu)\n", window_frames / secs, static_cast<unsigned long long>(w.presented));
             // El reloj del juego: su MaxFps, lo que midió de la última vuelta y el paso que dio (a 60 fps, ~16,7 ms y 1).
             if (const GameClock* c = game_clock())

@@ -68,7 +68,7 @@ void dump_rejected_spirv(const std::string& name, const std::vector<uint32_t>& s
     if (FILE* f = fopen((dir + "/" + name + ".spv").c_str(), "wb")) {
         fwrite(spirv.data(), sizeof(uint32_t), spirv.size(), f);
         fclose(f);
-        if (done.size() == 1) NVN_LOG("SPIR-V de las pipelines rechazadas: en %s\n", dir.c_str());
+        if (done.size() == 1) NVN_LOG("SPIR-V of rejected pipelines: in %s\n", dir.c_str());
     }
 }
 
@@ -89,11 +89,11 @@ constexpr uint32_t kComputeDriverSize = 0x400;
 // uniform buffers 0..4). Los uniform buffers 5..13 ("UBE") los lee el shader como memoria global con la dirección y
 // el tamaño que NVN deja en c0[0x260 + 16·j] (j = buffer − 5; como el ComputeClass de Ryujinx): Eden los ve como
 // storage buffers de solo lectura. Antes salían 256 bytes a cero (tk1: "F compute SSBO leído 0+256" ×4 en la
-// iluminación de efectos 314939, cuyo buffer de 2,5 MB leen los vertex shaders de los efectos). <datos>/sin_ube: como antes.
+// iluminación de efectos 314939, cuyo buffer de 2,5 MB leen los vertex shaders de los efectos). <datos>/no_ube: como antes.
 constexpr uint32_t kComputeUbeBase = 0x260, kComputeUbeCount = 9, kComputeUbeFirst = 5;
 // Compute: c2 es un banco de handles como el de gráficos (texturas en 0x168 + 8·i, imágenes en 0x120 + 8·i); los TEX.B
 // de MH Rise cargan de ahí (17 texturas y 27 imágenes en los 139 compute volcados). Se enlaza el mismo c0 sintético.
-// <datos>/sin_c2_compute: como antes.
+// <datos>/no_c2_compute: como antes.
 constexpr uint32_t kComputeImageHandleBase = 0x120;
 constexpr uint32_t kLowTextureHandleBase = 0x20;  // la tabla baja de c2 de algunos shaders de la interfaz (resolve_texture)
 // Gráficos: un c0 común con una tabla de storage buffers por etapa en 0x110 + 0x100·etapa (orden de
@@ -108,14 +108,14 @@ constexpr int kMaxUniforms = 18, kMaxTextures = 32, kMaxStorage = 16, kMaxVertex
 constexpr uint32_t kImageHandleBase = 0x128;
 constexpr VkDeviceSize kStagingChunk = 16 << 20;  // también lo más grande que cabe en una reserva
 constexpr VkDeviceSize kFreeStagingBytes = 128 << 20;  // trozos de staging sueltos que se guardan para reutilizar
-// Un teléfono con poca RAM (menos de 5 GB en total, o <datos>/memoria_baja): lo que se guarda por si acaso (los trozos de
+// Un teléfono con poca RAM (menos de 5 GB en total, o <datos>/low_memory): lo que se guarda por si acaso (los trozos de
 // staging sueltos y los espejos de buffers), a la mitad. Lo que hace falta en cada frame (las arenas) no cambia: con
 // menos, la fábrica bajaba a 1 fps.
 bool low_memory() {
     static const bool low = [] {
         struct sysinfo si {};
         const uint64_t total = sysinfo(&si) == 0 ? uint64_t{si.totalram} * si.mem_unit : 0;
-        const bool on = (total && total < (5ull << 30)) || NVN_FLAG("memoria_baja");
+        const bool on = (total && total < (5ull << 30)) || NVN_FLAG("low_memory");
         if (on) NVN_LOG("poca memoria (%llu MB): reservas de staging y espejos a la mitad\n", (unsigned long long)(total >> 20));
         return on;
     }();
@@ -220,7 +220,7 @@ bool targets_fit(const cmd::SetRenderTargets& a, const cmd::SetRenderTargets& b)
     return true;
 }
 
-// ¿Están todos los adjuntos de a en b, en el mismo sitio y con la misma vista, con la misma profundidad? (pases_unidos:
+// ¿Están todos los adjuntos de a en b, en el mismo sitio y con la misma vista, con la misma profundidad? (merged_passes:
 // unos targets que caben en el pase abierto sin cambiarlo.) a sin ningún adjunto, no.
 bool targets_within(const cmd::SetRenderTargets& a, const cmd::SetRenderTargets& b) {
     if (a.depth != b.depth) return false;
@@ -282,7 +282,7 @@ uint32_t find_memory(uint32_t bits, VkMemoryPropertyFlags props) {
 // Huellas muestreadas (content_hash, range_hash de más de 16 KB): cuánto antes se piden las muestras que vienen. 64 KB son
 // 16 páginas de una textura o 32 muestras de un buffer: unos 16 fallos en vuelo (el A77 admite unos 20 en L1).
 constexpr size_t kPrefetchAhead = 64 << 10;
-bool prefetch_hashes() { return !NVN_FLAG("sin_prefetch_huellas"); }
+bool prefetch_hashes() { return !NVN_FLAG("no_print_prefetch"); }
 
 // Huella de la memoria de una textura: entera si es pequeña; si no, 64 bytes de cada página de 4 KB
 // (los frames de vídeo cambian enteros; las texturas estáticas no cambian).
@@ -315,7 +315,7 @@ uint64_t content_hash(const Texture& t) {
     } else {
         // Cada muestra es otra página: un fallo de TLB y otro de caché, que la CPU apenas solapa (cada vuelta espera a la
         // cadena de la huella). Pedida kPrefetchAhead antes (PRFM no falla aunque la dirección no valga), la espera se
-        // solapa con las siguientes. Mismos bytes y misma huella. <datos>/sin_prefetch_huellas: como antes.
+        // solapa con las siguientes. Mismos bytes y misma huella. <datos>/no_print_prefetch: como antes.
         const bool prefetch = prefetch_hashes();
         if (prefetch)
             for (size_t off = 0; off < kPrefetchAhead && off + 64 <= size; off += 4096) __builtin_prefetch(p + off);
@@ -383,11 +383,11 @@ struct LayoutKeyData {
 // costó 627 ms en una partida y 1833 ms en otra (4-11: los mismos 47 MB de texturas, 108 MB de espejos nuevos, 21700
 // mprotect y ~17000 draws): lo que varía es cuánto núcleo le toca. Con nice -10 el planificador le da ~9 veces el tiempo
 // de un hilo de nice 0 en el mismo núcleo; dormido (esperando trabajo) no quita nada. El init.rc de AOSP pone RLIMIT_NICE
-// 40 (hasta -20 sin permisos); si aquí no deja, sale en el log. <datos>/sin_prioridad_envio: nice 0 como antes; se mira
+// 40 (hasta -20 sin permisos); si aquí no deja, sale en el log. <datos>/no_submit_priority: nice 0 como antes; se mira
 // antes de cada envío (en vivo). Los hilos del deswizzle en paralelo van con la misma (son parte del envío; esos la toman
 // al arrancar).
 constexpr int kSubmitNice = -10;
-int submit_nice() { return NVN_FLAG("sin_prioridad_envio") ? 0 : kSubmitNice; }
+int submit_nice() { return NVN_FLAG("no_submit_priority") ? 0 : kSubmitNice; }
 void set_thread_nice(int nice, const char* who) {
     if (setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), nice) == 0) {
         NVN_LOG("prioridad de %s: nice %d\n", who, nice);
@@ -402,7 +402,7 @@ void set_thread_nice(int nice, const char* who) {
 // NvnSubmit), que también coge trozos: si un hilo cae en un núcleo pequeño, solo se espera su último trozo. Al cargar se
 // suben decenas de MB en un envío (47 MB al entrar en el selector de personaje, ~175 MB hasta la aldea) con el juego
 // esperando a su sync. Vuelve con todo copiado (el recuento de bloques a cero decide el primer nivel muestreado de la
-// textura antes de crear sus vistas). <datos>/subida_un_hilo: todo en el hilo del envío, como antes.
+// textura antes de crear sus vistas). <datos>/single_thread_upload: todo en el hilo del envío, como antes.
 constexpr VkDeviceSize kParallelDeswizzleMin = 256 << 10;
 class RowPool {
 public:
@@ -634,7 +634,7 @@ public:
 // vuelve al camino de siempre (staging por draw). Las entradas no se reescriben: un cambio ocupa sitio
 // nuevo, así un draw anterior del mismo envío sigue leyendo lo suyo. Si el arena se llena, se empieza
 // otra generación (otro arena) y lo de la vieja se vuelve a copiar al usarse; la vieja se recicla cuando
-// la GPU acaba su último envío. Con <datos>/sin_generaciones, como antes: se vacía al terminar un envío,
+// la GPU acaba su último envío. Con <datos>/no_generations, como antes: se vacía al terminar un envío,
 // con la GPU parada.
 
 // Cuatro cadenas independientes (como xxh64): la CPU las solapa en vez de esperar cada multiplicación. Mira los
@@ -730,13 +730,13 @@ public:
         uint64_t hash = 0, checked = 0;
         uint32_t changes = 0, min_index = 0, max_index = 0;  // índices: el menor y el mayor (sin el de reinicio)
         bool dynamic = false;
-        // <datos>/vigilar_vertices: revisiones seguidas sin cambios; pasadas kWatchAfter (y de más de kWatchMin), sus
+        // <datos>/watch_vertices: revisiones seguidas sin cambios; pasadas kWatchAfter (y de más de kWatchMin), sus
         // páginas se vigilan (nnsdk/watch.h) y la revisión de cada envío es mirar si alguna se escribió, sin huella.
         uint8_t stable = 0;
         bool watched = false;
         std::vector<uint64_t> watch_keys;
     };
-    // Vigilancia (en vivo, con vigilar_vertices; apagada por defecto): las mallas estáticas se revisaban con su huella en
+    // Vigilancia (en vivo, con watch_vertices; apagada por defecto): las mallas estáticas se revisaban con su huella en
     // cada frame (los streams enteros de los multi-draw: ~750 rangos y 4 MB muestreados por frame en Kamura); vigiladas,
     // la revisión es recorrer sus claves de página. Solo lo grande (lo pequeño se mira entero y barato) y lo que ya se vio
     // igual dos veces (lo dinámico nunca llega: cada escritura de la CPU sería un SIGSEGV y un mprotect).
@@ -910,7 +910,7 @@ private:
     // un multi-draw se busca varias veces por frame (sombras, pre-pase, color), y cada búsqueda en el unordered_map era una
     // división por el número de cubetas y dos o tres fallos de caché (cubeta, nodo anterior, nodo). Las entradas de
     // entries_ no se mueven mientras no se borren (solo clear(), que cambia front_epoch_). front = false
-    // (<datos>/sin_frente_vertices, en vivo): siempre por el mapa, como antes.
+    // (<datos>/no_vertex_front, en vivo): siempre por el mapa, como antes.
     struct Front {
         uint64_t address = 0, key = 0, epoch = 0;
         Entry* entry = nullptr;
@@ -1071,7 +1071,7 @@ struct Layout {
     uint64_t memo_epoch = 0;
     VkDescriptorSet memo_set = VK_NULL_HANDLE;
     std::vector<uint64_t> memo_key;
-    // <datos>/plantillas: los descriptores del set 0 de los draws con vkUpdateDescriptorSetWithTemplate, en el orden en que
+    // <datos>/templates: los descriptores del set 0 de los draws con vkUpdateDescriptorSetWithTemplate, en el orden en que
     // los escribe draw(); con la firma (binding y tipo de cada uno) que se comprueba en cada uso. Solo el hilo del ejecutor.
     VkDescriptorUpdateTemplate update_template = VK_NULL_HANDLE;
     std::vector<uint32_t> template_signature;
@@ -1164,7 +1164,7 @@ private:
     static constexpr VkDeviceSize kStagingSoftCap = 128ull << 20;
     // Varios envíos por frame: tras tantos draws, el siguiente límite de render pass manda lo grabado a la GPU, que
     // empieza a trabajar mientras se reproduce el resto (con un envío al final, la GPU esperaba a toda la
-    // reproducción). Con <datos>/un_envio, uno por envío del juego, como antes.
+    // reproducción). Con <datos>/single_submit, uno por envío del juego, como antes.
     static constexpr uint64_t kSplitDraws = 300;
     uint64_t submit_draws_ = 0;  // draws_ al empezar el envío de Vulkan en curso
     bool split_ = true, generations_ = true;  // interruptores, leídos una vez por envío del juego
@@ -1194,8 +1194,8 @@ private:
     // Vigilada: las páginas escritas desde la última vez marcan sus capas x niveles en level_forced si su huella entera
     // cambió. true si alguna cambió de verdad.
     bool collect_texture_writes(Texture& t);
-    bool watch_textures_ = true;  // interruptor sin_vigilar_texturas (read_flags): las de antes, por la huella muestreada
-    bool force_levels_ = true;    // interruptor sin_forzar_niveles (read_flags): WriteTexels vuelve a pasar por la huella
+    bool watch_textures_ = true;  // interruptor no_texture_watch (read_flags): las de antes, por la huella muestreada
+    bool force_levels_ = true;    // interruptor no_force_levels (read_flags): WriteTexels vuelve a pasar por la huella
     uint64_t prof_forced_levels_ = 0, prof_forced_unseen_ = 0, prof_watched_textures_ = 0;  // perfil (ver upload)
     uint64_t prof_full_hash_bytes_ = 0;  // perfil: bytes por los que pasó full_hash (~0,2 ms por MB en la Flip)
     // storage: para enlazarla como storage image (un nivel, sin swizzle, formato con STORAGE_IMAGE).
@@ -1206,19 +1206,19 @@ private:
     Layout& layout(const ProgramStage* const* stages);
     // El último layout devuelto y las identidades con las que se pidió: los draws seguidos con los mismos programas no pasan
     // por layout_for (mutex, clave y búsqueda). Mismas identidades, mismo layout: layouts_ nunca borra.
-    // <datos>/sin_memo_layout (en vivo): siempre por layout_for, como antes.
+    // <datos>/no_layout_memo (en vivo): siempre por layout_for, como antes.
     Layout* last_layout_ = nullptr;
     uint64_t last_layout_ids_[kStages] = {};
-    bool memo_layout_ = true;      // interruptor sin_memo_layout (read_flags)
+    bool memo_layout_ = true;      // interruptor no_layout_memo (read_flags)
     // La última pipeline encontrada en pipelines_ y su clave entera: un draw con la misma clave (los seguidos con el mismo
-    // estado) se salta el hash de sus ~440 bytes y la búsqueda. <datos>/sin_memo_pipeline (en vivo): como antes.
+    // estado) se salta el hash de sus ~440 bytes y la búsqueda. <datos>/no_pipeline_memo (en vivo): como antes.
     VkPipeline last_pipeline_ = VK_NULL_HANDLE;
     uint64_t last_pipeline_hash_ = 0;
     PipelineKey last_pipeline_key_{};
-    bool memo_pipeline_ = true;    // interruptor sin_memo_pipeline (read_flags)
+    bool memo_pipeline_ = true;    // interruptor no_pipeline_memo (read_flags)
     // El set 1 de un draw con el layout de bindless del layout del draw (Layout::bindless, hecho con los mismos shaders) en vez
-    // de volver a sacar su firma en cada uno (un vector nuevo y una búsqueda en bindless_layouts_). <datos>/sin_bindless_rapido.
-    bool fast_bindless_ = true;    // interruptor sin_bindless_rapido (read_flags)
+    // de volver a sacar su firma en cada uno (un vector nuevo y una búsqueda en bindless_layouts_). <datos>/no_fast_bindless.
+    bool fast_bindless_ = true;    // interruptor no_fast_bindless (read_flags)
     // El de layout() a partir de lo traducido de cada etapa y su identidad (el precalentado no tiene ProgramStage).
     Layout& layout_for(const nvnshader::Translated* const* shaders, const uint64_t* ids);
     VkPipeline pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, uint32_t color_count, VkSampleCountFlagBits samples);
@@ -1273,14 +1273,14 @@ private:
     std::vector<TracedGpuDraw> traced_gpu_draws_;
     // DEPURACIÓN: con <datos>/profundidad_lequal, los draws con depth EQUAL usan LEQUAL (prueba en caliente).
     bool depth_lequal_ = false;
-    // DEPURACIÓN: con <datos>/profundidad_gequal, EQUAL pasa a GEQUAL. MH Rise usa Z invertida (el pre-pase escribe con
+    // DEPURACIÓN: con <datos>/depth_gequal, EQUAL pasa a GEQUAL. MH Rise usa Z invertida (el pre-pase escribe con
     // GEQUAL, f7, y el pase de color dibuja con EQUAL, f3, sin escribir): LEQUAL dejaría pasar lo de detrás. Si una
     // malla sale con el pase de color pero sin ella no (la cara del cazador: el agujero se ve del color de fondo), el
     // vertex shader del pre-pase y el del color no dan la misma profundidad.
     bool depth_gequal_ = false;
     static constexpr uint32_t kDepthEqual = 3, kDepthLequal = 4, kDepthGequal = 7;  // NVNdepthFunc  // DEPURACIÓN: al acabar el frame trazado, quién lee el primer contador condicional
     std::vector<std::pair<Texture*, uint32_t>> tex_dumps_;  // DEPURACIÓN: texturas por volcar (NIER_VOLCAR_TEX)
-    // DEPURACIÓN (<datos>/registro): estado pequeño (≤ 64 bytes) que escriben los compute (la exposición automática de MH
+    // DEPURACIÓN (<datos>/verbose_log): estado pequeño (≤ 64 bytes) que escriben los compute (la exposición automática de MH
     // Rise y su historial): cada 30 frames su valor en la GPU y en la memoria del juego, y tras cada compactación, para
     // ver cada cuánto se mide, si converge y si se pierde.
     struct SmallState {
@@ -1290,7 +1290,7 @@ private:
     std::unordered_map<const void*, uint64_t> state_ubo_logged_;  // compute -> frame en que se registraron sus ubo
     bool log_state_ = false;  // registro, una vez por envío del juego
     void log_small_state(const char* why);
-    // DEPURACIÓN (<datos>/vigilar_nan, en vivo): de dónde sale lo que tiene cada overlay y qué lee cada shader. La cara del
+    // DEPURACIÓN (<datos>/watch_nan, en vivo): de dónde sale lo que tiene cada overlay y qué lee cada shader. La cara del
     // cazador (traza en 'Elegir personaje') lee sus vértices de un overlay con posiciones NaN y normales 0x00800000 /
     // 0x7f7fffff, que nadie escribe en el frame trazado: se calculan al cargar el personaje. Con el interruptor, sin traza:
     // - cada overlay nuevo: quién lo crea (compute con sus uniform buffers y storage buffers, draw o copia) y lo que tenía
@@ -1314,7 +1314,7 @@ private:
     std::unordered_set<uint64_t> dumped_writers_;           // huellas de compute ya volcadas
     std::unordered_set<uint64_t> partial_logged_;           // rangos ya avisados por leerse sin lo de la GPU
     void note_partial_read(const char* who, uint64_t address, uint64_t size);
-    // DEPURACIÓN (<datos>/trazar_huella: una huella hexadecimal por línea, y "completa" para volcar también los render
+    // DEPURACIÓN (<datos>/trace_print: una huella hexadecimal por línea, y "completa" para volcar también los render
     // targets): la primera vez que se ejecuta un compute de la lista se traza lo que queda de ese frame, desde él (como
     // <datos>/trazar, pero sin esperar al frame siguiente). Para el trabajo que solo se hace al cargar, que ninguna traza
     // de un frame cualquiera ve: la cara del cazador se calcula al cargar el personaje (793657b4f1e65631 y
@@ -1325,7 +1325,7 @@ private:
     std::vector<uint64_t> trace_prints_;
     bool trace_on_print(uint64_t print);
     void check_overlay_vertices(uint64_t address, uint64_t size, uint32_t stride, uint32_t format, uint32_t stream);
-    // DEPURACIÓN (<datos>/leer_tras_dispatch: un tamaño en bytes por línea; 54600 es la cara del cazador): tras cada
+    // DEPURACIÓN (<datos>/read_after_dispatch: un tamaño en bytes por línea; 54600 es la cara del cazador): tras cada
     // compute que escribe un overlay de ese tamaño se cierra el envío, se espera a la GPU y se registra lo que quedó de
     // verdad en él (palabras NaN/Inf y a cero, la primera NaN, las primeras palabras), con lo que recibió el compute: cada
     // uniform buffer y SSBO, de dónde salió (overlay, espejo, copia del envío o staging) y sus primeras palabras tal como
@@ -1397,14 +1397,14 @@ private:
     int fsr_guard_frames_ = 0;
     uint64_t prof_fsr_guard_frames_ = 0;  // perfil: frames presentados con el blit por la guarda
     bool gpu_stamps_ = true;     // interruptor ts_cpu: los de antes (reloj de la CPU al reproducir)
-    bool skip_compaction_gs_ = true;  // interruptor sin_salto_gs
+    bool skip_compaction_gs_ = true;  // interruptor no_gs_skip
     int64_t stamp_extra_ = 0;    // lo que se suma al final del frame en este envío del juego
     int run_stamps_ = 0;         // informes TIMESTAMP vistos en este envío del juego
     uint64_t last_stamp_addr_ = 0;  // el del comienzo: el del final va 16 bytes detrás (main+0x9bbb08 lee +0x8 y +0x18)
     int scene_vp_w_ = 0, scene_vp_h_ = 0;  // perfil: el viewport de la escena más grande desde el último
     int scene_vp_min_w_ = 1 << 30;         // ...y el ancho más pequeño
     void write_stamps(InFlight& f);
-    // DEPURACIÓN: perfil de GPU por pase (<datos>/perfil_gpu, se borra solo): un timestamp antes de cada render pass y
+    // DEPURACIÓN: perfil de GPU por pase (<datos>/profile_gpu, se borra solo): un timestamp antes de cada render pass y
     // de cada dispatch de un frame, y el log con lo que tardó cada grupo de pases.
     static constexpr uint32_t kProfMarks = 1024;
     struct ProfMark {
@@ -1417,7 +1417,7 @@ private:
     bool prof_closed_ = false;
     void prof_gpu_mark(const char* kind, const char* custom = nullptr);
     void prof_gpu_report();
-    // DEPURACIÓN (<datos>/migas al arrancar): migas de pan para un cuelgue de la GPU. Antes y después de cada render
+    // DEPURACIÓN (<datos>/breadcrumbs al arrancar): migas de pan para un cuelgue de la GPU. Antes y después de cada render
     // pass y de cada dispatch la GPU escribe su número en memoria de la CPU (con barreras: todo va en serie); cuando
     // la GPU se pierde, el log dice qué empezó y no acabó, con las huellas de sus shaders, y vuelca su código.
     struct Crumb {
@@ -1439,13 +1439,13 @@ private:
     };
     static constexpr uint32_t kCrumbs = 1 << 14;
     bool crumbs_on_ = false, crumbs_reported_ = false;
-    bool crumbs_passes_ = true;  // <datos>/migas_compute: solo los dispatch (ya llevan barreras: casi no cambia el ritmo)
-    bool crumbs_barriers_ = true;  // <datos>/migas_ligeras: solo los dispatch y sin barreras propias (las del dispatch)
+    bool crumbs_passes_ = true;  // <datos>/breadcrumbs_compute: solo los dispatch (ya llevan barreras: casi no cambia el ritmo)
+    bool crumbs_barriers_ = true;  // <datos>/breadcrumbs_light: solo los dispatch y sin barreras propias (las del dispatch)
     // Adreno: una escritura de transferencia (vkCmdFillBuffer de 4 bytes) antes y después de cada dispatch. Sin ella la
     // GPU se colgaba al cargar el título de MH Rise (DEVICE_LOST en 6 de 7 arranques; ninguno en 5 con ella, ni con
     // las migas, que hacen lo mismo). Son las escrituras, no la reserva del buffer (con solo la reserva se cuelga). Las
     // barreras completas que ya rodean el dispatch no bastan, conservar las barreras condicionales de Eden tampoco, y
-    // los espejos (sin SSBO recortados) tampoco; la causa exacta no se ha encontrado. <datos>/sin_relleno_compute.
+    // los espejos (sin SSBO recortados) tampoco; la causa exacta no se ha encontrado. <datos>/no_compute_fill.
     bool fill_quirk_ = false;
     uint32_t fill_count_ = 0;
     VkBuffer crumb_buffer_ = VK_NULL_HANDLE;
@@ -1454,7 +1454,7 @@ private:
     std::vector<Crumb> crumbs_;
     uint32_t crumb_id_ = 0;
     void crumb_init(bool crumbs);
-    // DEPURACIÓN (<datos>/medir_cambios): cuántas páginas de 64 KB de un buffer grande cambian entre una copia y la
+    // DEPURACIÓN (<datos>/measure_changes): cuántas páginas de 64 KB de un buffer grande cambian entre una copia y la
     // siguiente (para decidir cómo dejarlo en la GPU).
     struct ChangeStats {
         std::vector<uint64_t> pages;
@@ -1570,7 +1570,7 @@ private:
     // --- Optimizaciones del tiler (Adreno) ---
     // Cada una con su interruptor en vivo (flags.h): por defecto activas, <datos>/sin_<nombre> la apaga. Se leen
     // una vez por envío (read_flags, al empezar run()); todas pueden cambiar entre envíos: nada de su estado pasa
-    // de un envío al siguiente, salvo sin_ubwc, que solo cuenta para las imágenes que se creen después.
+    // de un envío al siguiente, salvo no_ubwc, que solo cuenta para las imágenes que se creen después.
     struct TilerOptions {
         bool clear_diferido = true;    // borrado completo -> loadOp CLEAR del siguiente pase con ese target
         bool rt_igual = true;          // volver a enlazar los mismos targets no corta el pase
@@ -1615,7 +1615,7 @@ private:
     // work_after_pass_: se grabó algo desde el final del último pase (o la última barrera). Su dependencia externa (todos
     // los gráficos del pase -> todos los comandos, escrituras -> lecturas y escrituras) encadena con la del principio (todos
     // los comandos de antes -> el pase): ordena lo grabado antes del final del pase con todo lo que venga, como una barrera
-    // completa. <datos>/barreras_justas (en vivo): se salta la que no ordena nada; <datos>/barreras_justas_pase: también
+    // completa. <datos>/tight_barriers (en vivo): se salta la que no ordena nada; <datos>/tight_barriers_pass: también
     // la que solo tiene detrás el final de un pase (cortes por barreras de NVN, dispatch tras un pase). Apagadas por
     // defecto; el perfil cuenta las que se saltarían aunque lo estén.
     bool gpu_work_ = true, work_after_pass_ = true;
@@ -1657,8 +1657,8 @@ private:
     struct PassScan {
         uint64_t run = 0;  // run_serial_ del envío (0: ninguna)
         cmd::SetRenderTargets rt{};
-        cmd::SetRenderTargets pass{};  // los adjuntos del pase (con pases_unidos, más que rt; si no, los mismos)
-        size_t start_list = 0, start_cmd = 0;  // desde dónde se miró (mirada_por_pase)
+        cmd::SetRenderTargets pass{};  // los adjuntos del pase (con merged_passes, más que rt; si no, los mismos)
+        size_t start_list = 0, start_cmd = 0;  // desde dónde se miró (inspect_per_pass)
         size_t end_list = 0, end_cmd = 0;
         uint32_t colors_written = 0;  // bit por render target
         bool depth_written = false, cleared = false, drawn = false;
@@ -1666,15 +1666,15 @@ private:
     };
     PassScan scan_;
     const PassScan& scan_pass(const cmd::SetRenderTargets& pass);
-    // Pases unidos (<datos>/pases_unidos, en vivo; apagado por defecto). MH Rise cambia en mitad de la escena entre unos
+    // Pases unidos (<datos>/merged_passes, en vivo; apagado por defecto). MH Rise cambia en mitad de la escena entre unos
     // targets y un subconjunto suyo (color + velocidad + profundidad y solo color + profundidad, las mismas texturas y
     // vistas): cada cambio cerraba el pase (guardar y volver a cargar ~4 MB a 960x540) y abría otro. Con esto el pase se
     // empieza con los adjuntos de todos los targets que vienen y caben juntos (merge_targets: hasta unos que no caben, un
     // dispatch o una copia de texturas), y los draws de un subconjunto van en él con la máscara de color de los que no son
     // suyos a cero (rp_keep_masks_). Lo que el pase no tenía antes se añade solo si ya es de la GPU (gpu_written, con
     // imagen), del mismo tamaño y muestras. Muestrear o escribir como imagen un adjunto del pase lo corta como siempre.
-    bool merge_passes_ = false;      // interruptor pases_unidos (read_flags)
-    // <datos>/mirada_por_pase (en vivo; apagado por defecto): cada pase mira desde su primer comando, no reutiliza la mirada
+    bool merge_passes_ = false;      // interruptor merged_passes (read_flags)
+    // <datos>/inspect_per_pass (en vivo; apagado por defecto): cada pase mira desde su primer comando, no reutiliza la mirada
     // del primero de sus targets. Tras un corte (barrera, subida, espejo…) lo que queda puede no escribir la profundidad o
     // un color (STORE_OP_NONE en vez de guardarlo) y tocar menos pantalla (área recortada: menos bins que cargar y guardar).
     // Cuesta un recorrido de lo que queda de esos targets por cada corte.
@@ -1697,10 +1697,10 @@ private:
     // del juego en curso (kCommandNames). Al empezar el siguiente (ensure_render_pass): si vuelve a abrir el mismo
     // framebuffer es un corte de verdad (el tiler guarda los adjuntos y los vuelve a cargar); si sus targets caben con los
     // del anterior en un pase (mismas texturas y vistas donde coinciden, la misma profundidad, el mismo tamaño) es un
-    // cambio a un subconjunto o superconjunto, lo que junta pases_unidos.
+    // cambio a un subconjunto o superconjunto, lo que junta merged_passes.
     const char* split_why_ = nullptr;
     const char* last_end_why_ = nullptr;
-    const char* prof_pass_suffix_ = nullptr;  // perfil_gpu: lo de antes del pase, en su etiqueta
+    const char* prof_pass_suffix_ = nullptr;  // profile_gpu: lo de antes del pase, en su etiqueta
     VkFramebuffer cur_fb_ = VK_NULL_HANDLE, last_end_fb_ = VK_NULL_HANDLE;
     cmd::SetRenderTargets cur_pass_rt_{}, last_end_rt_{};  // los adjuntos del pase abierto y los del último cerrado
     VkExtent2D last_end_extent_{};
@@ -1744,10 +1744,10 @@ private:
     std::map<VkDescriptorSetLayout, std::pair<uint64_t, VkDescriptorSet>> bindless_last_;
     std::vector<uint64_t> bindless_key_;  // la clave del draw en curso (sin reservas por draw)
     std::map<std::vector<uint64_t>, VkDescriptorSetLayout> bindless_layouts_;  // (binding, count, etapa) de cada array
-    bool bindless_ = true;        // <datos>/sin_bindless: los handles de los uniform buffers con la de reserva, como antes
-    bool fixed_samplers_ = true;  // <datos>/sin_sampler_fijo: el sampler de la ranura aunque el shader ORee uno fijo
-    bool typed_dummies_ = true;   // <datos>/sin_reserva_tipada: la de reserva 2D para todo, como antes
-    bool image_base_120_ = true;  // <datos>/base_imagen_128: las imágenes de gráficos desde c2[0x128], como antes
+    bool bindless_ = true;        // <datos>/no_bindless: los handles de los uniform buffers con la de reserva, como antes
+    bool fixed_samplers_ = true;  // <datos>/no_fixed_sampler: el sampler de la ranura aunque el shader ORee uno fijo
+    bool typed_dummies_ = true;   // <datos>/no_typed_reserve: la de reserva 2D para todo, como antes
+    bool image_base_120_ = true;  // <datos>/image_base_128: las imágenes de gráficos desde c2[0x128], como antes
     VkSampler default_sampler_ = VK_NULL_HANDLE;
     uint32_t allocations_ = 0;
     BufferCache buffer_cache_;
@@ -1820,7 +1820,7 @@ private:
     // el set aunque no sea el del draw anterior con ese layout: cascadas de sombras, el pre-pase y el pase de color con el
     // mismo material… (en la traza de Kamura, 173 de los 729 draws que escribían un set nuevo). Tabla plana que se vacía
     // cambiando de época (descriptor_epoch_: la de los pools, que begin() vacía); las claves van seguidas en keys_. Llena, no
-    // se apunta más. <datos>/sin_cache_sets (en vivo): solo el del draw anterior, como antes.
+    // se apunta más. <datos>/no_set_cache (en vivo): solo el del draw anterior, como antes.
     class SetTable {
     public:
         VkDescriptorSet find(uint64_t epoch, VkDescriptorSetLayout layout, const std::vector<uint64_t>& key, uint64_t h) const {
@@ -1860,9 +1860,9 @@ private:
         uint64_t keys_epoch_ = 0;
     };
     SetTable sets_cache_;
-    bool cache_sets_ = true;   // interruptor sin_cache_sets (read_flags)
+    bool cache_sets_ = true;   // interruptor no_set_cache (read_flags)
     bool templates_ = false;   // interruptor plantillas (read_flags; apagado por defecto)
-    bool skip_set1_ = true;    // interruptor sin_saltar_set1 (read_flags)
+    bool skip_set1_ = true;    // interruptor no_skip_set1 (read_flags)
     // Escribe el set con la plantilla del layout (la crea con la primera escritura): false si no se puede (sin la función,
     // sin plantilla o con otra firma), y entonces escribe quien llama con vkUpdateDescriptorSets.
     bool update_with_template(Layout& l, VkDescriptorSet set, const std::vector<VkWriteDescriptorSet>& writes);
@@ -1907,30 +1907,30 @@ private:
         VkDeviceSize slot_offset = 0, slot_size = 0;
         uint8_t* slot_data = nullptr;
         bool merged = false;  // hecho por merge_overlays (une rangos: que la CPU lo tire es lo que la unión puede empeorar)
-        // <datos>/vigilar_overlays: sus páginas vigiladas (nnsdk/watch.h); overlay_unchanged mira si alguna se escribió
+        // <datos>/watch_overlays: sus páginas vigiladas (nnsdk/watch.h); overlay_unchanged mira si alguna se escribió
         // antes de pasar a la huella.
         bool watched = false;
         std::vector<uint64_t> watch_keys;
     };
-    // Vigilancia de overlays (en vivo, con vigilar_overlays; apagada por defecto): cada overlay que se usa en un frame se
+    // Vigilancia de overlays (en vivo, con watch_overlays; apagada por defecto): cada overlay que se usa en un frame se
     // revisaba con la huella de su rango entero (los que escriben los compute miden megas). Vigilado, sin páginas escritas
     // por la CPU desde la última revisión, sigue igual sin huella; con alguna, la huella decide como antes. Solo los de más
     // de kOverlayWatchMin (los pequeños comparten página con lo que la CPU escribe en cada frame: saltaría cada vez).
     static constexpr uint64_t kOverlayWatchMin = 64 * 1024;
-    bool watch_overlays_ = false;  // interruptor vigilar_overlays (read_flags)
+    bool watch_overlays_ = false;  // interruptor watch_overlays (read_flags)
     std::vector<std::pair<size_t, size_t>> overlay_watch_runs_;
     // kWrittenByCopy: lo llenó una copia en la GPU desde otro overlay (copy_from_overlay): tampoco está en la memoria del
     // juego. Solo para uniones y compactaciones (la devolución sigue con `written`, como antes).
     static constexpr uint8_t kWrittenByGraphics = 1, kWrittenByCompute = 2, kWrittenByCopy = 4;
     // Conservar lo de la GPU (ver merge_overlays y cpu_wrote_partial). Interruptores en vivo (read_flags):
-    // <datos>/sin_conservar_overlays: todo como antes (sustituir y tirar); <datos>/sin_unir_lecturas: solo las uniones
+    // <datos>/no_keep_overlays: todo como antes (sustituir y tirar); <datos>/no_merge_reads: solo las uniones
     // por una lectura (un SSBO o el origen de una copia que cae en parte en lo de la GPU), que meten en la unión bytes que
     // solo escribe la CPU: si la CPU los reescribe sin un comando, la unión entera se tira.
     bool keep_gpu_overlays_ = true, merge_reads_ = true;
     static constexpr uint64_t kMergeReadMax = 1ull << 20;  // unión por una lectura: hasta esto
     // Perfil (con registro, en "perfil overlays"): overlays escritos por la GPU tirados, por motivo (erase_reason; su
     // texto, el mismo que el de '[vigía] se tira el overlay'), y uniones y parches parciales. Siempre se cuentan, sin el
-    // tope del log de vigilar_nan.
+    // tope del log de watch_nan.
     struct LostCount {
         const char* why;
         uint64_t count, bytes;
@@ -1958,7 +1958,7 @@ private:
     // La CPU del juego también lee lo que escribe la GPU (en la Switch es la misma memoria): MH Rise decide qué mips
     // carga por streaming con lo que sus shaders escriben en buffers, y sin devolverlo nunca pedía los mips grandes
     // (las texturas salían a cero: la ropa magenta). Al empezar cada envío del juego, los overlays pequeños que ya
-    // escribió la GPU vuelven a su memoria. Solo con <datos>/con_devolver: estable (3/3 arranques), pero no arregla las caras y
+    // escribió la GPU vuelven a su memoria. Solo con <datos>/use_return: estable (3/3 arranques), pero no arregla las caras y
     // el título baja de 30 a 18 fps (compara y huellas de overlays de megas en cada entrega, en el hilo del juego).
     static constexpr uint64_t kWriteBackMax = 16ull << 20;
     // El overlay que contiene address (make_overlay puede devolver uno mayor que ya lo cubría).
@@ -2017,7 +2017,7 @@ private:
     uint64_t mirror_bytes_ = 0, prof_mirror_bytes_ = 0;
     // may_upload = false (con el render pass ya empezado): solo uno revisado en este envío.
     const Mirror* mirror(uint64_t address, uint64_t size, VkDeviceSize* offset, bool may_upload = true);
-    // <datos>/espejos_al_empezar: los espejos del último frame, revisados al empezar cada envío (ver preload_mirrors).
+    // <datos>/mirrors_at_start: los espejos del último frame, revisados al empezar cada envío (ver preload_mirrors).
     void preload_mirrors();
     bool mirror_batch_ = false, mirror_batch_barrier_ = false;  // dentro de preload_mirrors: una barrera para todos
     uint64_t prof_mirror_preloads_ = 0;  // perfil: espejos con páginas subidas al empezar el envío
@@ -2029,7 +2029,7 @@ private:
     // El memory pool que contiene address: [start, start + size). Cada multi-draw lo buscaba dos veces recorriendo
     // g_memory_pools entero (con su mutex; MH Rise reparte sus mallas en decenas de pools de 4 MB, y casi todos sus draws
     // son multi-draw). Los últimos encontrados se recuerdan mientras no se cree ni se destruya ningún pool
-    // (Objects::generation). <datos>/sin_memo_pools (en vivo): se recorre siempre, como antes.
+    // (Objects::generation). <datos>/no_pool_memo (en vivo): se recorre siempre, como antes.
     bool pool_range(uint64_t address, uint64_t* start, uint64_t* size);
     struct PoolMemo {
         uint64_t start = 0, size = 0;
@@ -2047,7 +2047,7 @@ private:
         for (uint64_t g = address >> 16, end = (address + std::max<uint64_t>(size, 1) - 1) >> 16; g <= end; g++)
             overlay_filter_[overlay_slot(g)] += delta;
     }
-    // DEPURACIÓN (vigilar_nan): por qué se tira el overlay que va a tirar erase_overlay y qué lo pidió (lo pone quien
+    // DEPURACIÓN (watch_nan): por qué se tira el overlay que va a tirar erase_overlay y qué lo pidió (lo pone quien
     // llama). Si la GPU lo había escrito, note_erase lo dice antes de borrar su procedencia: lo suyo se pierde y quien lo
     // lea después ve la memoria del juego (o el overlay nuevo que lo sustituye, hecho con ella). Las tiradas sin log de
     // HEAD (huella cambiada, comandos de la CPU que no caben enteros en un overlay) quedan así a la vista.
@@ -2069,7 +2069,7 @@ private:
         filter_overlay(it->first, it->second.size, -1);
         if (lost) note_lost(it->second);
         if (vigilar_nan_ && lost) note_erase(it->first, it->second);  // DEPURACIÓN
-        if (!provenance_.empty()) provenance_.erase(it->first);  // DEPURACIÓN (vigilar_nan)
+        if (!provenance_.empty()) provenance_.erase(it->first);  // DEPURACIÓN (watch_nan)
         // Su hueco, libre cuando la GPU acabe el envío que se graba ahora (puede que ya lo use).
         if (const Overlay& o = it->second; o.slot_size && recycle_overlays_) {
             if (overlay_free_.size() >= kMaxFreeSlots) overlay_free_.erase(overlay_free_.begin());  // el más viejo se pierde
@@ -2112,7 +2112,7 @@ private:
     // frames y cada compactación esperaba a que la GPU acabara todo y leía ~26 MB de memoria no cacheable (cap1.log:
     // 12,8 ms/frame esperando a la GPU, 50 ms/frame en el ejecutor, 14-20 fps). Un hueco se reutiliza cuando la GPU ha
     // terminado el envío en el que se tiró: nada de lo grabado hasta entonces lo vuelve a leer.
-    // <datos>/sin_huecos_overlays: solo la arena, como antes.
+    // <datos>/no_overlay_gaps: solo la arena, como antes.
     struct FreeSlot {
         VkBuffer buffer;
         VkDeviceSize offset, size;
@@ -2121,15 +2121,15 @@ private:
     };
     static constexpr size_t kMaxFreeSlots = 1024;
     std::vector<FreeSlot> overlay_free_;
-    bool recycle_overlays_ = true;  // interruptor sin_huecos_overlays (read_flags)
-    bool patch_overlays_ = true;    // interruptor sin_parchear_overlays (read_flags; ver overlay_containing)
-    bool write_back_on_ = false;    // con_devolver (read_flags): sin él no hace falta la referencia de cada overlay
+    bool recycle_overlays_ = true;  // interruptor no_overlay_gaps (read_flags)
+    bool patch_overlays_ = true;    // interruptor no_patch_overlays (read_flags; ver overlay_containing)
+    bool write_back_on_ = false;    // use_return (read_flags): sin él no hace falta la referencia de cada overlay
     // Perfil: bytes de overlays nuevos (de la arena) y en huecos reutilizados; compactaciones y lo que costaron.
     uint64_t prof_overlay_new_bytes_ = 0, prof_overlay_reused_bytes_ = 0;
     uint64_t prof_compactions_ = 0, prof_compact_wait_us_ = 0, prof_compact_copy_us_ = 0;
     // Overlay que contiene [address, address+size), con el desplazamiento de address en su buffer.
     const Overlay* find_overlay(uint64_t address, uint64_t size, VkDeviceSize* offset);
-    // DEPURACIÓN (vigilar_nan): el overlay que toca [address, address + size) sin contenerlo entero (llamar si
+    // DEPURACIÓN (watch_nan): el overlay que toca [address, address + size) sin contenerlo entero (llamar si
     // find_overlay falló), o nullptr.
     const std::pair<const uint64_t, Overlay>* partial_overlay(uint64_t address, uint64_t size);
     // ¿Sigue mandando la GPU en el overlay de address? No si la CPU reescribió su rango (su huella cambió). Si la memoria
@@ -2143,7 +2143,7 @@ private:
     const Overlay* make_overlay(uint64_t address, uint64_t size, VkDeviceSize* offset, bool may_copy = true);
     // Un overlay nuevo de [address, address+size) con lo de los overlays de la GPU que caen enteros dentro copiado encima,
     // en la GPU (cierra el render pass). nullptr si no hace falta (ninguno que conservar) o no se puede (tope, sin sitio,
-    // sin_conservar_overlays). for_read: lo pide una lectura (hasta kMergeReadMax, y sin tirar nada de la GPU).
+    // no_keep_overlays). for_read: lo pide una lectura (hasta kMergeReadMax, y sin tirar nada de la GPU).
     const Overlay* merge_overlays(uint64_t address, uint64_t size, VkDeviceSize* offset, bool for_read);
     // Antes del render pass de un draw: los overlays de lo que escribe (y de los SSBO que lee y caen en parte en lo de la
     // GPU), unidos ya, para que dentro del pase make_overlay/find_overlay los encuentren sin copiar nada.
@@ -2171,7 +2171,7 @@ private:
     uint64_t submit_index_ = 0;  // envíos ejecutados: la caché de vértices revisa una vez por envío
     std::vector<Texture*> frame_targets_, frame_uploads_;  // para los volcados de depuración
     void dump(Texture& t, const std::string& name, uint32_t layer = 0, int forced_mip = -1);
-    // DEPURACIÓN (<datos>/revisar_astc): tras subir una ASTC, cada mip (hasta 6) pasa a RGBA8 en la GPU y se cuentan los
+    // DEPURACIÓN (<datos>/check_astc): tras subir una ASTC, cada mip (hasta 6) pasa a RGBA8 en la GPU y se cuentan los
     // píxeles exactamente magenta (el color de error de un bloque ASTC inválido): datos mal desentrelazados.
     void check_astc(Texture& t);
     void dump_raw(Texture& t, const std::string& name);
@@ -2208,7 +2208,7 @@ private:
     // propio SPIR-V de la caché (los módulos del juego pueden destruirse mientras tanto), y sus draws no se dibujan hasta
     // que esté (lo normal, unos frames: el efecto aparece un poco tarde la primera vez en vez de congelar el juego). Las
     // compute no (un dispatch sin hacer deja datos sin escribir): esas siguen en NvnSubmit, o las adelanta la precarga.
-    // <datos>/sin_pipelines_async (en vivo): todas en NvnSubmit, como antes.
+    // <datos>/no_async_pipelines (en vivo): todas en NvnSubmit, como antes.
     struct AsyncJob {
         uint64_t h = 0;
         PipelineRecord rec;  // la clave y las de la caché de SPIR-V de cada módulo
@@ -2225,9 +2225,9 @@ private:
     std::unordered_set<uint64_t> async_abandoned_;          // las creó NvnSubmit mientras el hilo seguía con ellas
     bool async_started_ = false;                            // solo el hilo del ejecutor
     bool async_pipelines_ = true;                           // read_flags
-    bool serial_pipelines_ = false;                         // init: PowerVR (o pipelines_un_hilo), todo en este hilo
+    bool serial_pipelines_ = false;                         // init: PowerVR (o single_thread_pipelines), todo en este hilo
     bool low_table_ = true;                                 // read_flags: la tabla baja de c2 (resolve_texture)
-    bool separate_tables_ = true;  // read_flags (<datos>/sin_tablas_separadas: un array, como antes): StageBindings::combined_textures
+    bool separate_tables_ = true;  // read_flags (<datos>/no_split_tables: un array, como antes): StageBindings::combined_textures
     std::atomic<uint64_t> prof_async_ns_{0};                // driver en los hilos (para pipelines.bin y el log)
     void async_loop();
     std::vector<PipelineRecord> load_pipeline_records();
@@ -2248,7 +2248,7 @@ private:
     // habrían creado sin compartirlas entre programas con el mismo SPIR-V.
     std::unordered_set<uint64_t> prof_stage_keys_;
     bool prof_count_stage_keys_ = false;
-    bool per_stage_keys_ = false;  // interruptor pipelines_por_etapa: las claves de antes (sin compartir entre etapas)
+    bool per_stage_keys_ = false;  // interruptor pipelines_per_stage: las claves de antes (sin compartir entre etapas)
     VkFormat rp_formats_[8] = {}, rp_depth_ = VK_FORMAT_UNDEFINED;  // los del pase empezado (clave de pipeline)
     // Frame trazado: el que sigue a la aparición de <datos>/trazar (se borra al verlo); ninguno si no.
     uint64_t trace_frame_ = UINT64_MAX;
@@ -2426,10 +2426,10 @@ bool Executor::init() {
     load_pipeline_cache();
     // PowerVR: su compilador de shaders se cae creando pipelines en varios hilos a la vez (lo vieron los ports de MHGU y
     // MH4U: el juego se cerraba, y en cada arranque siguiente al precalentar los guardados). Ahí todo en el hilo del
-    // ejecutor, cuando hace falta: sin precalentado y sin los hilos de pipelines async. <datos>/pipelines_un_hilo hace
-    // lo mismo en cualquier GPU; <datos>/pipelines_en_paralelo lo quita también en una PowerVR.
-    serial_pipelines_ = NVN_FLAG("pipelines_un_hilo") ||
-                        (strstr(c->props.deviceName, "PowerVR") && !NVN_FLAG("pipelines_en_paralelo"));
+    // ejecutor, cuando hace falta: sin precalentado y sin los hilos de pipelines async. <datos>/single_thread_pipelines hace
+    // lo mismo en cualquier GPU; <datos>/parallel_pipelines lo quita también en una PowerVR.
+    serial_pipelines_ = NVN_FLAG("single_thread_pipelines") ||
+                        (strstr(c->props.deviceName, "PowerVR") && !NVN_FLAG("parallel_pipelines"));
     if (serial_pipelines_) NVN_LOG("pipelines en un solo hilo (%s): sin precalentado ni async\n", c->props.deviceName);
     warm_started_ = !serial_pipelines_;
     if (warm_started_) std::thread([this] { warm_up(); }).detach();  // vive lo que el proceso (como el de NvnSubmit)
@@ -2493,11 +2493,11 @@ bool Executor::init() {
         d->gpu_written = true;
         d->serial = next_texture_serial();
     }
-    const bool crumbs = NVN_FLAG("migas") || NVN_FLAG("migas_compute") || NVN_FLAG("migas_ligeras");
-    if (crumbs || !NVN_FLAG("sin_relleno_compute")) crumb_init(crumbs);
-    fill_quirk_ = crumb_map_ && !NVN_FLAG("sin_relleno_compute");
-    crumbs_passes_ = !NVN_FLAG("migas_compute") && !NVN_FLAG("migas_ligeras");
-    crumbs_barriers_ = !NVN_FLAG("migas_ligeras");
+    const bool crumbs = NVN_FLAG("breadcrumbs") || NVN_FLAG("breadcrumbs_compute") || NVN_FLAG("breadcrumbs_light");
+    if (crumbs || !NVN_FLAG("no_compute_fill")) crumb_init(crumbs);
+    fill_quirk_ = crumb_map_ && !NVN_FLAG("no_compute_fill");
+    crumbs_passes_ = !NVN_FLAG("breadcrumbs_compute") && !NVN_FLAG("breadcrumbs_light");
+    crumbs_barriers_ = !NVN_FLAG("breadcrumbs_light");
     ready_ = true;
     return true;
 }
@@ -2510,7 +2510,7 @@ void Executor::wait_slot(InFlight& f) {
     // dispositivo (la Mali-G615 de un Dimensity 8300: cada envío 700 ms, el vigilante de la GPU matando un trabajo colgado,
     // y la pantalla en negro). Mismo informe que con la GPU perdida, una vez.
     else if (crumbs_on_ && crumb_map_ && f.submit == submitted_.load(std::memory_order_relaxed) && crumb_map_[0] != crumb_map_[1])
-        crumb_report("trabajo abortado por el driver");
+        crumb_report("work aborted by the driver");
     const auto waited_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     prof_gpu_wait_us_ += waited_ns / 1000;
     g_drop_stats.wait_ns.fetch_add(static_cast<uint64_t>(waited_ns), std::memory_order_relaxed);
@@ -2614,7 +2614,7 @@ void Executor::finish(bool wait) {
     if (!recording_) return;
     end_render_pass();
     flush_clears(nullptr);  // borrados diferidos: presentar (otro command buffer) o la CPU pueden leer la textura
-    readback_pending_ = NVN_FLAG("con_devolver");  // las copias de lectura de este envío, al principio del siguiente
+    readback_pending_ = NVN_FLAG("use_return");  // las copias de lectura de este envío, al principio del siguiente
     vkEndCommandBuffer(cmd_);
     InFlight& f = inflight_[cur_];
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2649,7 +2649,7 @@ void Executor::finish(bool wait) {
         if (wait) wait_slot(f);
     }
     cur_ = (cur_ + 1) % kInFlight;
-    if (NVN_FLAG("registro")) watch_kgsl();  // DEPURACIÓN: lee /sys de la GPU cada medio segundo
+    if (NVN_FLAG("verbose_log")) watch_kgsl();  // DEPURACIÓN: lee /sys de la GPU cada medio segundo
     // Sin sitio para overlays nuevos (grow() falló) también se vacía: overlay_used_ ya no subiría y los overlays
     // quedarían desactivados hasta reiniciar.
     // Solo al acabar el envío del juego (no al partirlo a mitad de frame): lo que la GPU escribió antes en este
@@ -2684,9 +2684,9 @@ void Executor::compact_overlays() {
     // Estado pequeño que escribe la GPU y que solo se enlaza de vez en cuando: se conserva aunque no se haya usado en los
     // últimos envíos. MH Rise guarda la exposición automática y su historial de 8 medidas en 36 bytes que solo enlaza el
     // compute que mide (no en todos los frames; ~3 envíos por frame): rehecho desde la memoria del juego (ceros), la
-    // exposición siguiente salía de 1/max(0, 1e-8). <datos>/sin_guardar_estado: como antes.
+    // exposición siguiente salía de 1/max(0, 1e-8). <datos>/no_save_state: como antes.
     constexpr uint64_t kKeepSmall = 64ull << 10, kKeepSmallBytes = 4ull << 20;
-    const bool keep_small = !NVN_FLAG("sin_guardar_estado");
+    const bool keep_small = !NVN_FLAG("no_save_state");
     struct Kept {
         uint64_t address, cpu_hash, checked;
         uint8_t writers;
@@ -2726,7 +2726,7 @@ void Executor::compact_overlays() {
     // Lo escrito por la GPU que no está en ningún otro sitio y no se usó en los últimos envíos: rehecho, sale de la memoria
     // del juego y quien lo calculó una sola vez no lo vuelve a escribir (las mallas que un compute calcula al cargar y que
     // solo se dibujan cuando se ven). Hasta kKeepGpu cada uno y kKeepGpuBytes en total, los más recientes primero; lo
-    // demás se pierde (se cuenta y, con vigilar_nan, se dice). <datos>/sin_conservar_overlays: como antes.
+    // demás se pierde (se cuenta y, con watch_nan, se dice). <datos>/no_keep_overlays: como antes.
     constexpr uint64_t kKeepGpu = 1ull << 20, kKeepGpuBytes = 16ull << 20;
     uint64_t gpu_bytes = 0;
     size_t gpu_kept = 0, gpu_lost = 0;
@@ -2780,7 +2780,7 @@ void Executor::compact_overlays() {
         filter_overlay(k.address, o.size, +1);
         restored++;
     }
-    for (auto it = provenance_.begin(); it != provenance_.end();)  // DEPURACIÓN (vigilar_nan)
+    for (auto it = provenance_.begin(); it != provenance_.end();)  // DEPURACIÓN (watch_nan)
         it = overlays_.count(it->first) ? std::next(it) : provenance_.erase(it);
     {  // el estado de devolución de los que no se conservaron: hasta entregar lo que tengan pendiente
         std::lock_guard lock(wb_mutex_);
@@ -2796,7 +2796,7 @@ void Executor::compact_overlays() {
 }
 
 // DEPURACIÓN (registro): el estado pequeño que escriben los compute, como lo ve la GPU (su overlay, memoria coherente: lo
-// último que acabó) y como lo ve la CPU del juego (su memoria, que la GPU no actualiza sin con_devolver).
+// último que acabó) y como lo ve la CPU del juego (su memoria, que la GPU no actualiza sin use_return).
 void Executor::log_small_state(const char* why) {
     for (const auto& [address, s] : small_state_) {
         std::string gpu, cpu;
@@ -2825,7 +2825,7 @@ void Executor::prof_gpu_mark(const char* kind, const char* custom) {
         if (checked == frame_) return;
         checked = frame_;
         const char* data = getenv("NIER_DATA");
-        const std::string file = std::string(data ? data : ".") + "/perfil_gpu";
+        const std::string file = std::string(data ? data : ".") + "/profile_gpu";
         if (access(file.c_str(), F_OK) != 0) return;
         unlink(file.c_str());
         prof_frame_ = frame_;
@@ -2845,7 +2845,7 @@ void Executor::prof_gpu_mark(const char* kind, const char* custom) {
     } else if (kind[0] == 'c') {
         snprintf(label, sizeof label, "compute");
     } else {
-        // Los adjuntos del pase empezado (cur_pass_rt_; con pases_unidos pueden ser más que los del juego): el primer color,
+        // Los adjuntos del pase empezado (cur_pass_rt_; con merged_passes pueden ser más que los del juego): el primer color,
         // cuántos más (+N), la profundidad, y lo que cerró el de antes si era el mismo framebuffer o cabía con él.
         const cmd::SetRenderTargets& prt = cur_pass_rt_;
         const Texture* c0 = prt.count > 0 ? prt.colors[0] : nullptr;
@@ -2916,7 +2916,7 @@ void Executor::crumb_init(bool crumbs) {
     if (!crumbs) return;
     crumbs_.resize(kCrumbs);
     crumbs_on_ = true;
-    NVN_LOG("migas: activadas (todo en serie en la GPU)\n");
+    NVN_LOG("breadcrumbs: on (all GPU work serialized)\n");
 }
 
 void Executor::crumb_begin(char kind, const char* label) {
@@ -2973,7 +2973,7 @@ void Executor::crumb_report(const char* why) {
     if (!crumbs_on_ || crumbs_reported_) return;
     crumbs_reported_ = true;
     const uint32_t started = crumb_map_[0], ended = crumb_map_[1];
-    NVN_LOG("migas: %s; la última que empezó es la %u y la última que acabó la %u (grabadas %u)\n", why, started,
+    NVN_LOG("breadcrumbs: %s; last started %u, last finished %u (%u recorded)\n", why, started,
             ended, crumb_id_);
     const uint32_t first = ended > 4 ? ended - 4 : 1, last = std::min(crumb_id_, started + 3);
     for (uint32_t id = first; id <= last && crumb_id_ - id < kCrumbs; id++) {
@@ -2986,7 +2986,7 @@ void Executor::crumb_report(const char* why) {
         }
         // Con solo los dispatch, una que acabó y no tiene siguiente: lo colgado son los draws de después (van en ella).
         const uint32_t culprit = started != ended ? started : ended;
-        NVN_LOG("migas: %s%u envío %llu %s, %u draws, shaders%s\n", id == culprit ? "-> " : "   ", id,
+        NVN_LOG("breadcrumbs: %s%u submit %llu %s, %u draws, shaders%s\n", id == culprit ? "-> " : "   ", id,
                 static_cast<unsigned long long>(c.submit), c.label, c.draws, prints.c_str());
         if (id == culprit)
             for (const Crumb::GpuDraw& g : c.gpu_draws) {
@@ -2999,8 +2999,8 @@ void Executor::crumb_report(const char* why) {
                     snprintf(b, sizeof b, " [%u %u %u %d %u]", e[0], e[1], e[2], static_cast<int>(e[3]), e[4]);
                     args += b;
                 }
-                NVN_LOG("migas:     args GPU %#llx: %u de %u draws%s (índices %d)%s\n", static_cast<unsigned long long>(g.address), n,
-                        g.max_draws, g.count ? " (número de la GPU)" : "", g.index_type, args.c_str());
+                NVN_LOG("breadcrumbs:     GPU args %#llx: %u of %u draws%s (indices %d)%s\n", static_cast<unsigned long long>(g.address), n,
+                        g.max_draws, g.count ? " (count from the GPU)" : "", g.index_type, args.c_str());
             }
         if (id == culprit)
             for (uint32_t i = 0; i < c.n_stages; i++) {
@@ -3260,8 +3260,8 @@ void Executor::deliver_write_backs(uint64_t up_to) {
 bool Executor::wait_submit_fence(uint64_t submit, uint64_t timeout_ns) {
     if (submit <= completed_.load(std::memory_order_acquire)) return true;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::nanoseconds(std::min<uint64_t>(timeout_ns, 1ull << 62));
-    // Con <datos>/sin_espera_libre, como antes (para comparar): se mira el fence con g_mutex cada 200 µs.
-    if (NVN_FLAG("sin_espera_libre")) {
+    // Con <datos>/no_free_wait, como antes (para comparar): se mira el fence con g_mutex cada 200 µs.
+    if (NVN_FLAG("no_free_wait")) {
         for (;;) {
             {
                 std::lock_guard lock(g_mutex);
@@ -3358,31 +3358,31 @@ void Executor::run(const std::vector<const CommandList*>& lists) {
     rusage ru0{};
     getrusage(RUSAGE_THREAD, &ru0);
     submit_index_++;
-    // Interruptores, una vez por envío del juego. sin_generaciones cambia la caché en el siguiente punto seguro
+    // Interruptores, una vez por envío del juego. no_generations cambia la caché en el siguiente punto seguro
     // (entre draws o al terminar un envío de Vulkan).
-    split_ = !NVN_FLAG("un_envio");
+    split_ = !NVN_FLAG("single_submit");
     gpu_stamps_ = !NVN_FLAG("ts_cpu");
-    skip_compaction_gs_ = !NVN_FLAG("sin_salto_gs");
-    log_state_ = NVN_FLAG("registro");
-    depth_gequal_ = NVN_FLAG("profundidad_gequal");
+    skip_compaction_gs_ = !NVN_FLAG("no_gs_skip");
+    log_state_ = NVN_FLAG("verbose_log");
+    depth_gequal_ = NVN_FLAG("depth_gequal");
     prof_gpu_report();
     run_stamps_ = 0;
     // A la resolución dinámica se le dice que el frame cuesta lo suyo más LSFG más 2 ms de margen (con todo justo a 32 ms
-    // los frames reales llegaban tarde y la guarda de LSFG saltaba). ts_sin_lsfg: sin sumar nada.
+    // los frames reales llegaban tarde y la guarda de LSFG saltaba). ts_no_lsfg: sin sumar nada.
     {
-        const int64_t lsfg = NVN_FLAG("ts_sin_lsfg") ? 0 : lsfg::reserved_ns();
+        const int64_t lsfg = NVN_FLAG("ts_no_lsfg") ? 0 : lsfg::reserved_ns();
         stamp_extra_ = lsfg ? static_cast<int64_t>((lsfg + reserve_margin_ns()) * 0.6144) : 0;
     }
-    generations_ = !NVN_FLAG("sin_generaciones");
+    generations_ = !NVN_FLAG("no_generations");
     buffer_cache_.set_generations(generations_);
-    prof_count_stage_keys_ = NVN_FLAG("registro");
-    per_stage_keys_ = NVN_FLAG("pipelines_por_etapa");
-    prof_timing_ = frame_ % kProfileEvery == 0 && NVN_FLAG("registro");  // los tiempos por draw, solo depurando
+    prof_count_stage_keys_ = NVN_FLAG("verbose_log");
+    per_stage_keys_ = NVN_FLAG("pipelines_per_stage");
+    prof_timing_ = frame_ % kProfileEvery == 0 && NVN_FLAG("verbose_log");  // los tiempos por draw, solo depurando
     if (prof_timing_ && prof_timed_frame_ != frame_) prof_timed_frame_ = frame_, prof_timed_frames_++;
     buffer_cache_.prof = prof_timing_ ? &fine_.vtx : nullptr;
     read_flags();
     begin();
-    if (NVN_FLAG("espejos_al_empezar")) preload_mirrors();
+    if (NVN_FLAG("mirrors_at_start")) preload_mirrors();
     run_lists_ = &lists;  // la mirada adelante de los render passes (scan_pass) recorre lo que queda
     run_serial_++;
     for (cur_list_ = 0; cur_list_ < lists.size(); cur_list_++)
@@ -3430,44 +3430,44 @@ void Executor::run(const std::vector<const CommandList*>& lists) {
 }
 
 void Executor::read_flags() {
-    opt_.clear_diferido = !NVN_FLAG("sin_clear_diferido");
-    opt_.rt_igual = !NVN_FLAG("sin_rt_igual");
-    opt_.barrera_perezosa = !NVN_FLAG("sin_barrera_perezosa");
-    opt_.solo_escritos = !NVN_FLAG("sin_solo_escritos");
-    opt_.store_ops = !NVN_FLAG("sin_store_ops");
-    opt_.area = !NVN_FLAG("sin_area");
-    opt_.ubwc = !NVN_FLAG("sin_ubwc");  // solo para las imágenes que se creen a partir de ahora
-    pass_end_is_barrier_ = NVN_FLAG("barreras_justas_pase");
-    merge_passes_ = NVN_FLAG("pases_unidos");
-    async_pipelines_ = !NVN_FLAG("sin_pipelines_async") && !serial_pipelines_;
-    low_table_ = !NVN_FLAG("sin_tabla_baja");
-    separate_tables_ = !NVN_FLAG("sin_tablas_separadas");
-    scan_per_pass_ = NVN_FLAG("mirada_por_pase");
-    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("barreras_justas");
-    recycle_overlays_ = !NVN_FLAG("sin_huecos_overlays");
-    patch_overlays_ = !NVN_FLAG("sin_parchear_overlays");
-    keep_gpu_overlays_ = !NVN_FLAG("sin_conservar_overlays");
-    merge_reads_ = !NVN_FLAG("sin_unir_lecturas");
-    vigilar_nan_ = NVN_FLAG("vigilar_nan");  // DEPURACIÓN
-    trace_on_print_ = NVN_FLAG("trazar_huella");  // DEPURACIÓN
-    read_after_ = NVN_FLAG("leer_tras_dispatch");  // DEPURACIÓN
+    opt_.clear_diferido = !NVN_FLAG("no_deferred_clear");
+    opt_.rt_igual = !NVN_FLAG("no_same_rt");
+    opt_.barrera_perezosa = !NVN_FLAG("no_lazy_barrier");
+    opt_.solo_escritos = !NVN_FLAG("no_written_only");
+    opt_.store_ops = !NVN_FLAG("no_store_ops");
+    opt_.area = !NVN_FLAG("no_area");
+    opt_.ubwc = !NVN_FLAG("no_ubwc");  // solo para las imágenes que se creen a partir de ahora
+    pass_end_is_barrier_ = NVN_FLAG("tight_barriers_pass");
+    merge_passes_ = NVN_FLAG("merged_passes");
+    async_pipelines_ = !NVN_FLAG("no_async_pipelines") && !serial_pipelines_;
+    low_table_ = !NVN_FLAG("no_low_table");
+    separate_tables_ = !NVN_FLAG("no_split_tables");
+    scan_per_pass_ = NVN_FLAG("inspect_per_pass");
+    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
+    recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
+    patch_overlays_ = !NVN_FLAG("no_patch_overlays");
+    keep_gpu_overlays_ = !NVN_FLAG("no_keep_overlays");
+    merge_reads_ = !NVN_FLAG("no_merge_reads");
+    vigilar_nan_ = NVN_FLAG("watch_nan");  // DEPURACIÓN
+    trace_on_print_ = NVN_FLAG("trace_print");  // DEPURACIÓN
+    read_after_ = NVN_FLAG("read_after_dispatch");  // DEPURACIÓN
     if (!vigilar_nan_ && !provenance_.empty()) provenance_.clear();
-    watch_textures_ = !NVN_FLAG("sin_vigilar_texturas");
-    force_levels_ = !NVN_FLAG("sin_forzar_niveles");
-    bindless_ = !NVN_FLAG("sin_bindless");
-    fixed_samplers_ = !NVN_FLAG("sin_sampler_fijo");
-    typed_dummies_ = !NVN_FLAG("sin_reserva_tipada");
-    image_base_120_ = !NVN_FLAG("base_imagen_128");
-    cache_sets_ = !NVN_FLAG("sin_cache_sets");
-    templates_ = NVN_FLAG("plantillas");
-    skip_set1_ = !NVN_FLAG("sin_saltar_set1");
-    memo_layout_ = !NVN_FLAG("sin_memo_layout");
-    buffer_cache_.watch = NVN_FLAG("vigilar_vertices");
-    buffer_cache_.front = !NVN_FLAG("sin_frente_vertices");
-    watch_overlays_ = NVN_FLAG("vigilar_overlays");
-    memo_pipeline_ = !NVN_FLAG("sin_memo_pipeline");
-    fast_bindless_ = !NVN_FLAG("sin_bindless_rapido");
-    const bool write_back = NVN_FLAG("con_devolver");
+    watch_textures_ = !NVN_FLAG("no_texture_watch");
+    force_levels_ = !NVN_FLAG("no_force_levels");
+    bindless_ = !NVN_FLAG("no_bindless");
+    fixed_samplers_ = !NVN_FLAG("no_fixed_sampler");
+    typed_dummies_ = !NVN_FLAG("no_typed_reserve");
+    image_base_120_ = !NVN_FLAG("image_base_128");
+    cache_sets_ = !NVN_FLAG("no_set_cache");
+    templates_ = NVN_FLAG("templates");
+    skip_set1_ = !NVN_FLAG("no_skip_set1");
+    memo_layout_ = !NVN_FLAG("no_layout_memo");
+    buffer_cache_.watch = NVN_FLAG("watch_vertices");
+    buffer_cache_.front = !NVN_FLAG("no_vertex_front");
+    watch_overlays_ = NVN_FLAG("watch_overlays");
+    memo_pipeline_ = !NVN_FLAG("no_pipeline_memo");
+    fast_bindless_ = !NVN_FLAG("no_fast_bindless");
+    const bool write_back = NVN_FLAG("use_return");
     if (write_back && !write_back_on_) {
         // Se enciende en vivo: los overlays de antes no tienen referencia (make_overlay solo la hace con la devolución) y
         // no se devolverían hasta rehacerse. La memoria del juego es aún lo de la CPU (sin devolución la GPU no la toca):
@@ -3493,7 +3493,7 @@ void Executor::apply(const Command& c) {
                 // Los mismos targets con las mismas vistas: el pase abierto sigue (NieR vuelve a enlazar los suyos).
                 const bool same = opt_.rt_igual && same_targets(v, st_.rt);
                 if (same && in_render_pass_ && !st_.rt_dirty) prof_rt_kept_++;
-                // pases_unidos: otros targets cuyos adjuntos están todos en el pase abierto: sigue, con las máscaras de los
+                // merged_passes: otros targets cuyos adjuntos están todos en el pase abierto: sigue, con las máscaras de los
                 // que no son suyos a cero.
                 const bool within = !same && merge_passes_ && in_render_pass_ && !st_.rt_dirty && targets_within(v, cur_pass_rt_);
                 st_.rt = v;
@@ -3787,10 +3787,10 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
     VkFormatProperties fp;
     vkGetPhysicalDeviceFormatProperties(c->gpu, format, &fp);
     // BCn en una GPU que no lo lee (Mali, PowerVR…): la imagen, sin comprimir, y cada nivel se descomprime al subirlo
-    // (bcn.h). <datos>/bc_en_cpu hace lo mismo en cualquier GPU (para probar esa ruta en un Adreno).
+    // (bcn.h). <datos>/bc_on_cpu hace lo mismo en cualquier GPU (para probar esa ruta en un Adreno).
     uint8_t bcn_kind = bcn::kNone;
     if (bcn::kind_of(format) != bcn::kNone &&
-        (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) || NVN_FLAG("bc_en_cpu"))) {
+        (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) || NVN_FLAG("bc_on_cpu"))) {
         bcn_kind = bcn::kind_of(format);
         static std::set<VkFormat> told;
         if (told.insert(format).second)
@@ -3918,7 +3918,7 @@ bool Executor::decode_level(Texture& t, const LevelLayout& lv, const uint8_t* bl
                 bcn::decode(kind, slice + size_t{first} * block_row, lv.width_blocks, count, a.data + y0 * pitch, pitch, lv.width,
                             rows - y0);
             };
-            if (hb > 4 && !NVN_FLAG("subida_un_hilo")) row_pool().run(hb, std::max<size_t>(1, hb / 8), fn);
+            if (hb > 4 && !NVN_FLAG("single_thread_upload")) row_pool().run(hb, std::max<size_t>(1, hb / 8), fn);
             else fn(0, hb);
             VkBufferImageCopy r{};
             r.bufferOffset = a.offset;
@@ -4014,7 +4014,7 @@ void Executor::upload(Texture& t) {
         return h;
     };
     int astc_missing = -1;  // el nivel más alto con bloques a cero
-    const bool subida_v1 = NVN_FLAG("subida_v1");
+    const bool upload_v1 = NVN_FLAG("upload_v1");
     for (uint32_t layer = 0; layer < std::min(L.layers, t.layers); layer++) {
         for (uint32_t level = 0; level < L.levels.size() && level < static_cast<uint32_t>(std::max(t.desc.levels, 1)); level++) {
             const LevelLayout& lv = L.levels[level];
@@ -4069,10 +4069,10 @@ void Executor::upload(Texture& t) {
             // lo muestreado empieza después (Texture::min_level). Los bloques a cero se cuentan al copiarlos, en la
             // memoria del juego: antes se releían del staging (HOST_COHERENT sin HOST_CACHED: sin caché de la CPU,
             // cada carga va a la RAM), 2 cargas de 8 bytes por bloque de cada nivel ASTC subido.
-            // <datos>/subida_v1: como antes (copia trozo a trozo y bloques a cero releídos del staging).
+            // <datos>/upload_v1: como antes (copia trozo a trozo y bloques a cero releídos del staging).
             const bool count_zeros = astc && bpb == 16;
             size_t zeros = 0;
-            if (subida_v1) {
+            if (upload_v1) {
                 if (L.linear) {
                     for (uint32_t y = 0; y < lv.height_blocks; y++)
                         memcpy(a.data + size_t{y} * lv.width_blocks * bpb, src + size_t{y} * L.stride, lv.width_blocks * bpb);
@@ -4093,7 +4093,7 @@ void Executor::upload(Texture& t) {
                 LoadTimer deswizzle_timer(*this, kLdDeswizzle, linear_size);
                 const size_t rows = size_t{std::max(lv.depth, 1u)} * lv.height_blocks;
                 const size_t row_bytes = std::max<size_t>(size_t{lv.width_blocks} * bpb, 1);
-                if (linear_size >= kParallelDeswizzleMin && rows > 1 && !NVN_FLAG("subida_un_hilo")) {
+                if (linear_size >= kParallelDeswizzleMin && rows > 1 && !NVN_FLAG("single_thread_upload")) {
                     std::atomic<size_t> zero_total{0};
                     const std::function<void(size_t, size_t)> fn = [&](size_t r0, size_t r1) {
                         size_t z = 0;
@@ -4188,11 +4188,11 @@ bool Executor::cpu_texture_changed(Texture& t) {
         return collect_texture_writes(t);
     }
     if (t.checked_frame == frame_) return false;
-    // <datos>/huella_cada_2 (en vivo, apagado por defecto): una textura revisada en el frame anterior no se vuelve a mirar en
+    // <datos>/print_every_2 (en vivo, apagado por defecto): una textura revisada en el frame anterior no se vuelve a mirar en
     // este (la huella de las ~600 que sube la CPU, cada frame, es casi todo el tramo "texturas"). Lo que la CPU reescriba
     // se ve como mucho un frame más tarde; WriteTexels y CopyBufferToTexture no pasan por aquí (apply_texel_writes) y las
     // vigiladas tampoco.
-    if (t.checked_frame + 1 == frame_ && t.content_hash && NVN_FLAG("huella_cada_2")) return false;
+    if (t.checked_frame + 1 == frame_ && t.content_hash && NVN_FLAG("print_every_2")) return false;
     t.checked_frame = frame_;
     if (!prof_timing_) return content_hash(t) != t.content_hash;
     const auto t0 = std::chrono::steady_clock::now();
@@ -4331,17 +4331,17 @@ VkSampler Executor::sampler(Sampler* s) {
     // Comparación (las sombras: el 268 de los mapas de sombra de MH Rise, LINEAR_MIPMAP_NEAREST con 1x): sin el 4x mínimo
     // de abajo, con el anisotrópico que pida el juego, como Eden (TSCEntry::MaxAnisotropy: 1x si depth_compare_enabled y
     // el juego no pide más). Cómo filtra el Adreno una comparación con anisotrópico es cosa del driver: sospechoso de las
-    // sombras de árboles a cuadros de las Ruinas (sin probar aún en la Flip). <datos>/con_af_comparacion en vivo: el de
+    // sombras de árboles a cuadros de las Ruinas (sin probar aún en la Flip). <datos>/af_compare en vivo: el de
     // antes, en su propio VkSampler (vk_af).
-    const bool legacy_af = d.compare_mode != 0 && NVN_FLAG("con_af_comparacion");
-    // <datos>/af_del_juego (en vivo, para medir): sin el 4x mínimo de abajo, solo el anisotrópico que pide el juego, en el
+    const bool legacy_af = d.compare_mode != 0 && NVN_FLAG("af_compare");
+    // <datos>/game_af (en vivo, para medir): sin el 4x mínimo de abajo, solo el anisotrópico que pide el juego, en el
     // otro VkSampler (vk_af, que en los que no son de comparación no se usaba). Cuesta GPU en los pases con muchas texturas
     // (el de la escena a 960x540); la nitidez del suelo en ángulo baja a la de la consola.
-    const bool game_af = d.compare_mode == 0 && NVN_FLAG("af_del_juego");
-    // Sombras apagadas (<datos>/sin_sombras, en vivo; el menú de opciones): la comparación siempre pasa, así que toda
+    const bool game_af = d.compare_mode == 0 && NVN_FLAG("game_af");
+    // Sombras apagadas (<datos>/no_shadows, en vivo; el menú de opciones): la comparación siempre pasa, así que toda
     // lectura de un mapa de sombras da "iluminado" se haya dibujado o no (los draws de las cascadas se saltan en draw()).
     // En su propio VkSampler, para poder volver al momento.
-    const bool lit = d.compare_mode != 0 && NVN_FLAG("sin_sombras");
+    const bool lit = d.compare_mode != 0 && NVN_FLAG("no_shadows");
     VkSampler& out = lit ? s->vk_lit : legacy_af || game_af ? s->vk_af : s->vk;
     if (out) return out;
     auto wrap = [](int w) {
@@ -4363,13 +4363,13 @@ VkSampler Executor::sampler(Sampler* s) {
     si.addressModeW = wrap(d.wrap[2]);
     si.mipLodBias = d.lod_bias;
     // Anisotrópico: el que pide el juego (antes se ignoraba y el suelo y las paredes se emborronaban en ángulo), y como
-    // mínimo 4x en las texturas con mipmaps y filtro lineal. sin_af al crear el sampler: como antes.
+    // mínimo 4x en las texturas con mipmaps y filtro lineal. no_af al crear el sampler: como antes.
     {
         const bool mip_linear = si.minFilter == VK_FILTER_LINEAR && d.min_filter >= 2;
         float af = d.max_anisotropy;
         if (mip_linear && !game_af && (!d.compare_mode || legacy_af)) af = std::max(af, 4.0f);
         af = std::min(af, vk()->props.limits.maxSamplerAnisotropy);
-        si.anisotropyEnable = af > 1.0f && !NVN_FLAG("sin_af") ? VK_TRUE : VK_FALSE;
+        si.anisotropyEnable = af > 1.0f && !NVN_FLAG("no_af") ? VK_TRUE : VK_FALSE;
         si.maxAnisotropy = si.anisotropyEnable ? af : 1.0f;
     }
     si.compareEnable = d.compare_mode != 0;
@@ -4380,7 +4380,7 @@ VkSampler Executor::sampler(Sampler* s) {
                                                                 : VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK)
                                         : VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     // Borde exacto (VK_EXT_custom_border_color) si no es uno de los tres de Vulkan: con CLAMP_TO_BORDER el borde de una
-    // textura de comparación es la profundidad con la que se compara fuera del mapa de sombras. <datos>/sin_borde_exacto
+    // textura de comparación es la profundidad con la que se compara fuera del mapa de sombras. <datos>/no_exact_border
     // al crear el sampler: la aproximación de antes.
     VkSamplerCustomBorderColorCreateInfoEXT custom{VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT};
     const bool border_used = si.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER ||
@@ -4391,7 +4391,7 @@ VkSampler Executor::sampler(Sampler* s) {
                         (bc[0] == 1 && bc[1] == 1 && bc[2] == 1 && bc[3] == 1);
     static std::atomic<uint32_t> custom_borders{0};
     if (border_used && !preset && vk()->custom_border_color && custom_borders.load() < vk()->max_custom_border_samplers &&
-        !NVN_FLAG("sin_borde_exacto")) {
+        !NVN_FLAG("no_exact_border")) {
         custom_borders++;
         si.borderColor = VK_BORDER_COLOR_FLOAT_CUSTOM_EXT;
         memcpy(custom.customBorderColor.float32, bc, sizeof custom.customBorderColor.float32);
@@ -4400,9 +4400,9 @@ VkSampler Executor::sampler(Sampler* s) {
         si.pNext = &custom;
     }
     // Reducción MIN/MAX (NVN: 0 media, 1 mínimo, 2 máximo; VK_EXT_sampler_filter_minmax). Vulkan no la admite con
-    // comparación. <datos>/sin_reduccion al crear el sampler: siempre la media, como antes.
+    // comparación. <datos>/no_reduction al crear el sampler: siempre la media, como antes.
     VkSamplerReductionModeCreateInfoEXT reduction{VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT};
-    if ((d.reduction == 1 || d.reduction == 2) && !si.compareEnable && vk()->filter_minmax && !NVN_FLAG("sin_reduccion")) {
+    if ((d.reduction == 1 || d.reduction == 2) && !si.compareEnable && vk()->filter_minmax && !NVN_FLAG("no_reduction")) {
         reduction.reductionMode = d.reduction == 1 ? VK_SAMPLER_REDUCTION_MODE_MIN_EXT : VK_SAMPLER_REDUCTION_MODE_MAX_EXT;
         reduction.pNext = si.pNext;
         si.pNext = &reduction;
@@ -4415,7 +4415,7 @@ VkSampler Executor::sampler(Sampler* s) {
                     d.wrap[0], d.wrap[1], d.wrap[2], bc[0], bc[1], bc[2], bc[3],
                     si.borderColor == VK_BORDER_COLOR_FLOAT_CUSTOM_EXT ? "exacto" : preset ? "de Vulkan" : "aproximado",
                     d.compare_mode, d.compare_func, d.reduction, si.pNext == &reduction ? "sí" : "no", d.min_filter, d.mag_filter,
-                    si.maxAnisotropy, legacy_af ? " (con_af_comparacion)" : "");
+                    si.maxAnisotropy, legacy_af ? " (af_compare)" : "");
     }
     LoadTimer timer(*this, kLdSampler);
     if (vkCreateSampler(vk()->device, &si, nullptr, &out) != VK_SUCCESS) {
@@ -4479,14 +4479,14 @@ VkRenderPass Executor::render_pass(const VkFormat* colors, uint32_t count, VkFor
 }
 
 // Mirada adelante (ver PassScan): recorre los comandos desde el que pide el pase con una copia del estado que importa.
-// pass: los adjuntos del pase (st_.rt, o más con pases_unidos: entonces sigue por los targets que caben en él, y lo que
+// pass: los adjuntos del pase (st_.rt, o más con merged_passes: entonces sigue por los targets que caben en él, y lo que
 // escribe cada draw o borrado es de los targets de su tramo).
 const Executor::PassScan& Executor::scan_pass(const cmd::SetRenderTargets& pass) {
     // Dónde está el comando en curso (lista, índice): lo lleva run(), no la dirección (una lista puede repetirse).
     const std::vector<const CommandList*>& lists = *run_lists_;
     size_t l = cur_list_, k = cur_index_;
     const bool inside = l < scan_.end_list || (l == scan_.end_list && k < scan_.end_cmd);  // antes de donde acabó
-    const bool here = !scan_per_pass_ || (scan_.start_list == l && scan_.start_cmd == k);  // mirada_por_pase: la de este pase
+    const bool here = !scan_per_pass_ || (scan_.start_list == l && scan_.start_cmd == k);  // inspect_per_pass: la de este pase
     if (scan_.run == run_serial_ && inside && here && same_targets(scan_.rt, st_.rt) && same_targets(scan_.pass, pass))
         return scan_;
     PassScan s;
@@ -4494,7 +4494,7 @@ const Executor::PassScan& Executor::scan_pass(const cmd::SetRenderTargets& pass)
     s.rt = st_.rt;
     s.pass = pass;
     s.start_list = l, s.start_cmd = k;
-    cmd::SetRenderTargets cur = st_.rt;  // los targets del juego en el tramo en curso (sin pases_unidos, siempre s.rt)
+    cmd::SetRenderTargets cur = st_.rt;  // los targets del juego en el tramo en curso (sin merged_passes, siempre s.rt)
     if (l == lists.size()) {  // no está en las listas (no debería pasar): todo escrito, área entera
         s.colors_written = ~0u;
         s.depth_written = s.cleared = true;
@@ -4605,7 +4605,7 @@ const Executor::PassScan& Executor::scan_pass(const cmd::SetRenderTargets& pass)
     return scan_;
 }
 
-// pases_unidos: los adjuntos con los que empezar el pase de st_.rt. Desde el comando en curso, los targets que vienen y
+// merged_passes: los adjuntos con los que empezar el pase de st_.rt. Desde el comando en curso, los targets que vienen y
 // caben con los de hasta ahora (targets_fit), hasta unos que no caben, un dispatch, una copia o un borrado de textura (que
 // cierran el pase de todas formas) o kMergeLookahead comandos. Lo que se añade tiene que ser ya de la GPU (con imagen y
 // gpu_written: tenerlo antes como adjunto no cambia lo que se subiría de la memoria del juego), del mismo tamaño en su
@@ -4673,7 +4673,7 @@ bool Executor::ensure_render_pass(bool full_area) {
     if (!split_why_) split_why_ = "targets nuevos";
     end_render_pass();
     st_.rt_dirty = false;
-    // pases_unidos: con los adjuntos de los targets que vienen y caben con estos (merge_targets).
+    // merged_passes: con los adjuntos de los targets que vienen y caben con estos (merge_targets).
     cmd::SetRenderTargets merged;
     const bool merging = merge_passes_ && run_lists_ && merge_targets(&merged);
     const cmd::SetRenderTargets& rt = merging ? merged : st_.rt;
@@ -4916,7 +4916,7 @@ void Executor::end_render_pass() {
 
 void Executor::full_barrier() {
     storage_since_barrier_ = false;
-    // Perfil y barreras_justas (ver gpu_work_): sin nada grabado desde la última, o (_pase) desde el final de un pase.
+    // Perfil y tight_barriers (ver gpu_work_): sin nada grabado desde la última, o (_pase) desde el final de un pase.
     prof_full_barriers_++;
     const bool redundant = !gpu_work_, after_pass = gpu_work_ && !work_after_pass_;
     prof_barriers_redundant_ += redundant;
@@ -4952,7 +4952,7 @@ void Executor::nvn_barrier(int bits) {
     if (!lazy) {
         // Perfil de cortes: por qué no se aplazó (si hay pase abierto). rt_dirty: el juego ya cambió de targets.
         if (in_render_pass_)
-            split_why_ = !opt_.barrera_perezosa ? "barrera (sin_barrera_perezosa)"
+            split_why_ = !opt_.barrera_perezosa ? "barrera (no_lazy_barrier)"
                          : st_.rt_dirty         ? "barrera con targets nuevos"
                                                 : "barrera tras escribir storage en el pase";
         barrier();
@@ -5399,12 +5399,12 @@ bool Executor::resolve_texture(Stage s, const Resource& r, Texture*& tex, Textur
     // (los TEX.B de MH Rise cargan de c2[0x168 + 8·i]: la iluminación de efectos 314939, el volumen de niebla 4x2x64…;
     // antes la textura negra de reserva). Misma tabla, mismo índice.
     const bool bank_ok = s == Stage::Compute ? r.cbuf_index == kComputeDriverBank ||
-                                                   (r.cbuf_index == kTextureHandleBank && !NVN_FLAG("sin_c2_compute"))
+                                                   (r.cbuf_index == kTextureHandleBank && !NVN_FLAG("no_c2_compute"))
                                              : r.cbuf_index == kTextureHandleBank;
     // Tabla baja de c2 (0x20 + 8·i, hasta las imágenes en 0x120): la de las texturas combinadas (BindTexture; ver
     // StageBindings::combined_textures). 9 pixel shaders de la interfaz (de 1842 en la caché de SPIR-V) leen ahí el handle
     // entero de sus ranuras 0 y 1: los iconos de la tabla de recompensas al acabar una misión (148e89d349436450, 5-11).
-    // Antes no se resolvían (la de reserva, transparente). <datos>/sin_tabla_baja (en vivo): como antes.
+    // Antes no se resolvían (la de reserva, transparente). <datos>/no_low_table (en vivo): como antes.
     const bool low_table = low_table_ && s != Stage::Compute && bank_ok && r.cbuf_offset >= kLowTextureHandleBase &&
                            r.cbuf_offset < kComputeImageHandleBase && (r.cbuf_offset - kLowTextureHandleBase) % 8 == 0;
     if (!bank_ok || (r.cbuf_offset < kTextureHandleBase && !low_table)) return false;
@@ -5461,7 +5461,7 @@ bool Executor::resolve_texture(Stage s, const Resource& r, Texture*& tex, Textur
     // El shader ORea un sampler fijo al handle que lee de c2 (TEX.B con handle | 0x10c00000: el 268 de comparación de las
     // sombras, el 267 del volumen de sondas y del cubemap…; Eden lo perdía, ver handle_or). La GPU usa ese (los 12 bits de
     // arriba del handle) y no el de la ranura, que el juego ni enlaza: salía el sampler 0, sin comparación ni mipmaps.
-    // En el censo, 158 de 202 pixel shaders; los 111 que leen sombras. <datos>/sin_sampler_fijo: como antes.
+    // En el censo, 158 de 202 pixel shaders; los 111 que leen sombras. <datos>/no_fixed_sampler: como antes.
     const bool fixed = fixed_samplers_ && (r.handle_or >> 20) != 0;
     if (fixed) sampler_id = (combined ? handle_sampler_id(handle) : 0) | (r.handle_or >> 20);
     if (st_.texture_pool && texture_id < st_.texture_pool->textures.size()) {
@@ -5519,7 +5519,7 @@ bool Executor::resolve_texture(Stage s, const Resource& r, Texture*& tex, Textur
 // Bindless de verdad: el shader carga el handle de un uniform buffer del juego (banco c3 + i). Aquí los de un solo
 // descriptor (c5[0xa0] en 84 pixel shaders: 0xffffffff, "sin textura", en todo lo visto); los arrays con índice dinámico
 // (sondas, decals) van al set 1 (bindless_set). La palabra se lee como la GPU: resolve_handle. Siempre se registran las
-// dos palabras que hay (las primeras 48 posiciones y todas en la traza). <datos>/sin_bindless: la de reserva, como antes.
+// dos palabras que hay (las primeras 48 posiciones y todas en la traza). <datos>/no_bindless: la de reserva, como antes.
 bool Executor::resolve_bindless(Stage s, const Resource& r, Texture*& tex, TextureViewDesc& v, Sampler*& smp) {
     const StageBindings& b = st_.bindings[static_cast<int>(s)];
     auto read_u32 = [&](uint32_t bank, uint32_t offset, uint32_t* out) {
@@ -5847,7 +5847,7 @@ bool Executor::resolve_image(Stage s, const ProgramStage& ps, const Resource& r,
     const uint32_t bank = s == Stage::Compute ? kComputeDriverBank : kTextureHandleBank;
     // La tabla empieza en 0x120 (como en compute: kComputeImageHandleBase): un pixel shader de MH Rise escribe c2[0x120] y
     // c2[0x128] con las ranuras 0 y 1 enlazadas (5024 y 5088); con la base supuesta 0x128 las dos iban a la ranura 0 y la 1
-    // no se escribía nunca. En compute vale también c2. <datos>/base_imagen_128: como antes.
+    // no se escribía nunca. En compute vale también c2. <datos>/image_base_128: como antes.
     const uint32_t base = image_base_120_ ? kComputeImageHandleBase : kImageHandleBase;
     const bool bank_ok = r.cbuf_index == bank || (image_base_120_ && s == Stage::Compute && r.cbuf_index == kTextureHandleBank);
     int slot = -1;
@@ -5936,7 +5936,7 @@ Layout& Executor::layout(const ProgramStage* const* stages) {
         if (!stages[s]) continue;
         shaders[s] = &stages[s]->shader;
         ids[s] = stages[s]->spirv_id;
-        if (per_stage_keys_) {  // pipelines_por_etapa: uno por etapa del juego, como antes
+        if (per_stage_keys_) {  // pipelines_per_stage: uno por etapa del juego, como antes
             const uint64_t mine[3] = {reinterpret_cast<uint64_t>(stages[s]), st_.stage_generation[s], ids[s]};
             ids[s] = hash_bytes(mine, sizeof mine) | 1;
         }
@@ -6178,13 +6178,13 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     key.depth_stencil = st_.depth_stencil;
     key.color = st_.color;
     key.masks = st_.masks;
-    key.masks.masks &= rp_keep_masks_;  // pases_unidos: los adjuntos del pase que no son de los targets del juego, sin escribir
+    key.masks.masks &= rp_keep_masks_;  // merged_passes: los adjuntos del pase que no son de los targets del juego, sin escribir
     memcpy(key.blend, st_.blend, sizeof key.blend);
     key.color_count = color_count;
     key.samples = samples;
     // El geometry shader de la compactación cuesta mucho en el Adreno (traducido por Eden como passthrough emulado: el
     // pre-pase de profundidad se llevaba ~5,5 ms de GPU en las Ruinas) y lo que produce ya no se usa: sin él, el vertex
-    // shader va directo al fragment (mismas posiciones, la misma profundidad). sin_salto_gs: con él, como antes.
+    // shader va directo al fragment (mismas posiciones, la misma profundidad). no_gs_skip: con él, como antes.
     const ProgramStage* gs = st_.stages[static_cast<int>(Stage::Geometry)];
     const ProgramStage* vs_stage = st_.stages[static_cast<int>(Stage::Vertex)];
     const ProgramStage* fs_stage = st_.stages[static_cast<int>(Stage::Fragment)];
@@ -6230,7 +6230,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
         old.h = h;
         const uint64_t old_h = hash_bytes(&old, sizeof old);
         if (prof_count_stage_keys_) prof_stage_keys_.insert(old_h);
-        // <datos>/pipelines_por_etapa (en vivo): como antes, una pipeline por etapa del juego, sin compartirlas (ni
+        // <datos>/pipelines_per_stage (en vivo): como antes, una pipeline por etapa del juego, sin compartirlas (ni
         // precalentado: el hilo las deja por lo traducido).
         if (per_stage_keys_) h = old_h;
     }
@@ -6303,9 +6303,9 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     VkShaderModule modules[kStages] = {};
     uint64_t previous_for[kStages];  // (el previous_stores de la variante de cada etapa: ~0, la etapa tal cual)
     std::fill(std::begin(previous_for), std::end(previous_for), ~0ull);
-    // Los tipos de los atributos del vertex shader (vertex_input_types); <datos>/sin_atributos_enteros al arrancar: todo
+    // Los tipos de los atributos del vertex shader (vertex_input_types); <datos>/no_int_attribs al arrancar: todo
     // float, como antes
-    static const bool typed_inputs = !NVN_FLAG("sin_atributos_enteros");
+    static const bool typed_inputs = !NVN_FLAG("no_int_attribs");
     const uint64_t input_types = typed_inputs ? vertex_input_types(key, inputs) : 0;
     PipelineRecord rec;
     memset(&rec, 0, sizeof rec);
@@ -6393,8 +6393,8 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     // El driver no la quiere (el VK_ERROR_UNKNOWN del compilador de Qualcomm 512.8xx, el de otros): sus etapas vertex y
     // pixel traducidas con más prudencia, por niveles (safe_variant), hasta que una valga. La que vale queda como la de
     // esta pipeline y en el registro del precalentado, así que la partida siguiente ya la crea sin fallar antes.
-    // <datos>/sin_traduccion_segura: sin reintentos, como antes.
-    if (created != VK_SUCCESS && !NVN_FLAG("sin_traduccion_segura")) {
+    // <datos>/no_safe_translation: sin reintentos, como antes.
+    if (created != VK_SUCCESS && !NVN_FLAG("no_safe_translation")) {
         const int stages_to_redo[] = {static_cast<int>(Stage::Vertex), static_cast<int>(Stage::Fragment)};
         for (int level = 1; level <= kSafeLevels && created != VK_SUCCESS; level++) {
             VkShaderModule safe[kStages];
@@ -6424,7 +6424,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
                 rec = safe_rec;
                 for (int s : stages_to_redo) recordable &= !st_.stages[s] || (rec.module[s].a | rec.module[s].b) != 0;
                 if (logged++ < 24)
-                    NVN_LOG("pipeline rechazada por el driver: con la traducción prudente de nivel %d sí (vertex %016llx, "
+                    NVN_LOG("pipeline rejected by the driver: safe translation level %d works (vertex %016llx, "
                             "pixel %016llx)\n", level,
                             static_cast<unsigned long long>(vs ? vs->print : 0),
                             static_cast<unsigned long long>(st_.stages[static_cast<int>(Stage::Fragment)]
@@ -6443,12 +6443,12 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
                 void (*change)(PipelineKey&);
             };
             static const Probe probes[] = {
-                {"sin mezcla", [](PipelineKey& k) { k.color.blend_enable = 0; }},
-                {"sin profundidad ni stencil", [](PipelineKey& k) { memset(&k.depth_stencil, 0, sizeof k.depth_stencil); }},
-                {"sin alpha to coverage", [](PipelineKey& k) { k.alpha_to_coverage = 0; }},
-                {"rasterizado por defecto", [](PipelineKey& k) { memset(&k.polygon, 0, sizeof k.polygon); }},
-                {"sin primitive restart", [](PipelineKey& k) { k.primitive_restart = 0; }},
-                {"todo lo anterior", [](PipelineKey& k) {
+                {"no blending", [](PipelineKey& k) { k.color.blend_enable = 0; }},
+                {"no depth or stencil", [](PipelineKey& k) { memset(&k.depth_stencil, 0, sizeof k.depth_stencil); }},
+                {"no alpha to coverage", [](PipelineKey& k) { k.alpha_to_coverage = 0; }},
+                {"default rasterization", [](PipelineKey& k) { memset(&k.polygon, 0, sizeof k.polygon); }},
+                {"no primitive restart", [](PipelineKey& k) { k.primitive_restart = 0; }},
+                {"all of the above", [](PipelineKey& k) {
                      k.color.blend_enable = 0, k.alpha_to_coverage = 0, k.primitive_restart = 0;
                      memset(&k.depth_stencil, 0, sizeof k.depth_stencil);
                      memset(&k.polygon, 0, sizeof k.polygon);
@@ -6469,11 +6469,11 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
                 const size_t at = strlen(formats);
                 snprintf(formats + at, sizeof formats - at, "%s%u", k ? "/" : "", key.pass_colors[k]);
             }
-            NVN_LOG("pipeline rechazada, estado: %u colores (formatos %s, profundidad %u), mezcla 0x%x, %u muestras, "
-                    "profundidad %d/%d, stencil %d; sale %s\n", key.color_count, formats, key.pass_depth,
+            NVN_LOG("rejected pipeline, state: %u colors (formats %s, depth %u), blend 0x%x, %u samples, "
+                    "depth %d/%d, stencil %d; works with %s\n", key.color_count, formats, key.pass_depth,
                     static_cast<unsigned>(key.color.blend_enable), key.samples, key.depth_stencil.depth_test,
                     key.depth_stencil.depth_write, key.depth_stencil.stencil_test,
-                    passes.empty() ? "con ninguno de los cambios (no es el estado: los shaders o su enlace)" : passes.c_str());
+                    passes.empty() ? "none of the changes (not the state: the shaders or how they link)" : passes.c_str());
         }
     }
     if (VkResult r = created; r != VK_SUCCESS)
@@ -6777,10 +6777,10 @@ void Executor::draw(const cmd::Draw& in) {
         return;
     }
     maybe_split();
-    if (shadow_pass() && NVN_FLAG("sin_sombras")) {
+    if (shadow_pass() && NVN_FLAG("no_shadows")) {
         if (!shadow_skip_logged_) {
             shadow_skip_logged_ = true;
-            NVN_LOG("sombras apagadas (<datos>/sin_sombras): sin los draws de los mapas de sombra (%ux%u, %u capas)\n",
+            NVN_LOG("shadows off (<datos>/no_shadows): skipping shadow map draws (%ux%u, %u layers)\n",
                     st_.rt.depth->desc.width, st_.rt.depth->desc.height, st_.rt.depth->layers);
         }
         return;
@@ -6954,8 +6954,8 @@ void Executor::draw(const cmd::Draw& in) {
         const bool dump_code = gpu_counted || traced_draws_ <= 40 || half_res ||
                                (from && *from && traced_draws_ >= atoi(from) && traced_draws_ < atoi(from) + 40) ||
                                traced_in_list("NIER_TRAZA_SHADERS");  // DEPURACIÓN: "a,b,c": los shaders de esos draws
-        // <datos>/traza_completa: esta vez con shaders y render targets aunque NIER_TRAZA_LIGERA esté puesta.
-        const char* light = NVN_FLAG("traza_completa") ? nullptr : getenv("NIER_TRAZA_LIGERA");
+        // <datos>/full_trace: esta vez con shaders y render targets aunque NIER_TRAZA_LIGERA esté puesta.
+        const char* light = NVN_FLAG("full_trace") ? nullptr : getenv("NIER_TRAZA_LIGERA");
         for (int st = 0; st < kStages && dump_code && (gpu_counted || !(light && *light)); st++)  // escribir en la SD es lento: solo unos pocos
             if (st_.stages[st])
                 dump_stage_code(*st_.stages[st], "traza" + std::to_string(traced_draws_) + "_" +
@@ -7011,7 +7011,7 @@ void Executor::draw(const cmd::Draw& in) {
     static std::vector<Bound> textures;  // se reutiliza entre draws (draw() no se anida): sin reservas por draw
     textures.clear();
     // Para la barrera aplazada (nvn_barrier): ¿escribe storage este draw? ¿muestrea un adjunto del pase abierto?
-    // writes_target (pases_unidos): escribe como imagen un adjunto del pase (uno de los añadidos: el juego no lo tiene de
+    // writes_target (merged_passes): escribe como imagen un adjunto del pase (uno de los añadidos: el juego no lo tiene de
     // render target aquí); el pase se corta antes, si no lo que guardara al final pisaría lo escrito.
     bool writes_storage = false, samples_target = false, writes_target = false;
     for (int s = 0; s < kStages; s++) {
@@ -7030,7 +7030,7 @@ void Executor::draw(const cmd::Draw& in) {
             if (b.tex) apply_texel_writes(*b.tex);
             // Muestrear un adjunto del pase abierto: con una barrera aplazada o con el pase que sigue tras volver a
             // enlazar los mismos targets (rt_igual), el pase se corta, como cortaba antes el SetRenderTargets.
-            // pases_unidos: el pase sigue tras cambiar de targets, como con rt_igual.
+            // merged_passes: el pase sigue tras cambiar de targets, como con rt_igual.
             if (b.tex && in_render_pass_ && (pending_barrier_ || opt_.rt_igual || merge_passes_))
                 samples_target = samples_target || (opt_.solo_escritos ? is_written_pass_target(b.tex) : is_pass_target(b.tex));
             if (merge_passes_ && b.tex && in_render_pass_ && r.kind == Resource::Image && r.is_written && is_pass_target(b.tex))
@@ -7041,7 +7041,7 @@ void Executor::draw(const cmd::Draw& in) {
                     end_render_pass();
                     st_.rt_dirty = true;
                     upload(*b.tex);
-                    if (NVN_FLAG("revisar_astc") && b.tex->vk_format >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK &&
+                    if (NVN_FLAG("check_astc") && b.tex->vk_format >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK &&
                         b.tex->vk_format <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK) {
                         check_astc(*b.tex);
                         begin();  // check_astc envió lo grabado: se sigue en un command buffer nuevo
@@ -7329,7 +7329,7 @@ void Executor::draw(const cmd::Draw& in) {
             } else if (const auto* hit = from_game ? copied_.find(range.address, size) : nullptr) {
                 push_buffer(hit->first, hit->second, size);  // ya copiado en este envío
             } else {
-                if (from_game && size >= (4u << 20) && NVN_FLAG("medir_cambios")) measure_changes(range.address, range.size);
+                if (from_game && size >= (4u << 20) && NVN_FLAG("measure_changes")) measure_changes(range.address, range.size);
                 Staging::Alloc a = staging_->alloc(size, r.kind == Resource::UniformBuffer ? ubo_align : ssbo_align);
                 if (!a.data) return;
                 if (src && range.size)
@@ -7682,9 +7682,9 @@ void Executor::draw(const cmd::Draw& in) {
     prof_split(5, prof_v);
 
     prof_mark(4, prof_t);
-    // DEPURACIÓN (<datos>/perfil_gpu_draws con perfil_gpu): en los pases sin color (sombras), una marca por draw con sus
+    // DEPURACIÓN (<datos>/profile_gpu_draws con profile_gpu): en los pases sin color (sombras), una marca por draw con sus
     // shaders, para ver cuál cuesta.
-    if (prof_pool_ && prof_frame_ == frame_ && !prof_closed_ && st_.rt.count == 0 && NVN_FLAG("perfil_gpu_draws")) {
+    if (prof_pool_ && prof_frame_ == frame_ && !prof_closed_ && st_.rt.count == 0 && NVN_FLAG("profile_gpu_draws")) {
         const ProgramStage* vsp = st_.stages[static_cast<int>(Stage::Vertex)];
         const ProgramStage* fsp = st_.stages[static_cast<int>(Stage::Fragment)];
         char label[96];
@@ -7791,7 +7791,7 @@ void Executor::draw(const cmd::Draw& in) {
         dump_depth(*st_.rt.depth, "tras" + std::to_string(traced_draws_) + "_capa" + std::to_string(layer), layer);
         begin();  // dump_depth envió lo grabado hasta aquí
     }
-    if (draws_ % 5000 == 0 && NVN_FLAG("registro"))
+    if (draws_ % 5000 == 0 && NVN_FLAG("verbose_log"))
         NVN_LOG("%llu draws (%llu sin dibujar), %zu pipelines\n", static_cast<unsigned long long>(draws_),
                 static_cast<unsigned long long>(skipped_draws_), pipelines_.size());
 }
@@ -7807,7 +7807,7 @@ VkPipeline Executor::compute_pipeline(const ProgramStage& cs, Layout& l) {
     key.stages[S] = cs.spirv_id;
     key.topology = kComputeTopology;
     uint64_t h = hash_bytes(&key, sizeof key);
-    if (per_stage_keys_) {  // pipelines_por_etapa: como antes (etapa, generación)
+    if (per_stage_keys_) {  // pipelines_per_stage: como antes (etapa, generación)
         const uint64_t mine[3] = {reinterpret_cast<uint64_t>(&cs), st_.stage_generation[S], h};
         h = hash_bytes(mine, sizeof mine);
     }
@@ -8097,7 +8097,7 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
     return m;
 }
 
-// <datos>/espejos_al_empezar: los espejos que se leyeron en el último frame se revisan (y se suben sus páginas cambiadas)
+// <datos>/mirrors_at_start: los espejos que se leyeron en el último frame se revisan (y se suben sus páginas cambiadas)
 // al empezar el envío, fuera de todo pase y con dos barreras completas para todos. Sin esto, el primer draw de cada envío
 // que lee uno (los de 4 MB se reescriben enteros cada frame: ~18 MB/frame en una cacería) cierra el pase abierto (en la
 // escena: el tiler guarda y vuelve a cargar sus adjuntos) y pone dos barreras completas por espejo. Lo que el juego
@@ -8118,7 +8118,7 @@ void Executor::preload_mirrors() {
 }
 
 bool Executor::pool_range(uint64_t address, uint64_t* start, uint64_t* size) {
-    const bool memo = !NVN_FLAG("sin_memo_pools");
+    const bool memo = !NVN_FLAG("no_pool_memo");
     const uint64_t generation = g_memory_pools.generation();  // antes de recorrer: lo que cambie durante, invalida el memo
     if (memo && generation == pool_memo_generation_)
         for (const PoolMemo& m : pool_memo_)
@@ -8298,7 +8298,7 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
         keep_at.push_back(it->first);
         ++it;
     }
-    if (for_read && straddles) return nullptr;  // ese lector ve la memoria del juego (vigilar_nan lo dice: note_partial_read)
+    if (for_read && straddles) return nullptr;  // ese lector ve la memoria del juego (watch_nan lo dice: note_partial_read)
     if (keep_at.empty()) return nullptr;
     std::optional<LoadTimer> timer;  // la de una escritura ya la mide make_overlay
     if (for_read) timer.emplace(*this, kLdOverlay, size);
@@ -8315,7 +8315,7 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
     std::vector<Part> parts;
     uint8_t writers = 0;
     uint64_t written = 0;
-    Provenance merged_prov;  // DEPURACIÓN (vigilar_nan): la procedencia de las partes, sumada
+    Provenance merged_prov;  // DEPURACIÓN (watch_nan): la procedencia de las partes, sumada
     for (auto it = first_overlay_touching(address); it != overlays_.end() && it->first < end;) {
         const Overlay& o = it->second;
         const bool part = std::find(keep_at.begin(), keep_at.end(), it->first) != keep_at.end();
@@ -8391,7 +8391,7 @@ const Executor::Overlay* Executor::make_overlay(uint64_t address, uint64_t size,
     if (may_copy)
         if (const Overlay* o = merge_overlays(address, size, offset, false)) return o;
     // Un rango nuevo que solape otros los sustituye (sin unión: nada de la GPU dentro, solo solapados en parte, sin sitio,
-    // con el pase abierto o sin_conservar_overlays).
+    // con el pase abierto o no_keep_overlays).
     {  // DEPURACIÓN: lo que la GPU escribió en los sustituidos se pierde (el nuevo sale de la memoria del juego)
         static int logged = 0;
         auto it = overlays_.upper_bound(address);
@@ -8426,7 +8426,7 @@ const Executor::Overlay* Executor::make_overlay(uint64_t address, uint64_t size,
     const VkDeviceSize skew = address & 255;
     std::unique_lock wb_lock(wb_mutex_);  // sin una entrega a medias en lo que se copia
     memcpy(a.data + skew, reinterpret_cast<const void*>(address), size);
-    // La referencia para la devolución (copia de lo de la CPU y vigilancia de sus páginas) solo con con_devolver: sin
+    // La referencia para la devolución (copia de lo de la CPU y vigilancia de sus páginas) solo con use_return: sin
     // ella eran un memcpy y una reserva del tamaño del overlay y un mprotect de sus páginas por overlay nuevo, y luego
     // las escrituras de la CPU del juego en esas páginas saltaban (SIGSEGV) para nada. Los overlays creados con la
     // devolución apagada no se devuelven hasta que se rehagan.
@@ -8550,7 +8550,7 @@ bool Executor::trace_on_print(uint64_t print) {
     if (!trace_prints_loaded_) {  // una vez: la lista se lee al primer dispatch con el fichero puesto
         trace_prints_loaded_ = true;
         const char* data = getenv("NIER_DATA");
-        if (FILE* f = fopen((std::string(data ? data : ".") + "/trazar_huella").c_str(), "r")) {
+        if (FILE* f = fopen((std::string(data ? data : ".") + "/trace_print").c_str(), "r")) {
             char line[64];
             while (fgets(line, sizeof line, f)) {
                 if (strstr(line, "completa")) trace_prints_full_ = true;
@@ -8558,7 +8558,7 @@ bool Executor::trace_on_print(uint64_t print) {
             }
             fclose(f);
         }
-        NVN_LOG("trazar_huella: %zu huellas%s\n", trace_prints_.size(), trace_prints_full_ ? ", traza completa" : "");
+        NVN_LOG("trace_print: %zu huellas%s\n", trace_prints_.size(), trace_prints_full_ ? ", traza completa" : "");
     }
     for (size_t k = 0; k < trace_prints_.size(); k++)
         if (trace_prints_[k] == print) {
@@ -8572,20 +8572,20 @@ bool Executor::read_after_size(uint64_t size) {
     if (!read_after_loaded_) {  // una vez: la lista se lee al primer dispatch con el fichero puesto
         read_after_loaded_ = true;
         const char* data = getenv("NIER_DATA");
-        if (FILE* f = fopen((std::string(data ? data : ".") + "/leer_tras_dispatch").c_str(), "r")) {
+        if (FILE* f = fopen((std::string(data ? data : ".") + "/read_after_dispatch").c_str(), "r")) {
             char line[64];
             while (fgets(line, sizeof line, f))
                 if (const uint64_t x = strtoull(line, nullptr, 10)) read_after_sizes_.push_back(x);
             fclose(f);
         }
-        NVN_LOG("leer_tras_dispatch: %zu tamaños\n", read_after_sizes_.size());
+        NVN_LOG("read_after_dispatch: %zu tamaños\n", read_after_sizes_.size());
     }
     for (uint64_t s : read_after_sizes_)
         if (s == size) return true;
     return false;
 }
 
-// DEPURACIÓN (leer_tras_dispatch): el compute que se acaba de grabar escribió los overlays de `ranges`. Se manda lo
+// DEPURACIÓN (read_after_dispatch): el compute que se acaba de grabar escribió los overlays de `ranges`. Se manda lo
 // grabado, se espera a la GPU y se registra lo que dejó en ellos y lo que leyó (inputs, tal como lo vio la GPU: de un
 // overlay, lo que tiene ahora; si no, la memoria del juego, que es lo que se copió al grabar). Luego se sigue en otro
 // envío, como maybe_split. Cada una para la GPU: con tope.
@@ -8717,7 +8717,7 @@ void Executor::read_after_dispatch(const ProgramStage& cs, uint32_t x, uint32_t 
     begin();
 }
 
-// DEPURACIÓN (leer_tras_dispatch): copia [b.offset, b.offset + size) del buffer de la GPU al staging, espera y lo escribe
+// DEPURACIÓN (read_after_dispatch): copia [b.offset, b.offset + size) del buffer de la GPU al staging, espera y lo escribe
 // en `file`. Por trozos que caben en el staging.
 void Executor::dump_gpu_buffer(const VkDescriptorBufferInfo& b, uint64_t size, const std::string& file) {
     FILE* f = fopen(file.c_str(), "wb");
@@ -8763,7 +8763,7 @@ const std::pair<const uint64_t, Executor::Overlay>* Executor::partial_overlay(ui
     return &*it;
 }
 
-// DEPURACIÓN (vigilar_nan): una lectura de [address, address + size) desde la memoria del juego o un espejo cuando la
+// DEPURACIÓN (watch_nan): una lectura de [address, address + size) desde la memoria del juego o un espejo cuando la
 // GPU escribió parte de ese rango en un overlay (lo de la GPU no se ve). Una vez por dirección, como mucho 64.
 void Executor::note_partial_read(const char* who, uint64_t address, uint64_t size) {
     const auto* part = partial_overlay(address, size);
@@ -8777,7 +8777,7 @@ void Executor::note_partial_read(const char* who, uint64_t address, uint64_t siz
             pv == provenance_.end() ? "de antes de vigilar" : pv->second.created.c_str());
 }
 
-// DEPURACIÓN (vigilar_nan): la primera vez que un draw lee posiciones float32 de un overlay que la GPU ya terminó de
+// DEPURACIÓN (watch_nan): la primera vez que un draw lee posiciones float32 de un overlay que la GPU ya terminó de
 // escribir: ¿NaN/Inf? Con quién lo creó y lo escribió, y la memoria del juego del mismo rango (si es igual, la GPU no
 // escribió ahí: el overlay es la copia que hizo make_overlay al crearlo).
 void Executor::check_overlay_vertices(uint64_t address, uint64_t size, uint32_t stride, uint32_t format, uint32_t stream) {
@@ -8825,7 +8825,7 @@ void Executor::check_overlay_vertices(uint64_t address, uint64_t size, uint32_t 
             static_cast<unsigned long long>(p.cpu_patches), static_cast<unsigned long long>(p.patch_frame));
 }
 
-// DEPURACIÓN (vigilar_nan): se tira un overlay con lo escrito por la GPU (un compute, un draw o una copia en la GPU):
+// DEPURACIÓN (watch_nan): se tira un overlay con lo escrito por la GPU (un compute, un draw o una copia en la GPU):
 // por qué (erase_reason) y qué lo pidió, sus primeras palabras y su procedencia. Si luego se lee, sale de la memoria
 // del juego: así se ve si la cara del cazador se calcula bien al cargar y se pierde después. Con tope.
 void Executor::note_erase(uint64_t start, const Overlay& o) {
@@ -8858,7 +8858,7 @@ void Executor::wb_reference(uint64_t address, uint64_t size) {
     w.generation = ++wb_generation_;
     w.base.assign(reinterpret_cast<const uint8_t*>(address), reinterpret_cast<const uint8_t*>(address) + size);
     w.owned.assign((size + kOwnChunk - 1) / kOwnChunk, 0);
-    w.watched = !NVN_FLAG("devolver_por_valor") && nnsdk::watch::watchable(address, size);
+    w.watched = !NVN_FLAG("return_by_value") && nnsdk::watch::watchable(address, size);
     w.keys.clear();
     w.orphan = false;
     if (w.watched) nnsdk::watch::collect(address, size, w.keys, nullptr);  // desde aquí, lo que escriba la CPU
@@ -8867,7 +8867,7 @@ void Executor::wb_reference(uint64_t address, uint64_t size) {
 // Antes se tiraba el overlay entero y los lectores volvían a la memoria del juego, que nunca tuvo lo de la GPU: en la
 // aldea (traza t6) el juego copia 80 bytes en mitad de los dos buffers de 10 MB de argumentos de multi-draw cada frame;
 // se perdían sus argumentos, se rehacían (10 MB copiados cada uno) y la arena se llenaba antes. Ahora el rango se copia
-// también al overlay y el overlay sigue mandando. <datos>/sin_parchear_overlays: como antes.
+// también al overlay y el overlay sigue mandando. <datos>/no_patch_overlays: como antes.
 std::map<uint64_t, Executor::Overlay>::iterator Executor::overlay_containing(uint64_t address, uint64_t size) {
     if (overlays_.empty() || !address || !size || !overlay_filter_[overlay_slot(address >> 16)]) return overlays_.end();
     if (!patch_overlays_) return overlays_.end();
@@ -8959,7 +8959,7 @@ void Executor::dispatch(const cmd::Dispatch& v) {
         full_trace_ = trace_prints_full_;
         traced_draws_ = 0;
         memset(trace_counts_, 0, sizeof trace_counts_);
-        NVN_LOG("traza del frame %llu desde el dispatch %llu (compute %016llx, de trazar_huella)\n",
+        NVN_LOG("traza del frame %llu desde el dispatch %llu (compute %016llx, de trace_print)\n",
                 static_cast<unsigned long long>(frame_), static_cast<unsigned long long>(dispatches_),
                 static_cast<unsigned long long>(cs->print));
     }
@@ -9028,7 +9028,7 @@ void Executor::dispatch(const cmd::Dispatch& v) {
         dump_stage_code(*cs, name);
     }
     // Las uniones de overlays, antes de los descriptores (ver prepare_dispatch_overlays). Tras descartar los dispatch que
-    // no se ejecutan (sin overlays para ellos) y con writer_ ya puesto (vigilar_nan). Los argumentos indirectos ya se
+    // no se ejecutan (sin overlays para ellos) y con writer_ ya puesto (watch_nan). Los argumentos indirectos ya se
     // miraron: si una unión se traga su overlay, su hueco sigue intacto hasta que acabe este envío, y se leen antes.
     prepare_dispatch_overlays();
     auto skipped = [&](const char* why) {  // DEPURACIÓN
@@ -9111,7 +9111,7 @@ void Executor::dispatch(const cmd::Dispatch& v) {
     uint8_t driver[kComputeDriverSize] = {};
     for (int k = 0; k < kMaxTextures && kTextureHandleBase + 8 * k + 8 <= kComputeDriverSize; k++)
         memcpy(driver + kTextureHandleBase + 8 * k, &sb.textures[k], 8);
-    const bool ube = !NVN_FLAG("sin_ube"), compute_c2 = !NVN_FLAG("sin_c2_compute");
+    const bool ube = !NVN_FLAG("no_ube"), compute_c2 = !NVN_FLAG("no_c2_compute");
     // Handles de imagen (c2[0x120 + 8·i]: los compute los cargan para sus SUST/SULD; la imagen se resuelve por orden en
     // resolve_image) y los UBE (dirección y tamaño, como los storage buffers de 0x310).
     for (int k = 0; compute_c2 && k < kMaxImages && kComputeImageHandleBase + 8 * k + 8 <= kTextureHandleBase; k++)
@@ -9145,7 +9145,7 @@ void Executor::dispatch(const cmd::Dispatch& v) {
     const VkPhysicalDeviceLimits& limits = vk()->props.limits;
     const VkDeviceSize ubo_align = std::max<VkDeviceSize>(limits.minUniformBufferOffsetAlignment, 16);
     const VkDeviceSize ssbo_align = std::max<VkDeviceSize>(limits.minStorageBufferOffsetAlignment, 16);
-    std::vector<std::pair<uint64_t, uint64_t>> read_ranges;  // DEPURACIÓN (leer_tras_dispatch): overlays a leer
+    std::vector<std::pair<uint64_t, uint64_t>> read_ranges;  // DEPURACIÓN (read_after_dispatch): overlays a leer
     std::vector<ReadInput> read_inputs;
     for (const Resource& r : cs->shader.resources) {
         if (r.kind != Resource::UniformBuffer && r.kind != Resource::StorageBuffer) continue;
@@ -9215,7 +9215,7 @@ void Executor::dispatch(const cmd::Dispatch& v) {
                                                                                   : nullptr;
         if (vigilar_nan_ && !ov && r.kind == Resource::StorageBuffer && range.address && range.size)  // DEPURACIÓN
             note_partial_read(r.is_written ? "un compute (SSBO escrito)" : "un compute", range.address, size);
-        const char* from = "staging";  // DEPURACIÓN (leer_tras_dispatch)
+        const char* from = "staging";  // DEPURACIÓN (read_after_dispatch)
         if (ov) {
             from = "overlay";
             buffers.push_back({ov->buffer, ov_offset, size});
@@ -9239,7 +9239,7 @@ void Executor::dispatch(const cmd::Dispatch& v) {
                 writebacks.push_back({a.data, range.address, static_cast<size_t>(size)});
             buffers.push_back({a.buffer, a.offset, size});
         }
-        if (read_after_) {  // DEPURACIÓN (leer_tras_dispatch): lo que recibe de verdad, para registrarlo tras ejecutarse
+        if (read_after_) {  // DEPURACIÓN (read_after_dispatch): lo que recibe de verdad, para registrarlo tras ejecutarse
             char b[32];
             const bool driver_bank = r.cbuf_index == kComputeDriverBank;
             if (r.kind == Resource::UniformBuffer)
@@ -9329,13 +9329,13 @@ bool Executor::blit(Texture& t, const VkRect2D& crop, VkImage dst, VkFormat form
     const int32_t x0 = std::clamp<int32_t>(crop.offset.x, 0, t.desc.width), y0 = std::clamp<int32_t>(crop.offset.y, 0, t.desc.height);
     const int32_t x1 = crop.extent.width ? std::min<int32_t>(x0 + static_cast<int32_t>(crop.extent.width), t.desc.width) : t.desc.width;
     const int32_t y1 = crop.extent.height ? std::min<int32_t>(y0 + static_cast<int32_t>(crop.extent.height), t.desc.height) : t.desc.height;
-    // FSR 1: más nítido que el blit lineal (sin_fsr: el blit). Escala una zona que empieza en 0,0.
+    // FSR 1: más nítido que el blit lineal (no_fsr: el blit). Escala una zona que empieza en 0,0.
     // Guarda: el FSR cuesta ~4,4 ms de GPU por frame (en las ventanas limitadas por la GPU, 1000/fps menos la GPU del
     // frame da 4,4-4,8 ms de mediana en tf1, pk1, st1 y tk2; en cap1 el campamento a 27,2 fps con 32,6 ms de frame).
     // Con el frame del juego por encima de ~28,5 ms ya no caben los 33,3 ms: entonces el blit lineal (~0,5 ms), con
-    // histéresis para no cambiar de nitidez a cada frame. <datos>/fsr_siempre: FSR siempre, como antes.
+    // histéresis para no cambiar de nitidez a cada frame. <datos>/fsr_always: FSR siempre, como antes.
     bool fsr_ok = true;
-    if (!NVN_FLAG("fsr_siempre")) {
+    if (!NVN_FLAG("fsr_always")) {
         const int64_t gpu = frame_gpu_ns_.load(std::memory_order_relaxed);
         // (por lo que dura el frame ahora: 30 y 60 con sus medidas; otro límite del menú, dejando sitio a los ~4,8 ms del FSR)
         const int64_t period = frame_period_ns();
@@ -9808,7 +9808,7 @@ void Executor::load_pipeline_cache() {
         if (vkCreatePipelineCache(c->device, &ci, nullptr, &pipeline_cache_) != VK_SUCCESS) pipeline_cache_ = VK_NULL_HANDLE;
     }
     NVN_LOG("caché de pipelines: %zu KB leídos de la SD\n", data.size() >> 10);
-    if (!NVN_FLAG("sin_precalentado")) warm_cache_data_ = std::move(data);  // la caché del precalentado empieza igual
+    if (!NVN_FLAG("no_warmup")) warm_cache_data_ = std::move(data);  // la caché del precalentado empieza igual
 }
 
 // En otro hilo (escribir en la SD es lento) y solo cuando lleva un rato sin crearse ninguno. La caché la
@@ -9819,7 +9819,7 @@ void Executor::load_pipeline_cache() {
 // tardaba 4-7 s en vez de 0,6) y mientras todo lo que la toca esperaba (el log, los interruptores, los paks): de 30 a
 // 1-3 fps con el juego quieto, con 0 pipelines y 0 traducciones nuevas en esos frames. Ahora: 4 s sin pipelines nuevas
 // y como mucho un guardado cada 3 min (cada 30 s si hay 300 nuevas: tras cambiar los shaders salen miles).
-// <datos>/pipelines_guardado_rapido: como antes.
+// <datos>/fast_pipeline_save: como antes.
 // El hilo: nunca dos a la vez (cache_saving_). Lee los datos del driver con prioridad normal (con el cerrojo compartido:
 // con menos, la mezcla del precalentado podría quedarse esperando a un hilo que no corre, y el ejecutor detrás de ella)
 // y escribe el fichero con la prioridad más baja y a ritmo (write_file_paced). El log da cada parte por
@@ -9831,7 +9831,7 @@ void Executor::save_pipeline_cache() {
         last_pipeline_frame_ = frame_;
     }
     if (!pipeline_cache_ || pipelines_created_ == pipelines_saved_) return;
-    const bool quick = NVN_FLAG("pipelines_guardado_rapido");
+    const bool quick = NVN_FLAG("fast_pipeline_save");
     if (frame_ < last_pipeline_frame_ + (quick ? 60 : 120)) return;
     const auto now = std::chrono::steady_clock::now();
     const uint64_t fresh = pipelines_created_ - pipelines_saved_;
@@ -9880,7 +9880,7 @@ void Executor::save_pipeline_cache() {
 // driver la tiene, 10-500 ms si no) y que al acabar se mezcla en la del ejecutor. El ejecutor las toma cuando el juego las
 // pide (warm_take) en vez de crearlas en NvnSubmit con el frame parado. Partida del 4-11 sin esto: 9354 pipelines, 20,6 s
 // creándolas en el driver (2,8 s en las que el driver ya tenía), más 5,7 s de traducciones.
-// <datos>/sin_precalentado al arrancar: no se crea ninguna (se siguen apuntando).
+// <datos>/no_warmup al arrancar: no se crea ninguna (se siguen apuntando).
 namespace {
 constexpr char kRecordsMagic[8] = {'N', 'V', 'P', 'I', 'P', 'E', 'S', '1'};
 constexpr size_t kRecordsHeader = 32;
@@ -9931,7 +9931,7 @@ void Executor::prefetch_compute(const ProgramStage& cs) {
     memset(&key, 0, sizeof key);
     key.stages[S] = cs.spirv_id;
     key.topology = kComputeTopology;
-    const uint64_t h = hash_bytes(&key, sizeof key);  // la de compute_pipeline (sin pipelines_por_etapa ni stripped)
+    const uint64_t h = hash_bytes(&key, sizeof key);  // la de compute_pipeline (sin pipelines_per_stage ni stripped)
     {
         std::lock_guard lock(warm_mutex_);
         if (warm_done_.count(h) || warm_ready_.count(h)) return;
@@ -9974,10 +9974,7 @@ void Executor::async_loop() {
             nvnshader::Translated& t = translated[s];
             ok = cached_translation(job.rec.module[s], t) && spirv_identity(t) != 0;
             if (!ok) break;
-            VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-            info.codeSize = t.spirv.size() * sizeof(uint32_t);
-            info.pCode = t.spirv.data();
-            ok = vkCreateShaderModule(device, &info, nullptr, &modules[s]) == VK_SUCCESS;
+            ok = create_shader_module(device, t.spirv, &modules[s]) == VK_SUCCESS;
         }
         VkPipeline p = VK_NULL_HANDLE;
         VkResult r = VK_ERROR_INITIALIZATION_FAILED;
@@ -10108,7 +10105,7 @@ void Executor::warm_up() {
     const auto start = std::chrono::steady_clock::now();
     std::vector<PipelineRecord> records = load_pipeline_records();
     std::vector<uint8_t> initial = std::move(warm_cache_data_);
-    if (NVN_FLAG("sin_precalentado") || records.empty()) return;
+    if (NVN_FLAG("no_warmup") || records.empty()) return;
     if (!shader_cache_ready(60000)) {
         NVN_LOG("precalentado: sin la caché de SPIR-V, no se crea nada\n");
         return;
@@ -10147,19 +10144,13 @@ void Executor::warm_up() {
                 r.meta.spirv.clear();
                 r.meta.spirv.shrink_to_fit();
                 if (module) {
-                    VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-                    info.codeSize = t.spirv.size() * sizeof(uint32_t);
-                    info.pCode = t.spirv.data();
-                    if (vkCreateShaderModule(device, &info, nullptr, &r.module) != VK_SUCCESS) r.module = VK_NULL_HANDLE;
+                    if (create_shader_module(device, t.spirv, &r.module) != VK_SUCCESS) r.module = VK_NULL_HANDLE;
                 }
             }
         } else if (r.ok && module && !r.module) {  // primero como base, ahora como módulo
             nvnshader::Translated t;
             if (cached_translation(key, t)) {
-                VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-                info.codeSize = t.spirv.size() * sizeof(uint32_t);
-                info.pCode = t.spirv.data();
-                if (vkCreateShaderModule(device, &info, nullptr, &r.module) != VK_SUCCESS) r.module = VK_NULL_HANDLE;
+                if (create_shader_module(device, t.spirv, &r.module) != VK_SUCCESS) r.module = VK_NULL_HANDLE;
             }
         }
         return r.ok && (!module || r.module) ? &r : nullptr;
@@ -10255,13 +10246,13 @@ void Executor::warm_up() {
 }
 
 void Executor::profile_frame() {
-    // DEPURACIÓN: <datos>/perfil_30 lo saca cada 30 frames (con el juego a pocos fps, 300 son minutos).
-    const int period = NVN_FLAG("perfil_30") ? 30 : 300;
+    // DEPURACIÓN: <datos>/profile_30 lo saca cada 30 frames (con el juego a pocos fps, 300 son minutos).
+    const int period = NVN_FLAG("profile_30") ? 30 : 300;
     if (frame_ % period) return;
     std::lock_guard lock(g_mutex);
-    // Sin <datos>/registro, solo lo que hace falta (guardar la caché de pipelines): el perfil lee /proc, recorre la
+    // Sin <datos>/verbose_log, solo lo que hace falta (guardar la caché de pipelines): el perfil lee /proc, recorre la
     // memoria y escribe una docena de líneas en la SD cada 10 s.
-    if (!NVN_FLAG("registro")) {
+    if (!NVN_FLAG("verbose_log")) {
         save_pipeline_cache();
         save_pipeline_records();
         load_period_ = LoadProf{};
@@ -10353,7 +10344,7 @@ void Executor::profile_frame() {
                 static_cast<unsigned long long>(lost), lost_bytes / 1024.0, reasons.c_str(),
                 static_cast<unsigned long long>(prof_merged_), static_cast<unsigned long long>(prof_merged_parts_),
                 prof_merged_bytes_ / 1024.0, static_cast<unsigned long long>(prof_partial_patched_),
-                !keep_gpu_overlays_ ? " (sin_conservar_overlays)" : !merge_reads_ ? " (sin_unir_lecturas)" : "");
+                !keep_gpu_overlays_ ? " (no_keep_overlays)" : !merge_reads_ ? " (no_merge_reads)" : "");
         prof_lost_.clear();
         prof_merged_ = prof_merged_parts_ = prof_merged_bytes_ = prof_partial_patched_ = 0;
     }
@@ -10520,11 +10511,11 @@ void Executor::profile_frame() {
             list += b;
         }
         NVN_LOG("perfil barreras (por frame): %.1f completas, %.1f sin nada grabado desde la anterior, %.1f solo tras cerrar un "
-                "pase; %.1f saltadas (barreras_justas%s)\n", prof_full_barriers_ / double(period),
+                "pase; %.1f saltadas (tight_barriers%s)\n", prof_full_barriers_ / double(period),
                 prof_barriers_redundant_ / double(period), prof_barriers_after_pass_ / double(period),
                 prof_barriers_skipped_ / double(period), pass_end_is_barrier_ ? " y _pase" : "");
         prof_full_barriers_ = prof_barriers_redundant_ = prof_barriers_after_pass_ = prof_barriers_skipped_ = 0;
-        NVN_LOG("perfil pases_unidos (por frame): %.1f pases con adjuntos de más, %.1f cambios de targets sin cortar%s\n",
+        NVN_LOG("perfil merged_passes (por frame): %.1f pases con adjuntos de más, %.1f cambios de targets sin cortar%s\n",
                 prof_passes_merged_ / double(period), prof_rt_merged_ / double(period), merge_passes_ ? "" : " (apagado)");
         prof_passes_merged_ = prof_rt_merged_ = 0;
         NVN_LOG("perfil cortes por motivo (por frame, mismo framebuffer + cabían juntos): %.1f + %.1f:%s\n",
@@ -10584,8 +10575,8 @@ void Executor::dump_frame(Texture* presented) {
         }
         traced_gpu_draws_.clear();
         prepass_args_.clear();
-        // DEPURACIÓN: solo la imagen final y el log, salvo con <datos>/traza_completa
-        const char* light = NVN_FLAG("traza_completa") ? nullptr : getenv("NIER_TRAZA_LIGERA");
+        // DEPURACIÓN: solo la imagen final y el log, salvo con <datos>/full_trace
+        const char* light = NVN_FLAG("full_trace") ? nullptr : getenv("NIER_TRAZA_LIGERA");
         for (size_t k = 0; k < frame_targets_.size() && k < 32 && (full_trace_ || !(light && *light)); k++)
             dump(*frame_targets_[k], "f" + f + "_rt" + std::to_string(k));
     }

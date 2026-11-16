@@ -522,7 +522,7 @@ Result allocate_tls_slot(TlsSlot* slot, TlsDestructor destructor, bool sdk) {
 // máscara y no un núcleo fijo, porque core_ctl puede aislar alguno. Los demás hilos no se tocan, salvo que un
 // hilo nuevo hereda la máscara de quien lo crea: los de nn::os que no son críticos vuelven a la completa al
 // arrancar, y los demás en la revisión de cada segundo. Android rehace la afinidad al mover el proceso de
-// cpuset (segundo plano y vuelta): refresh_critical_threads la vuelve a poner. Interruptor sin_afinidad:
+// cpuset (segundo plano y vuelta): refresh_critical_threads la vuelve a poner. Interruptor no_affinity:
 // máscara completa para los hilos críticos; lo mira refresh_critical_threads como mucho una vez por segundo,
 // desde el hilo que presenta, y lo aplica a todos (sched_setaffinity admite el tid de otro hilo del proceso).
 struct CpuMasks {
@@ -568,7 +568,7 @@ const CpuMasks& cpu_masks() {
     return masks;
 }
 
-bool affinity_off() { return NVN_FLAG("sin_afinidad"); }
+bool affinity_off() { return NVN_FLAG("no_affinity"); }
 
 struct CriticalThread {
     pid_t tid;
@@ -611,7 +611,7 @@ void pin_current_thread() {
     g_critical.push_back(t);
     g_any_critical = m.usable;
     printf("[nnsdk] hilo crítico '%s' (tid %d): %s\n", t.name, t.tid,
-           !m.usable ? "sin máscara" : off ? "sin afinidad (sin_afinidad)" : "núcleos grandes");
+           !m.usable ? "sin máscara" : off ? "sin afinidad (no_affinity)" : "núcleos grandes");
 }
 
 void unpin_current_thread() {  // el hilo termina: su tid se puede reutilizar
@@ -829,7 +829,7 @@ int64_t wait_clock_ns() {
     return int64_t{ts.tv_sec} * 1'000'000'000 + ts.tv_nsec;
 }
 
-// DEPURACIÓN (con <datos>/registro): las esperas de más de 150 ms, con el objeto y quién la llamó (dirección
+// DEPURACIÓN (con <datos>/verbose_log): las esperas de más de 150 ms, con el objeto y quién la llamó (dirección
 // absoluta: restarle la base de main que sale al principio del log). Para ver qué espera se come un frame.
 // Objetos con esperas largas recientes: quién los señala lo registra log_signal.
 std::atomic<const void*> g_hot_objects[8];
@@ -849,7 +849,7 @@ void log_signal(const char* what, const void* object, const void* caller) {
 
 void log_slow_wait(const char* what, const void* object, int64_t start_ns, const void* caller) {
     const int64_t end_ns = wait_clock_ns(), ms = (end_ns - start_ns) / 1'000'000;
-    if (ms < 150 || !NVN_FLAG("registro")) return;
+    if (ms < 150 || !NVN_FLAG("verbose_log")) return;
     // Solo los objetos en los que espera GameThread (el que despierta primero en cada ciclo lento de MH Rise).
     char waiter[32] = "?";
     pthread_getname_np(pthread_self(), waiter, sizeof waiter);
@@ -1174,7 +1174,7 @@ ThreadType* GetCurrentThread() { return current_thread(); }
 void YieldThread() { sched_yield(); }
 void SleepThread(TimeSpan t) {
     // DEPURACIÓN (registro): quién duerme 20 ms o más de una vez.
-    if (t.ns >= 20'000'000 && NVN_FLAG("registro")) {
+    if (t.ns >= 20'000'000 && NVN_FLAG("verbose_log")) {
         static std::atomic<int> logged{0};
         char name[32] = "?";
         pthread_getname_np(pthread_self(), name, sizeof name);

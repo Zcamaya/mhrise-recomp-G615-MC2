@@ -84,13 +84,13 @@ nvn::Boolean nvnSyncInitialize(void* sync, void*) {
     return 1;
 }
 void nvnSyncFinalize(void* sync) { g_syncs.destroy(sync); }
-// DEPURACIÓN (con <datos>/registro): cuánto espera el juego a sus syncs por segundo y cuántas esperas caducan.
+// DEPURACIÓN (con <datos>/verbose_log): cuánto espera el juego a sus syncs por segundo y cuántas esperas caducan.
 void count_wait(int64_t ns, bool timed_out, uint64_t timeout_ns) {
     static std::mutex m;
     static int64_t window_start = 0, waited = 0;
     static int waits = 0, timeouts = 0;
     static uint64_t last_timeout = 0;
-    if (!NVN_FLAG("registro")) return;
+    if (!NVN_FLAG("verbose_log")) return;
     const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     std::lock_guard lock(m);

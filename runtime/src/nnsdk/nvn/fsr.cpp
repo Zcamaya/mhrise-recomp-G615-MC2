@@ -29,7 +29,7 @@ class Fsr {
 public:
     bool record(VkCommandBuffer cmd, VkImageView src, VkExtent2D in, VkExtent2D viewport, VkImage dst, VkFormat format,
                 VkExtent2D out) {
-        if (failed_ || !src || format != VK_FORMAT_R8G8B8A8_UNORM || NVN_FLAG("sin_fsr")) return false;
+        if (failed_ || !src || format != VK_FORMAT_R8G8B8A8_UNORM || NVN_FLAG("no_fsr")) return false;
         if (!setup() || !images(out)) return false;
 
         // Lo de antes en la cola (el frame del juego, el FSR del frame anterior que leía estas imágenes) antes que esto.

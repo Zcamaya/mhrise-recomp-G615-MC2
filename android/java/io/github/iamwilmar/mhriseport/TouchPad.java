@@ -402,10 +402,9 @@ final class TouchPad extends View {
         switch (i) {
             case BAR_SMALLER: return "−";
             case BAR_BIGGER: return "+";
-            case BAR_HIDE: return selected != null && !cfg.shown[selected.ordinal()] ? SetupActivity.tr("Mostrar", "Show")
-                                                                                       : SetupActivity.tr("Ocultar", "Hide");
-            case BAR_RESET: return SetupActivity.tr("Restablecer", "Reset");
-            default: return SetupActivity.tr("Listo", "Done");
+            case BAR_HIDE: return selected != null && !cfg.shown[selected.ordinal()] ? "Show" : "Hide";
+            case BAR_RESET: return "Reset";
+            default: return "Done";
         }
     }
 
@@ -535,19 +534,18 @@ final class TouchPad extends View {
         // debajo, qué hacer
         barText.setTextSize(getHeight() * 0.03f);
         barText.setColor(Glyphs.CREAM);
-        String hint = selected == null ? SetupActivity.tr("Arrastra un control para moverlo; tócalo para elegirlo.",
-                "Drag a control to move it; tap it to choose it.")
-                : SetupActivity.tr("Elegido: ", "Chosen: ") + label(selected);
+        String hint = selected == null ? "Drag a control to move it; tap it to choose it."
+                : "Chosen: " + label(selected);
         rect.set(barItem(0).left, barItem(0).bottom, barItem(BAR_ITEMS - 1).right, barItem(0).bottom + getHeight() * 0.06f);
         c.drawText(hint, rect.centerX(), rect.centerY() + getHeight() * 0.012f, barText);
     }
 
     private String label(Ctl c) {
         switch (c) {
-            case LSTICK: return SetupActivity.tr("stick izquierdo", "left stick");
-            case RSTICK: return SetupActivity.tr("stick derecho", "right stick");
-            case DPAD: return SetupActivity.tr("cruceta", "D-pad");
-            case MENU: return SetupActivity.tr("menú", "menu");
+            case LSTICK: return "left stick";
+            case RSTICK: return "right stick";
+            case DPAD: return "D-pad";
+            case MENU: return "menu";
             case MINUS: return "−";
             case PLUS: return "+";
             default:

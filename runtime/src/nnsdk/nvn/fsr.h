@@ -1,7 +1,7 @@
 #pragma once
 // Escalado de la imagen del juego a la pantalla con FSR 1 de AMD (EASU reconstruye de 1280x720 a 1920x1080, RCAS añade
 // nitidez), en vez del blit lineal: el mismo coste que un efecto de posproceso pequeño (~1 ms) y bastante más nítido.
-// <datos>/sin_fsr vuelve al blit de siempre en vivo.
+// <datos>/no_fsr vuelve al blit de siempre en vivo.
 
 #include "nnsdk/nvn/vk.h"
 

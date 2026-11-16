@@ -81,17 +81,17 @@ void (*g_tls_free)(void*, size_t) = nullptr;
 bool reserve() {
     if (g_base) return true;
     const size_t size = kTotalMemory + kHeapUnit;
-    // El memfd no ocupa nada hasta que se tocan sus páginas (como MAP_NORESERVE). <datos>/sin_memfd: memoria anónima,
+    // El memfd no ocupa nada hasta que se tocan sus páginas (como MAP_NORESERVE). <datos>/no_memfd: memoria anónima,
     // como antes (sin alias: lo que MH Rise mapea en sus pools virtuales se vería a cero).
     const char* data = getenv("NIER_DATA");
-    const bool memfd = access((std::string(data ? data : ".") + "/sin_memfd").c_str(), F_OK) != 0;
+    const bool memfd = access((std::string(data ? data : ".") + "/no_memfd").c_str(), F_OK) != 0;
     int fd = memfd ? memfd_create("nnsdk-heap", MFD_CLOEXEC) : -1;
     void* p = MAP_FAILED;
     if (fd >= 0 && ftruncate(fd, static_cast<off_t>(size)) == 0)
         p = mmap(nullptr, size, PROT_NONE, MAP_SHARED | MAP_NORESERVE, fd, 0);
     if (p == MAP_FAILED) {
         printf("[nnsdk] heap: sin memfd (%s): memoria anónima, los pools virtuales de NVN se verán a cero\n",
-               memfd ? strerror(errno) : "interruptor sin_memfd");
+               memfd ? strerror(errno) : "switch no_memfd");
         if (fd >= 0) close(fd);
         fd = -1;
         p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);

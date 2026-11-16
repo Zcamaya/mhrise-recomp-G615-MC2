@@ -12,8 +12,8 @@
 // FIFO pone uno por vsync: G y luego N, dos por cada 33,3 ms. El ritmo del juego no cambia (una llamada a
 // nvn::present por frame real), así que su lógica sigue a 30.
 //
-// Interruptores (flags.h): <datos>/lsfg enciende; <datos>/lsfg_sin_guarda quita la guarda de carga;
-// <datos>/lsfg_flujo_100 usa el flujo óptico a resolución completa (por defecto 0.5); <datos>/lsfg_fp32 fuerza
+// Interruptores (flags.h): <datos>/lsfg enciende; <datos>/lsfg_no_guard quita la guarda de carga;
+// <datos>/lsfg_flow_100 usa el flujo óptico a resolución completa (por defecto 0.5); <datos>/lsfg_fp32 fuerza
 // los shaders FP32 (se mira al compilar, una vez por sesión).
 
 #include "nnsdk/nvn/lsfg/framegen.h"
@@ -444,7 +444,7 @@ void FrameGen::log_stats(Clock::time_point now) {
     real_++;
     const double secs = ms_between(stats_start_, now) / 1000.0;
     if (secs < 5.0) return;
-    if (NVN_FLAG("registro")) {  // DEPURACIÓN
+    if (NVN_FLAG("verbose_log")) {  // DEPURACIÓN
         if (gpu_n_)
             NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u guarda (%u saltos), %u tirón, "
                     "%u ritmo, %u GPU ocupada, %u sin imagen; GPU %.2f ms de media (máx %.2f)\n",
@@ -489,7 +489,7 @@ bool FrameGen::record_lsfg(int index, const Texture& t, uint64_t n, bool generat
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.extent = {in.extent.width, in.extent.height, 1};
         vkCmdCopyImage(cmd, t.image, VK_IMAGE_LAYOUT_GENERAL, in.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
-    } else {  // lsfg_media: la cadena es más pequeña que la textura de la ventana
+    } else {  // lsfg_medium: la cadena es más pequeña que la textura de la ventana
         VkImageBlit region{};
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.srcOffsets[1] = {t.desc.width, t.desc.height, 1};
@@ -580,12 +580,12 @@ void FrameGen::present(Window& w, Texture* t) {
         return;
     }
     // Más barato (para que quepa en las zonas pesadas): <datos>/lsfg_flujo_25 (flujo óptico a un cuarto) y
-    // <datos>/lsfg_media (el frame generado a 3/4 de resolución, 960x540; el real sigue a la suya).
+    // <datos>/lsfg_medium (el frame generado a 3/4 de resolución, 960x540; el real sigue a la suya).
     // Flujo a un cuarto por defecto: medido en las Ruinas, 3,5 ms por frame generado frente a 6,5 a la mitad, y así cabe
-    // con el frame real en zonas abiertas. lsfg_flujo_50 / lsfg_flujo_100 para comparar.
-    const float flow = NVN_FLAG("lsfg_flujo_100") ? 1.0f : NVN_FLAG("lsfg_flujo_50") ? 0.5f : 0.25f;
-    const bool reduced = NVN_FLAG("lsfg_media");
-    const bool guarded = !NVN_FLAG("lsfg_sin_guarda");
+    // con el frame real en zonas abiertas. lsfg_flow_50 / lsfg_flow_100 para comparar.
+    const float flow = NVN_FLAG("lsfg_flow_100") ? 1.0f : NVN_FLAG("lsfg_flow_50") ? 0.5f : 0.25f;
+    const bool reduced = NVN_FLAG("lsfg_medium");
+    const bool guarded = !NVN_FLAG("lsfg_no_guard");
     if (!enabled_) {
         enabled_ = true;
         stats_start_ = now;

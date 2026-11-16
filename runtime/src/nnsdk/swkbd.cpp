@@ -477,7 +477,7 @@ bool game_accepts(String* out, const ShowKeyboardArg& arg, size_t bytes, std::u1
 
 Result ShowKeyboard(String* out, const ShowKeyboardArg& arg) {
     const KeyboardConfig& config = arg.keyboard_config;
-    printf("[swkbd] teclado: «%s» «%s» (de %d a %d caracteres)\n", utf16_to_utf8(config.header_text, 65).c_str(),
+    printf("[swkbd] keyboard: \"%s\" \"%s\" (%d to %d characters)\n", utf16_to_utf8(config.header_text, 65).c_str(),
            utf16_to_utf8(config.guide_text, 257).c_str(), config.text_min_length, config.text_max_length);
     const std::u16string initial = initial_text(arg);
     if (g_initial_arg == &arg) g_initial_arg = nullptr;
@@ -498,16 +498,16 @@ Result ShowKeyboard(String* out, const ShowKeyboardArg& arg) {
         if (r < 0) break;  // sin cuadro: el jugador que siempre acepta
         if (r == 0) {
             write_result(out, {}, config.is_use_utf8);
-            printf("[swkbd] cancelado\n");
+            printf("[swkbd] cancelled\n");
             return kResultCanceled;
         }
         const size_t bytes = write_result(out, text, config.is_use_utf8);
         std::u16string message;
         if (game_accepts(out, arg, bytes, message)) {
-            printf("[swkbd] texto: %s\n", utf16_to_utf8(text.data(), text.size()).c_str());
+            printf("[swkbd] text: %s\n", utf16_to_utf8(text.data(), text.size()).c_str());
             return ResultSuccess;
         }
-        printf("[swkbd] el juego rechaza «%s»: %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
+        printf("[swkbd] the game rejects \"%s\": %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
                utf16_to_utf8(message.data(), message.size()).c_str());
         q.initial = text;
         q.error = message.empty() ? u"?" : message;
@@ -524,15 +524,15 @@ Result ShowKeyboard(String* out, const ShowKeyboardArg& arg) {
         const size_t bytes = write_result(out, text, config.is_use_utf8);
         std::u16string message;
         if (!game_accepts(out, arg, bytes, message)) {
-            printf("[swkbd] el juego rechaza «%s»: %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
+            printf("[swkbd] the game rejects \"%s\": %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
                    utf16_to_utf8(message.data(), message.size()).c_str());
             continue;
         }
-        printf("[swkbd] nombre: %s\n", utf16_to_utf8(text.data(), text.size()).c_str());
+        printf("[swkbd] name: %s\n", utf16_to_utf8(text.data(), text.size()).c_str());
         return ResultSuccess;
     }
     write_result(out, {}, config.is_use_utf8);
-    printf("[swkbd] ningún texto vale: cancelado\n");
+    printf("[swkbd] no text accepted: cancelled\n");
     return kResultCanceled;
 }
 
@@ -611,10 +611,10 @@ State InlineKeyboard::Calc() {
             const size_t n = std::min<size_t>(text.size(), 501);
             memcpy(arg.text, text.data(), n * sizeof(char16_t));
             arg.length = static_cast<int32_t>(n);
-            printf("[swkbd] teclado en línea: «%s»\n", utf16_to_utf8(arg.text, n).c_str());
+            printf("[swkbd] inline keyboard: \"%s\"\n", utf16_to_utf8(arg.text, n).c_str());
             k.decided_enter(&arg);
         } else {
-            printf("[swkbd] teclado en línea: cancelado\n");
+            printf("[swkbd] inline keyboard: cancelled\n");
             if (k.decided_cancel) k.decided_cancel();
         }
     }

@@ -134,8 +134,9 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                                                                                           : VibrationEffect.DEFAULT_AMPLITUDE));
     }
 
-    // El teclado de la consola (swkbd.cpp): lo pide el loader desde un hilo suyo; la respuesta vuelve con el serial de la
-    // petición (null: cancelado). Los botones táctiles se sueltan: el juego espera al texto con lo que hubiera pulsado.
+    // Software keyboard (swkbd.cpp, TextPrompt). The loader calls this from its own thread; the answer goes back with the
+    // request's serial (null: cancelled). Touch buttons are released first, since the game waits on the text with
+    // whatever was held down.
     void askText(int serial, String header, String guide, String initial, String error, int minLength, int maxLength,
                  boolean password, boolean multiline) {
         runOnUiThread(() -> {
@@ -144,7 +145,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 try {
                     nativeTextAnswer(serial, text);
                 } catch (UnsatisfiedLinkError e) {
-                    System.err.println("[teclado] el loader no tiene nativeTextAnswer: " + e);
+                    System.err.println("[keyboard] loader has no nativeTextAnswer: " + e);
                 }
             });
         });
@@ -153,7 +154,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     public void openMenu() {
         pad.releaseAll();
-        new ControlsMenu(this, controls).show();
+        new SettingsMenu(this, controls).show();
     }
 
     @Override

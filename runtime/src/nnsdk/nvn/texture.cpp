@@ -41,9 +41,9 @@ nvn::TextureLayout layout_of(const TextureDesc& d) {
     // NVNpackagedTextureLayout (SetPackagedTextureLayout): byte 0 = alto del bloque y byte 1 = alineación del pitch, en
     // log2 de GOBs. Las texturas sparse de MH Rise traen 03 04 (8 GOBs de alto, pitch a 16: tiles de 64 KB) y el juego
     // escribe sus mips ya swizzleados así, en los offsets que le da GetViewOffset: hay que usar los mismos.
-    // <datos>/sin_layout_empaquetado (al arrancar: las texturas se crean al cargar): el bloque calculado, como antes.
+    // <datos>/no_packed_layout (al arrancar: las texturas se crean al cargar): el bloque calculado, como antes.
     const bool packaged = d.has_packaged_layout && !(d.flags & nvn::kTextureFlagLinear) && !is_3d &&
-                          d.packaged_layout[0] <= 5 && d.packaged_layout[1] <= 5 && !NVN_FLAG("sin_layout_empaquetado");
+                          d.packaged_layout[0] <= 5 && d.packaged_layout[1] <= 5 && !NVN_FLAG("no_packed_layout");
     return nvn::compute_layout(d.width * (samples > 1 ? 2 : 1), height * (samples > 2 ? 2 : 1), depth, layers,
                                d.levels, bpb * (samples > 4 ? 2 : 1), block_w, block_h, d.flags & nvn::kTextureFlagLinear,
                                d.stride, is_3d, packaged ? d.packaged_layout[0] : -1, packaged ? d.packaged_layout[1] : 0);

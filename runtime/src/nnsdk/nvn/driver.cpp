@@ -61,8 +61,8 @@ void* open_custom() {
     fclose(f);
     if (folder.empty() || library.empty()) return nullptr;
     if (access((r + "/probando").c_str(), F_OK) == 0) {
-        NVN_LOG("driver %s: el arranque anterior no llegó a dibujar; el del sistema\n", folder.c_str());
-        drop(folder, "el juego no llegó a dibujar con él");
+        NVN_LOG("driver %s: the previous start never drew a frame; using the system driver\n", folder.c_str());
+        drop(folder, "the game never drew a frame with it");
         return nullptr;
     }
     const std::string hooks = library_dir(), dir = r + "/" + folder + "/";
@@ -71,14 +71,14 @@ void* open_custom() {
                                            library.c_str(), nullptr, nullptr);
     if (!lib) {
         const char* err = dlerror();
-        NVN_LOG("driver %s (%s): libadrenotools no lo abrió (%s); el del sistema\n", folder.c_str(), library.c_str(),
-                err ? err : "sin detalle");
-        drop(folder, "no se pudo abrir (¿no es una Adreno, o no es un driver para Android?)");
+        NVN_LOG("driver %s (%s): libadrenotools could not open it (%s); using the system driver\n", folder.c_str(), library.c_str(),
+                err ? err : "no details");
+        drop(folder, "could not be opened (not an Adreno, or not an Android driver?)");
         return nullptr;
     }
     g_custom = true;
     g_folder = folder;
-    NVN_LOG("driver del usuario: %s (%s, hooks en %s)\n", folder.c_str(), library.c_str(), hooks.c_str());
+    NVN_LOG("custom driver: %s (%s, hooks in %s)\n", folder.c_str(), library.c_str(), hooks.c_str());
     return lib;
 }
 
@@ -98,7 +98,7 @@ bool load(bool system) {
     }
     auto gipa = lib ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib, "vkGetInstanceProcAddr")) : nullptr;
     if (!gipa) {
-        NVN_LOG("sin vkGetInstanceProcAddr (%s)\n", g_custom ? "driver del usuario" : "libvulkan.so del sistema");
+        NVN_LOG("no vkGetInstanceProcAddr (%s)\n", g_custom ? "custom driver" : "system libvulkan.so");
         return false;
     }
     volkInitializeCustom(gipa);
@@ -113,14 +113,14 @@ void check() {
     // devuelve una libvulkan válida que abre el driver del sistema sin decir nada: se mira si de verdad corre el suyo.
     const std::string part = "/drivers/" + g_folder + "/";
     if (dl_iterate_phdr(from_folder, const_cast<char*>(part.c_str()))) return;
-    NVN_LOG("driver %s: no hay ninguna librería suya cargada, corre el del sistema\n", g_folder.c_str());
-    drop(g_folder, "no se cargó (corría el del sistema)");
+    NVN_LOG("driver %s: none of its libraries got loaded, the system driver is running\n", g_folder.c_str());
+    drop(g_folder, "did not load (the system driver was running)");
     g_custom = false, g_folder.clear();
 }
 
 void give_up(const char* why) {
     if (!g_custom) return;
-    NVN_LOG("driver %s: %s; se reintenta con el del sistema\n", g_folder.c_str(), why);
+    NVN_LOG("driver %s: %s; retrying with the system driver\n", g_folder.c_str(), why);
     drop(g_folder, why);
     g_custom = false, g_folder.clear();
 }
@@ -129,7 +129,7 @@ void works() {
     static bool done = false;  // (una vez: se llama en cada present)
     if (done || !g_custom) return;
     done = true;
-    if (unlink((root() + "/probando").c_str()) == 0) NVN_LOG("driver %s: dibuja, se queda\n", g_folder.c_str());
+    if (unlink((root() + "/probando").c_str()) == 0) NVN_LOG("driver %s: draws fine, keeping it\n", g_folder.c_str());
 }
 
 bool custom() { return g_custom; }

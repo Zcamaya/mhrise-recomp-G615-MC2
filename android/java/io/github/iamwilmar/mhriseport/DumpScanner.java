@@ -9,7 +9,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -22,11 +21,6 @@ import java.util.regex.Pattern;
 // va a <carpeta>/rutas.txt, que lee el runtime (rutas.h). Sin nada de Android, para probarlo en un PC:
 // java ... DumpScanner <carpeta>.
 final class DumpScanner {
-    private static final boolean ES = Locale.getDefault().getLanguage().equals("es");
-
-    static String tr(String es, String en) {
-        return ES ? es : en;
-    }
 
     static final class Result {
         String exefs, romfs;
@@ -90,8 +84,7 @@ final class DumpScanner {
         if (npdm == null || nso == null || npdm.length < 0x80 || nso.length < 0x60) return;
         if (!magic(npdm, 0, "META") || !magic(nso, 0, "NSO0")) {
             if (result.exefsProblem == null)
-                result.exefsProblem = tr("El ExeFS de \"" + dir.getName() + "\" está cifrado o no es un ExeFS extraído.",
-                        "The ExeFS in \"" + dir.getName() + "\" is encrypted or not an extracted ExeFS.");
+                result.exefsProblem = "The ExeFS in \"" + dir.getName() + "\" is encrypted or not an extracted ExeFS.";
             return;
         }
         int aci = (int) le(npdm, 0x70, 4);
@@ -100,13 +93,10 @@ final class DumpScanner {
         for (int k = 0x40; k < 0x54; k++) build.append(String.format("%02x", nso[k] & 0xff));
         if (le(npdm, aci + 0x10, 8) != Game.APP_ID) {
             if (result.exefsProblem == null)
-                result.exefsProblem = tr("El ExeFS de \"" + dir.getName() + "\" es de otro juego.",
-                        "The ExeFS in \"" + dir.getName() + "\" belongs to a different game.");
+                result.exefsProblem = "The ExeFS in \"" + dir.getName() + "\" belongs to a different game.";
         } else if (!build.toString().equals(Game.BUILD_ID)) {
-            result.exefsProblem = tr("El ExeFS es de otra versión del juego: este port necesita la " + Game.VERSION
-                    + ". Vuelve a extraerlo con la actualización " + Game.VERSION + " instalada.",
-                    "The ExeFS is from a different game version: this port needs " + Game.VERSION
-                    + ". Extract it again with update " + Game.VERSION + " installed.");
+            result.exefsProblem = "The ExeFS is from a different game version: this port needs " + Game.VERSION
+                    + ". Extract it again with update " + Game.VERSION + " installed.";
         } else {
             result.exefs = dir.getPath();
             result.exefsProblem = null;
@@ -119,9 +109,7 @@ final class DumpScanner {
             result.romfs = dir.getPath();
             result.romfsProblem = null;
         } else {
-            result.romfsProblem = tr("La RomFS no trae la actualización " + Game.VERSION
-                    + ": vuelve a extraerla con la actualización aplicada.",
-                    "The RomFS does not include update " + Game.VERSION + ": extract it again with the update applied.");
+            result.romfsProblem = "The RomFS does not include update " + Game.VERSION + ": extract it again with the update applied.";
         }
     }
 

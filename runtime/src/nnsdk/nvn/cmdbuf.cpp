@@ -37,7 +37,7 @@ Objects<CommandBuffer> g_command_buffers;
 // --- Búsqueda del command buffer ---
 // record() se llama 33-40k veces por frame y cada vez buscaba el command buffer (mutex + hash). Cada hilo
 // recuerda el último que usó; g_generation cambia al inicializar o finalizar cualquiera, así que una dirección
-// reutilizada nunca encuentra el objeto viejo. Interruptor sin_cache_cb (se mira en BeginRecording): buscarlo
+// reutilizada nunca encuentra el objeto viejo. Interruptor no_cb_cache (se mira en BeginRecording): buscarlo
 // cada vez, como antes.
 std::atomic<uint64_t> g_generation{1};
 std::atomic<bool> g_cache_enabled{true};
@@ -69,7 +69,7 @@ CommandList* recording(void* cmd) {
 // Command trivial, no recorre los comandos. Cada command buffer pide una lista del tamaño de su última
 // grabación; si aun así se llena, se pasa a una mayor del pool (grow) en vez de realojar. Se guardan como mucho
 // kPoolLists listas y kPoolBytes; lo que sobra se borra al grabar, fuera de cualquier mutex de la cola.
-// Interruptor sin_reciclar (se mira en BeginRecording): una lista nueva en cada grabación, que crece sola, y
+// Interruptor no_recycle (se mira en BeginRecording): una lista nueva en cada grabación, que crece sola, y
 // delete al soltarla, como antes.
 constexpr size_t kPoolLists = 64, kPoolBytes = size_t{64} << 20;
 std::mutex g_pool_mutex;
@@ -264,9 +264,9 @@ void nvnCommandBufferSetMemoryCallbackData(void*, void*) {}
 
 void nvnCommandBufferBeginRecording(void* cmd) {
     // Interruptores: una vez por grabación, no por comando.
-    const bool recycle = !NVN_FLAG("sin_reciclar");
+    const bool recycle = !NVN_FLAG("no_recycle");
     g_recycle.store(recycle, std::memory_order_relaxed);
-    g_cache_enabled.store(!NVN_FLAG("sin_cache_cb"), std::memory_order_relaxed);
+    g_cache_enabled.store(!NVN_FLAG("no_cb_cache"), std::memory_order_relaxed);
     if (CommandBuffer* cb = find(cmd)) {
         recycle_command_list(cb->recording);  // una grabación sin EndRecording: nunca llegó a la cola
         cb->recording = new_list(cb->last_size);

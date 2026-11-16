@@ -61,11 +61,11 @@ thread_local bool t_prefetch = false;
 constexpr uint32_t kKeyVersion = 2;
 
 // <datos>/spirv.bin: se empieza a leer con el primer programa del juego, bastante antes de su primer draw.
-// <datos>/sin_cache_spirv al arrancar: sin fichero (y, en vivo, sin buscar ni guardar: se traduce todo como antes).
+// <datos>/no_spirv_cache al arrancar: sin fichero (y, en vivo, sin buscar ni guardar: se traduce todo como antes).
 void open_spirv_cache() {
     static std::once_flag once;
     std::call_once(once, [] {
-        if (NVN_FLAG("sin_cache_spirv")) return;
+        if (NVN_FLAG("no_spirv_cache")) return;
         const char* data = getenv("NIER_DATA");
         nvn::spirv_cache::global().open(std::string(data ? data : "/sdcard/NieR") + "/spirv.bin", NVN_TRADUCTOR_HUELLA);
     });
@@ -147,20 +147,20 @@ bool listed_in(const char* file, uint64_t print) {
     return false;
 }
 
-// Compute con switch que se traducen con sus tablas de c1 a pesar de todo: los de <datos>/con_c1.
-bool c1_allowed(uint64_t print) { return listed_in("con_c1", print); }
+// Compute con switch que se traducen con sus tablas de c1 a pesar de todo: los de <datos>/with_c1.
+bool c1_allowed(uint64_t print) { return listed_in("with_c1", print); }
 
 // Etapas cuyo SPIR-V pasa por el optimizador de SPIRV-Tools (nvnshader::Options::optimize_stages; recompiler/spirv_opt.cpp:
 // el -O de spirv-opt sin tocar la interfaz ni los bindings). El driver de Qualcomm compila mal el flujo con banderas que
 // deja Eden al deshacer un BRX (el skinning de la cara del cazador, 793657b4, tomaba el caso de los pesos a cero) y con
-// -O sale bien. Los compute; con <datos>/spirv_opt_todas, todas las etapas. <datos>/sin_spirv_opt: ninguna, como antes.
+// -O sale bien. Los compute; con <datos>/spirv_opt_all, todas las etapas. <datos>/no_spirv_opt: ninguna, como antes.
 // Se miran una vez, con el primer shader (al arrancar): van en la clave de la caché, así que cambiarlos solo retraduce.
 uint32_t spirv_opt_stages() {
     static const uint32_t stages = [] {
         uint32_t s = 1u << static_cast<uint32_t>(nvnshader::Stage::Compute);
-        if (NVN_FLAG("sin_spirv_opt")) s = 0;
-        else if (NVN_FLAG("spirv_opt_todas")) s = 0x3F;
-        NVN_LOG("spirv-opt: %s\n", !s ? "apagado (sin_spirv_opt)" : s == 0x3F ? "todas las etapas (spirv_opt_todas)" : "compute");
+        if (NVN_FLAG("no_spirv_opt")) s = 0;
+        else if (NVN_FLAG("spirv_opt_all")) s = 0x3F;
+        NVN_LOG("spirv-opt: %s\n", !s ? "apagado (no_spirv_opt)" : s == 0x3F ? "todas las etapas (spirv_opt_all)" : "compute");
         return s;
     }();
     return stages;
@@ -188,9 +188,9 @@ void note_spirv_opt(uint64_t print, const nvnshader::Translated& t) {
 
 // Compute cuyas barreras "en flujo condicional" están en bucles uniformes (el mismo número de vueltas en todo el grupo,
 // sin returns antes: Eden las marca solo por estar dentro del bucle): dejarlas es lo correcto, y sin ellas la memoria
-// compartida queda en carrera entre los waves de 64 del Adreno. Se dejan siempre, sin <datos>/con_barrera (que sigue
+// compartida queda en carrera entre los waves de 64 del Adreno. Se dejan siempre, sin <datos>/keep_barrier (que sigue
 // valiendo para otras huellas). La traducción sin ellas se guarda en ProgramStage::stripped_module: cada una tiene su
-// interruptor en vivo para volver a ella, y <datos>/sin_barrera_uniforme las vuelve todas.
+// interruptor en vivo para volver a ella, y <datos>/no_uniform_barrier las vuelve todas.
 // - 4be66a3c6a29b5be: la exposición automática (grupo de 1024, dispatch 1 1 1 tras el histograma 7 4 1 del 60x33).
 //   Suma prefija Hillis-Steele de los 1024 bins en memoria compartida (paso 1, 2, 4… 512: leer el vecino, barrera,
 //   escribir, barrera; la salida del bucle solo depende del paso), primer bin B con acumulado > total·c3[6], medida =
@@ -207,8 +207,8 @@ struct UniformBarrierShader {
     const char* name;  // para el log
 };
 constexpr UniformBarrierShader kUniformBarrierShaders[] = {
-    {0x4be66a3c6a29b5beull, "exposición automática (sin_barrera_exposicion)"},
-    {0xacb571ff14d6945full, "reducción de 256 (sin_barrera_reduccion)"},
+    {0x4be66a3c6a29b5beull, "exposición automática (no_exposure_barrier)"},
+    {0xacb571ff14d6945full, "reducción de 256 (no_reduction_barrier)"},
 };
 
 int uniform_barrier_entry(uint64_t print) {
@@ -269,8 +269,8 @@ bool qualcomm_7xx_stock() {
         const char* digits = strpbrk(name, "0123456789");
         const bool newer = digits && (digits[0] == '7' || digits[0] == '8');
         if (stock && newer)
-            NVN_LOG("arrays bindless: %s con el driver de Qualcomm, sin ellos por defecto (<datos>/con_bindless_arrays: con "
-                    "ellos)\n", name);
+            NVN_LOG("bindless arrays: %s on Qualcomm's driver, off by default (<datos>/bindless_arrays turns them on)\n",
+                    name);
         return stock && newer;
     }();
     return yes;
@@ -296,7 +296,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // Más memoria compartida de la que admite la GPU (la Switch da 48 KB; las Mali, 32): recortada al máximo, como
         // Eden en las Mali y las Adreno. Sin recortar, la pipeline no es válida.
         if (nvn::VkContext* c = nvn::vk(); c && options.shared_memory > c->props.limits.maxComputeSharedMemorySize) {
-            NVN_LOG("compute: %u KB de memoria compartida, la GPU admite %u KB: se recorta\n", options.shared_memory / 1024,
+            NVN_LOG("compute: %u KB of shared memory, the GPU allows %u KB: clamped\n", options.shared_memory / 1024,
                     c->props.limits.maxComputeSharedMemorySize / 1024);
             options.shared_memory = c->props.limits.maxComputeSharedMemorySize;
         }
@@ -310,7 +310,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // con el azul a 13000-64512 y un halo de bloom enorme). En compute no: el único con switch que hemos visto (huella
     // 3e672e96e2eb85c5, un evaluador de curvas de 12 casos) con sus casos colgaba la GPU (en la demo del título, al
     // cargar las Ruinas, en combate) y sus resultados salían magenta (menú, salpicaduras, objetos resaltados). Sin
-    // tablas cae siempre en el mismo camino, como hasta ahora. <datos>/con_c1 añade huellas (o "*": todos).
+    // tablas cae siempre en el mismo camino, como hasta ahora. <datos>/with_c1 añade huellas (o "*": todos).
     uint32_t magic = 0;
     memcpy(&magic, reinterpret_cast<const void*>(out.code), 4);
     // Los compute de MH Rise no llevan la cabecera y sí usan sus tablas de c1: el skinning de los personajes es un compute
@@ -336,45 +336,45 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // Subgrupos más pequeños que el warp de 32 de Maxwell (las Mali Valhall: 16): Eden solo sabe de iguales o mayores,
         // y un voto o un ballot del juego vería medio warp (un bucle que espera a que todo el warp acabe puede no salir).
         // Ahí, sin operaciones de subgrupo: Eden emula los votos como si cada invocación fuera su propio warp.
-        // <datos>/con_subgrupos_cortos al traducir: las del dispositivo, como antes.
-        if (options.subgroup_size < 32 && !NVN_FLAG("con_subgrupos_cortos")) {
+        // <datos>/short_subgroups al traducir: las del dispositivo, como antes.
+        if (options.subgroup_size < 32 && !NVN_FLAG("short_subgroups")) {
             static bool logged = false;
             if (!logged) {
                 logged = true;
-                NVN_LOG("subgrupos de %u (menos que el warp de 32): sin operaciones de subgrupo en los shaders\n",
+                NVN_LOG("subgroups of %u (under the warp of 32): no subgroup operations in shaders\n",
                         options.subgroup_size);
             }
             options.subgroup_operations = 0;
         }
         // Como Eden con el driver propietario de Qualcomm (vendorID 0x5143): shuffle con índice dinámico emulado.
-        // <datos>/sin_shuffle_qualcomm al traducir (al arrancar): el OpGroupNonUniformShuffle de siempre.
-        options.broken_subgroup_shuffle = c->props.vendorID == 0x5143 && !NVN_FLAG("sin_shuffle_qualcomm");
-        // <datos>/sin_return_qualcomm al traducir (al arrancar): el OpUnreachable de siempre.
+        // <datos>/no_shuffle_qualcomm al traducir (al arrancar): el OpGroupNonUniformShuffle de siempre.
+        options.broken_subgroup_shuffle = c->props.vendorID == 0x5143 && !NVN_FLAG("no_shuffle_qualcomm");
+        // <datos>/no_return_qualcomm al traducir (al arrancar): el OpUnreachable de siempre.
         // En las Mali (vendorID 0x13B5: el driver de ARM y PanVK) también: nunca se ejecuta, y sus compiladores son los
         // que menos hemos podido probar con el skinning de la cara (el caso que se cuelga en el 512.8xx).
-        // <datos>/sin_return_mali: el OpUnreachable de siempre en ellas.
-        options.broken_unreachable = (c->props.vendorID == 0x5143 && !NVN_FLAG("sin_return_qualcomm")) ||
-                                     (c->props.vendorID == 0x13B5 && !NVN_FLAG("sin_return_mali"));
-        // <datos>/sin_no_uniforme al traducir: sin la decoración NonUniform (si el driver se lleva mal con ella).
-        options.nonuniform_indexing = c->nonuniform_sampled && !NVN_FLAG("sin_no_uniforme");
+        // <datos>/no_return_mali: el OpUnreachable de siempre en ellas.
+        options.broken_unreachable = (c->props.vendorID == 0x5143 && !NVN_FLAG("no_return_qualcomm")) ||
+                                     (c->props.vendorID == 0x13B5 && !NVN_FLAG("no_return_mali"));
+        // <datos>/no_nonuniform al traducir: sin la decoración NonUniform (si el driver se lleva mal con ella).
+        options.nonuniform_indexing = c->nonuniform_sampled && !NVN_FLAG("no_nonuniform");
         options.multi_viewport = c->multi_viewport;
     }
     // Bindless de los uniform buffers del juego (arrays hasta el final del cbuf, máscara y sampler fijo del handle; ver
-    // nvnshader::Options). <datos>/sin_bindless_arrays al traducir (al arrancar): como antes; los arrays que ya hacía Eden
-    // siguen en el set 1. <datos>/sin_bindless apaga la resolución en vivo.
+    // nvnshader::Options). <datos>/no_bindless_arrays al traducir (al arrancar): como antes; los arrays que ya hacía Eden
+    // siguen en el set 1. <datos>/no_bindless apaga la resolución en vivo.
     // Auto: sin ellos con el driver propio de Qualcomm en las Adreno 7xx y posteriores (Turnip se presenta como "Turnip
     // Adreno"): el 512.863 de una Adreno 730 rechazaba (VK_ERROR_UNKNOWN) casi todos los pixel shaders que indexan esos
     // arrays, el 94 % de los que fallaban frente al 55 % de todos, con NonUniform o sin él. En la Adreno 650 (512.746),
-    // donde se hicieron, van bien. <datos>/con_bindless_arrays: con ellos siempre (el menú de opciones: Gráficos).
-    options.bindless_arrays = !NVN_FLAG("sin_bindless_arrays") && (NVN_FLAG("con_bindless_arrays") || !qualcomm_7xx_stock());
+    // donde se hicieron, van bien. <datos>/bindless_arrays: con ellos siempre (el menú de opciones: Gráficos).
+    options.bindless_arrays = !NVN_FLAG("no_bindless_arrays") && (NVN_FLAG("bindless_arrays") || !qualcomm_7xx_stock());
     // Memoria compartida privada de cada invocación (spill del compilador de NVN) a memoria local: el skinning de la cara
     // (793657b4f1e65631) salía NaN en el Adreno con esos stores a Workgroup en los casos de su switch.
-    // <datos>/sin_compartida_privada al traducir (al arrancar): se queda en Workgroup, como antes.
-    options.shared_to_local = !NVN_FLAG("sin_compartida_privada");
-    // spirv-opt (spirv_opt_stages). <datos>/sin_spirv_opt_huellas: sin él para esas huellas (una por línea), para aislar
+    // <datos>/no_private_shared al traducir (al arrancar): se queda en Workgroup, como antes.
+    options.shared_to_local = !NVN_FLAG("no_private_shared");
+    // spirv-opt (spirv_opt_stages). <datos>/no_spirv_opt_prints: sin él para esas huellas (una por línea), para aislar
     // un shader que salga mal.
     options.optimize_stages = spirv_opt_stages();
-    if (options.optimize_stages && listed_in("sin_spirv_opt_huellas", print)) options.optimize_stages = 0;
+    if (options.optimize_stages && listed_in("no_spirv_opt_prints", print)) options.optimize_stages = 0;
     // Traducción prudente (safe_variant): lo que más se ha visto que rompe los compiladores de los drivers, quitado por
     // pasos. Todo entra en la clave de la caché (cada nivel es su propia entrada).
     if (safe >= 1) options.nonuniform_indexing = false;
@@ -382,14 +382,14 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     if (safe >= 3) options.subgroup_operations = 0;
     // Barreras de grupo dentro de un if o un bucle: Eden las quita (una barrera que no todos alcanzan cuelga la GPU),
     // pero sin ellas la memoria compartida queda en carrera. Se dejan en las de kUniformBarrierShaders (bucles uniformes)
-    // y en las de <datos>/con_barrera (huellas o "*"). De las primeras también se guarda la traducción sin ellas
+    // y en las de <datos>/keep_barrier (huellas o "*"). De las primeras también se guarda la traducción sin ellas
     // (stripped), para sus interruptores en vivo (use_stripped_module); en la caché, con su propia clave (keep = false).
     const int barrier_entry = uniform_barrier_entry(print);
-    const bool keep = barrier_entry >= 0 || listed_in("con_barrera", print);
+    const bool keep = barrier_entry >= 0 || listed_in("keep_barrier", print);
     out.uniform_barrier_entry = static_cast<int8_t>(barrier_entry);
     open_spirv_cache();
     nvn::spirv_cache::Key key, stripped_key;
-    const bool cacheable = !NVN_FLAG("sin_cache_spirv") && translation_key(out, bound, options, keep, key);
+    const bool cacheable = !NVN_FLAG("no_spirv_cache") && translation_key(out, bound, options, keep, key);
     // La clave de la traducción sin barreras: la que se guarda de las de la lista y la que queda si con ellas no se puede.
     const bool stripped_cacheable = cacheable && keep && translation_key(out, bound, options, false, stripped_key);
     const bool cached = cacheable && nvn::spirv_cache::global().find(key, out.shader);
@@ -446,11 +446,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // Un BRX (switch) en un shader gráfico, también por spirv-opt: el flujo con banderas que deja Eden al deshacerlo es el
     // que el driver de Qualcomm compilaba mal en el skinning de la cara (ver spirv_opt_stages), y en la Mali-G615 de un
     // Dimensity 8300 el pase que el driver abortaba cada frame (pantalla negra) era el de un pixel shader con BRX
-    // (9ba7ca38dd1316de). Se sabe después de traducir (has_brx va en la caché): con su propia clave. <datos>/sin_spirv_opt_brx
+    // (9ba7ca38dd1316de). Se sabe después de traducir (has_brx va en la caché): con su propia clave. <datos>/no_spirv_opt_brx
     // al arrancar: como antes.
     const uint32_t stage_bit = 1u << static_cast<uint32_t>(out.shader.stage);
     if (ok && out.shader.has_brx && out.shader.stage != nvnshader::Stage::Compute && !(options.optimize_stages & stage_bit) &&
-        !NVN_FLAG("sin_spirv_opt_brx")) {
+        !NVN_FLAG("no_spirv_opt_brx")) {
         nvnshader::Options opt = options;
         opt.optimize_stages |= stage_bit;
         nvn::spirv_cache::Key opt_key;
@@ -469,7 +469,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             out.cache_key = opt_cacheable ? opt_key : nvn::spirv_cache::Key{};
             static std::atomic<int> logged{0};
             if (logged++ < 16)
-                NVN_LOG("shader %016llx (%s) con BRX: pasado por spirv-opt\n", static_cast<unsigned long long>(print),
+                NVN_LOG("shader %016llx (%s) with BRX: run through spirv-opt\n", static_cast<unsigned long long>(print),
                         nvnshader::stage_name(out.shader.stage));
         }
     }
@@ -478,8 +478,8 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // cara del cazador (793657b4): toma el caso que pone los pesos a cero (1/0 → NaN y la cabeza no se dibuja); con el
     // switch reconstruido por spirv-opt -O sale bien (el intérprete da lo mismo bit a bit que el original). Es el mismo
     // shader para cualquier cara. Ahora lo hace spirv_opt_stages en la Flip con todos los compute (sale el mismo módulo);
-    // si hay fichero, gana el fichero. <datos>/sin_reemplazo_spirv al arrancar: el traducido de siempre.
-    if (ok && !NVN_FLAG("sin_reemplazo_spirv")) {
+    // si hay fichero, gana el fichero. <datos>/no_spirv_replace al arrancar: el traducido de siempre.
+    if (ok && !NVN_FLAG("no_spirv_replace")) {
         const char* data = getenv("NIER_DATA");
         char file[96];
         snprintf(file, sizeof file, "/spirv_reemplazo/%016llx.spv", static_cast<unsigned long long>(print));
@@ -530,7 +530,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         }
         return false;
     }
-    if (listed_in("volcar_huellas", print)) {  // DEPURACIÓN: el código de esas huellas, para shadertool
+    if (listed_in("dump_prints", print)) {  // DEPURACIÓN: el código de esas huellas, para shadertool
         char name[40];
         snprintf(name, sizeof name, "huella_%016llx", static_cast<unsigned long long>(print));
         dump_code(out.code, name);
@@ -540,7 +540,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     if (out.shader.has_brx) {  // para ampliar la lista de c1_allowed sin adivinar
         NVN_LOG("shader %016llx (%s) con switch: tablas de c1 %s\n", static_cast<unsigned long long>(print),
                 nvnshader::stage_name(out.shader.stage), options.constants ? "sí" : "no");
-        if (NVN_FLAG("volcar_brx")) {  // DEPURACIÓN: su código y su sección de control, para estudiarlo con shadertool
+        if (NVN_FLAG("dump_brx")) {  // DEPURACIÓN: su código y su sección de control, para estudiarlo con shadertool
             char name[40];
             snprintf(name, sizeof name, "brx_%016llx", static_cast<unsigned long long>(print));
             dump_code(out.code, name);
@@ -548,19 +548,14 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         }
     }
     nvn::VkContext* c = nvn::vk();
-    VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    info.codeSize = out.shader.spirv.size() * sizeof(uint32_t);
-    info.pCode = out.shader.spirv.data();
-    if (VkResult r = vkCreateShaderModule(c->device, &info, nullptr, &out.module); r != VK_SUCCESS) {
+    if (VkResult r = nvn::create_shader_module(c->device, out.shader.spirv, &out.module); r != VK_SUCCESS) {
         NVN_LOG("vkCreateShaderModule: %s\n", nvn::vk_result_name(r));
         return false;
     }
     out.spirv_id = nvn::spirv_identity(out.shader);
     if (have_stripped) {  // la sin las barreras de sus bucles, para el interruptor en vivo
-        VkShaderModuleCreateInfo si{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        si.codeSize = stripped.spirv.size() * sizeof(uint32_t);
-        si.pCode = stripped.spirv.data();
-        if (vkCreateShaderModule(c->device, &si, nullptr, &out.stripped_module) != VK_SUCCESS) out.stripped_module = VK_NULL_HANDLE;
+        if (nvn::create_shader_module(c->device, stripped.spirv, &out.stripped_module) != VK_SUCCESS)
+            out.stripped_module = VK_NULL_HANDLE;
     }
     int n = ++g_translated;
     if (n % 100 == 0) {
@@ -609,7 +604,7 @@ void set_stage_constants(nvn::ProgramStage& stage) {
 // cada uno), el lowmemorykiller cerró el juego en plena partida (5-11). Un hilo en los núcleos pequeños, lo último que se
 // fijó primero, y nada si quedan menos de 1,5 GB libres en el sistema. Se empieza 50 ms después de SetShaders como pronto
 // (el juego podría acabar de escribir el código justo después; si aun así cambia, la huella es otra y no estorba).
-// APAGADA por defecto (<datos>/precarga_shaders, en vivo, la enciende): aun solo con los compute, en 25 minutos llenó
+// APAGADA por defecto (<datos>/shader_preload, en vivo, la enciende): aun solo con los compute, en 25 minutos llenó
 // spirv.bin hasta su tope (128 MB) y dobló pipelines.bin (35 → 72 MB, las pipelines que calienta); al guardarlos la SD
 // se saturaba (69 % de espera de E/S) y el juego, que lee sus datos de la misma SD, iba a 1 fps en el tablón de misiones
 // (5-11). Las pipelines gráficas en segundo plano (executor.cpp) son las que quitan los tirones del combate.
@@ -694,7 +689,7 @@ void prefetch_loop() {
             g_prefetch_queue.pop_back();
         }
         std::this_thread::sleep_until(job.at + std::chrono::milliseconds(50));
-        if (!NVN_FLAG("precarga_shaders")) continue;
+        if (!NVN_FLAG("shader_preload")) continue;
         Snapshot first, second;
         if (!take_snapshot(job.code, job.control, first) || !known_stage(first) || !compute_snapshot(first)) continue;
         if (available_mb() < 1536) {  // el sistema va justo: más tarde
@@ -726,7 +721,7 @@ void prefetch_loop() {
 }
 
 void prefetch(uint64_t code, const void* control) {
-    if (!code || !NVN_FLAG("precarga_shaders")) return;
+    if (!code || !NVN_FLAG("shader_preload")) return;
     static std::once_flag started;
     std::call_once(started, [] {
         std::thread(prefetch_loop).detach();  // vive lo que el proceso
@@ -754,10 +749,10 @@ bool nvn::ensure_translated(ProgramStage& stage) {
 
 bool nvn::use_stripped_module(const ProgramStage& stage) {
     if (!stage.stripped_module) return false;
-    if (NVN_FLAG("sin_barrera_uniforme")) return true;
+    if (NVN_FLAG("no_uniform_barrier")) return true;
     switch (stage.uniform_barrier_entry) {  // el orden de kUniformBarrierShaders
-        case 0: return NVN_FLAG("sin_barrera_exposicion");
-        case 1: return NVN_FLAG("sin_barrera_reduccion");
+        case 0: return NVN_FLAG("no_exposure_barrier");
+        case 1: return NVN_FLAG("no_reduction_barrier");
         default: return false;
     }
 }
@@ -799,8 +794,8 @@ nvn::ProgramStage::Variant nvn::vertex_variant(ProgramStage& stage, uint64_t inp
     }
     static int logged = 0;
     if (logged++ < 8)
-        NVN_LOG("vertex %016llx con atributos enteros (tipos 0x%llx): variante%s\n", static_cast<unsigned long long>(stage.print),
-                static_cast<unsigned long long>(input_types), v.module ? "" : " (no se pudo: la de siempre)");
+        NVN_LOG("vertex %016llx with integer attributes (types 0x%llx): variant%s\n", static_cast<unsigned long long>(stage.print),
+                static_cast<unsigned long long>(input_types), v.module ? "" : " (failed: using the plain one)");
     return stage.variants[input_types] = v;
 }
 
@@ -827,6 +822,108 @@ nvn::ProgramStage::Variant nvn::safe_variant(ProgramStage& stage, uint64_t previ
 }
 
 // 8 bytes por paso y mezcla final (como hash_bytes del ejecutor): ~10 µs para el SPIR-V de un pixel shader de MH Rise.
+// Funciones que nadie llama, fuera del módulo que va al driver. Eden declara la del bucle CAS de las escrituras de 8 y
+// 16 bits en los storage buffers (un parámetro puntero a StorageBuffer, con VariablePointersStorageBuffer) en cuanto
+// el shader escribe en uno, se use o no: en MH Rise está en ~110 pixel shaders y casi ninguno la llama. El driver propio
+// de Qualcomm (512.863 en la Adreno 730/725) rechazaba con VK_ERROR_UNKNOWN todas las pipelines con esos pixel shaders
+// (los de los personajes: el cazador se veía negro en la selección), con cualquier estado; Turnip no dice nada. Quitadas
+// la función y, si ya no hay ningún puntero variable, la capacidad. La caché de SPIR-V no cambia (es solo al crear el
+// módulo). <datos>/keep_dead_functions al arrancar: el SPIR-V de Eden tal cual.
+static std::vector<uint32_t> without_dead_functions(const std::vector<uint32_t>& w) {
+    if (w.size() < 5 || w[0] != 0x07230203u) return w;
+    struct Fn {
+        size_t begin, end;  // palabras [begin, end): de OpFunction a OpFunctionEnd incluido
+        uint32_t id;
+        std::vector<uint32_t> calls;
+    };
+    std::vector<Fn> fns;
+    std::unordered_set<uint32_t> entries;
+    std::unordered_map<uint32_t, uint32_t> pointer_class;  // OpTypePointer: id → storage class
+    for (size_t i = 5; i < w.size();) {
+        const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
+        if (!n || i + n > w.size()) return w;
+        if (op == 15 && n >= 3) entries.insert(w[i + 2]);  // OpEntryPoint
+        else if (op == 32 && n >= 4) pointer_class[w[i + 1]] = w[i + 2];
+        else if (op == 54 && n >= 5) fns.push_back({i, 0, w[i + 2], {}});  // OpFunction
+        else if (op == 57 && n >= 4 && !fns.empty()) fns.back().calls.push_back(w[i + 3]);  // OpFunctionCall
+        else if (op == 56 && !fns.empty()) fns.back().end = i + n;  // OpFunctionEnd
+        i += n;
+    }
+    // Las vivas: las de entrada y lo que llaman
+    std::unordered_set<uint32_t> live(entries.begin(), entries.end());
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const Fn& f : fns)
+            if (live.count(f.id))
+                for (uint32_t c : f.calls) grew |= live.insert(c).second;
+    }
+    std::vector<std::pair<size_t, size_t>> dead;
+    std::unordered_set<uint32_t> gone;  // los ids que define lo que se quita (para sus OpName y OpDecorate)
+    for (const Fn& f : fns) {
+        if (live.count(f.id) || !f.end) continue;
+        dead.push_back({f.begin, f.end});
+        // (las que no tienen resultado: stores, saltos, barreras…; el resto lo lleva en la tercera palabra)
+        static const std::unordered_set<uint32_t> no_result = {8,   56,  62,  63,  99,  218, 219, 224, 225, 228, 246,
+                                                               247, 249, 250, 251, 252, 253, 254, 255, 256, 257, 317,
+                                                               4416, 5380};
+        for (size_t i = f.begin; i < f.end;) {
+            const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
+            if (op == 248) gone.insert(w[i + 1]);  // OpLabel
+            else if (n >= 3 && !no_result.count(op)) gone.insert(w[i + 2]);
+            i += n;
+        }
+    }
+    // ¿Queda algún puntero variable a StorageBuffer? (parámetros, OpPhi, OpSelect, resultados de llamadas, OpPtrAccessChain)
+    bool variable_pointers = false;
+    for (const Fn& f : fns) {
+        if (!live.count(f.id) || !f.end) continue;
+        for (size_t i = f.begin; i < f.end && !variable_pointers;) {
+            const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
+            if ((op == 55 || op == 245 || op == 169 || op == 57 || op == 67) && n >= 2) {
+                auto it = pointer_class.find(w[i + 1]);
+                variable_pointers = it != pointer_class.end() && it->second == 12;
+            }
+            i += n;
+        }
+    }
+    if (dead.empty() && variable_pointers) return w;
+    std::unordered_set<uint32_t> live_types;  // los OpTypeFunction de las que quedan (el de la quitada, fuera)
+    for (const Fn& f : fns)
+        if (live.count(f.id)) live_types.insert(w[f.begin + 4]);
+    std::vector<uint32_t> out(w.begin(), w.begin() + 5);
+    out.reserve(w.size());
+    size_t next_dead = 0;
+    for (size_t i = 5; i < w.size();) {
+        if (next_dead < dead.size() && i == dead[next_dead].first) {
+            i = dead[next_dead++].second;
+            continue;
+        }
+        const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
+        bool keep = true;
+        if (op == 17 && !variable_pointers && (w[i + 1] == 4441 || w[i + 1] == 4442)) keep = false;  // OpCapability
+        if (op == 10 && !variable_pointers) {  // OpExtension "SPV_KHR_variable_pointers"
+            const char* name = reinterpret_cast<const char*>(&w[i + 1]);
+            keep = strncmp(name, "SPV_KHR_variable_pointers", (n - 1) * 4) != 0;
+        }
+        if (op == 33 && !dead.empty() && !live_types.count(w[i + 1])) keep = false;  // OpTypeFunction sin función
+        if ((op == 5 || op == 6 || op == 71 || op == 72 || op == 332 || op == 5632) && n >= 2 && gone.count(w[i + 1]))
+            keep = false;  // OpName, OpMemberName, OpDecorate… de lo quitado
+        if (keep) out.insert(out.end(), w.begin() + i, w.begin() + i + n);
+        i += n;
+    }
+    return out;
+}
+
+VkResult nvn::create_shader_module(VkDevice device, const std::vector<uint32_t>& spirv, VkShaderModule* module) {
+    static const bool keep = NVN_FLAG("keep_dead_functions");
+    const std::vector<uint32_t> tidy = keep ? std::vector<uint32_t>() : without_dead_functions(spirv);
+    const std::vector<uint32_t>& code = keep ? spirv : tidy;
+    VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    info.codeSize = code.size() * sizeof(uint32_t);
+    info.pCode = code.data();
+    return vkCreateShaderModule(device, &info, nullptr, module);
+}
+
 uint64_t nvn::spirv_identity(const nvnshader::Translated& t) {
     uint64_t h = 0x84222325cbf29ce4ULL;
     auto mix = [&h](uint64_t w) {
@@ -852,7 +949,7 @@ uint64_t nvn::spirv_identity(const nvnshader::Translated& t) {
 }
 
 bool nvn::shader_cache_ready(int timeout_ms) {
-    if (NVN_FLAG("sin_cache_spirv")) return false;
+    if (NVN_FLAG("no_spirv_cache")) return false;
     open_spirv_cache();
     return nvn::spirv_cache::global().wait_loaded(std::chrono::milliseconds(timeout_ms));
 }

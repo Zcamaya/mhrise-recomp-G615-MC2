@@ -47,7 +47,7 @@ void deswizzle_level(const LevelLayout& level, uint32_t bytes_per_block, const u
 // independientes, para repartir un nivel grande entre hilos.
 void deswizzle_rows(const LevelLayout& level, uint32_t bytes_per_block, const uint8_t* src, uint8_t* dst, size_t row_begin,
                     size_t row_end, size_t* zero_chunks = nullptr);
-// La de antes (un memcpy de tamaño variable por cada trozo de 16 bytes), para <datos>/subida_v1.
+// La de antes (un memcpy de tamaño variable por cada trozo de 16 bytes), para <datos>/upload_v1.
 void deswizzle_level_v1(const LevelLayout& level, uint32_t bytes_per_block, const uint8_t* src, uint8_t* dst);
 // Trozos de 16 bytes todo ceros en [p, p + size) (size múltiplo de 16).
 size_t count_zero_chunks(const uint8_t* p, size_t size);

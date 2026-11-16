@@ -1,7 +1,7 @@
 #pragma once
 // Contador de FPS arriba a la izquierda: solo el número de frames en pantalla por segundo (con los generados de
 // LSFG), pequeño y en color (verde a su ritmo, amarillo corto, rojo mal). Lo dibuja la CPU en un buffer pequeño que se
-// copia tal cual sobre la imagen del swapchain, después del escalado del frame. <datos>/sin_fps lo oculta en vivo.
+// copia tal cual sobre la imagen del swapchain, después del escalado del frame. <datos>/no_fps lo oculta en vivo.
 // Panel de ajustes: un cajón de un tercio de la pantalla que sale del borde derecho, con una fila por ajuste (hoy, el
 // interruptor del contador de FPS, que queda guardado con ese mismo fichero). Se abre con el gesto de "atrás" del sistema
 // desde el borde derecho (el de la flecha) o deslizando un dedo de derecha a izquierda desde la mitad derecha de la
@@ -10,7 +10,7 @@
 // En las apps con pantalla de inicio (NIER_SETUP en el entorno) hay una segunda fila, "Cambiar carpeta": la app arranca el
 // juego directamente si ya tiene su carpeta, y con ese interruptor (el fichero <datos>/elegir_carpeta) la pantalla de inicio
 // vuelve a salir la próxima vez que se abra.
-// En los ports con modo TV (NIER_TV_MODE en el entorno) hay otra, "Modo TV" (el fichero <datos>/modo_tv): el juego cree
+// En los ports con modo TV (NIER_TV_MODE en el entorno) hay otra, "Modo TV" (el fichero <datos>/tv_mode): el juego cree
 // estar en la base (más resolución, mando Pro) desde la próxima vez que se abra.
 
 #include <cstdint>

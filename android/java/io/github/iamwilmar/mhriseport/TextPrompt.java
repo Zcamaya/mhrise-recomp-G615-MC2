@@ -18,15 +18,14 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import static io.github.iamwilmar.mhriseport.SetupActivity.tr;
 
-// El teclado de la consola (nn::swkbd, runtime/src/nnsdk/swkbd.cpp): el nombre del cazador, del Felyne y del Canyne, el
-// chat. La Switch abre su applet; aquí, un cuadro con el teclado de Android, en el estilo del menú de ajustes. El texto
-// que el juego trae de partida ya va escrito; Aceptar (o la tecla de hecho del teclado) lo devuelve, Cancelar o atrás
-// cancela. Si el juego rechaza el texto (un nombre con palabras que no admite) vuelve a salir con su mensaje.
+// The console's software keyboard (nn::swkbd, runtime/src/nnsdk/swkbd.cpp): hunter, Palico and Palamute names, and the
+// chat. The Switch opens its keyboard applet; here it's a text box with the Android keyboard, styled like the settings
+// menu. Whatever text the game passes in is already filled in. OK (or the keyboard's Done key) sends it back, Cancel or
+// Back cancels. If the game rejects the text (a name with words it doesn't allow) the box comes back with its message.
 final class TextPrompt {
     interface Answer {
-        void done(String text);  // null: cancelado
+        void done(String text);  // null: cancelled
     }
 
     private final GameActivity activity;
@@ -34,7 +33,7 @@ final class TextPrompt {
 
     TextPrompt(GameActivity activity) {
         this.activity = activity;
-        this.scale = ControlsMenu.menuScale(activity) / 100f;
+        this.scale = SettingsMenu.menuScale(activity) / 100f;
     }
 
     void show(String header, String guide, String initial, String error, int minLength, int maxLength, boolean password,
@@ -44,18 +43,18 @@ final class TextPrompt {
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(12), dp(16), dp(14));
-        box.setBackground(plate(ControlsMenu.PANEL, 2, 0));
-        TextView title = text(header.isEmpty() ? tr("Escribe", "Type") : header, 20, ControlsMenu.GOLD, true);
+        box.setBackground(plate(SettingsMenu.PANEL, 2, 0));
+        TextView title = text(header.isEmpty() ? "Type" : header, 20, SettingsMenu.GOLD, true);
         title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
         box.addView(title);
-        box.addView(rule(ControlsMenu.RED, 2));
-        box.addView(rule(ControlsMenu.GREEN, 1));
+        box.addView(rule(SettingsMenu.RED, 2));
+        box.addView(rule(SettingsMenu.GREEN, 1));
 
         final EditText edit = new EditText(activity);
         edit.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18 * scale);
-        edit.setTextColor(ControlsMenu.CREAM);
-        edit.setHintTextColor(ControlsMenu.DIM);
-        edit.setBackground(plate(ControlsMenu.ROW, 1, 2));
+        edit.setTextColor(SettingsMenu.CREAM);
+        edit.setHintTextColor(SettingsMenu.DIM);
+        edit.setBackground(plate(SettingsMenu.ROW, 1, 2));
         edit.setPadding(dp(10), dp(8), dp(10), dp(8));
         int type = InputType.TYPE_CLASS_TEXT;
         if (password) type |= InputType.TYPE_TEXT_VARIATION_PASSWORD;
@@ -75,18 +74,16 @@ final class TextPrompt {
         if (error.isEmpty()) note.setVisibility(TextView.GONE);
         box.addView(note);
         if (maxLength > 0) {
-            String limits = minLength > 1 ? tr("De " + minLength + " a " + maxLength + " caracteres",
-                    minLength + " to " + maxLength + " characters")
-                    : tr("Hasta " + maxLength + " caracteres", "Up to " + maxLength + " characters");
-            box.addView(text(limits, 13, ControlsMenu.DIM, false));
+            String limits = minLength > 1 ? minLength + " to " + maxLength + " characters"
+                    : "Up to " + maxLength + " characters";
+            box.addView(text(limits, 13, SettingsMenu.DIM, false));
         }
 
         final boolean[] answered = {false};
         Runnable accept = () -> {
             String s = edit.getText().toString();
             if (s.length() < Math.max(minLength, 0)) {
-                note.setText(tr("Hacen falta al menos " + minLength + " caracteres.",
-                        "It needs at least " + minLength + " characters."));
+                note.setText("It needs at least " + minLength + " characters.");
                 note.setVisibility(TextView.VISIBLE);
                 return;
             }
@@ -102,9 +99,9 @@ final class TextPrompt {
 
         LinearLayout buttons = new LinearLayout(activity);
         buttons.setPadding(0, dp(12), 0, 0);
-        TextView cancel = button(tr("Cancelar", "Cancel"), false);
+        TextView cancel = button("Cancel", false);
         cancel.setOnClickListener(v -> d.cancel());
-        TextView ok = button(tr("Aceptar", "OK"), true);
+        TextView ok = button("OK", true);
         ok.setOnClickListener(v -> accept.run());
         LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, dp(46), 1);
         half.setMargins(dp(4), 0, dp(4), 0);
@@ -112,7 +109,7 @@ final class TextPrompt {
         buttons.addView(ok, new LinearLayout.LayoutParams(half));
         box.addView(buttons);
 
-        // Cancelar, atrás o un toque fuera: el juego recibe "cancelado" (una sola vez, se cierre como se cierre)
+        // Cancel, Back or a tap outside: the game gets "cancelled" (once, however the box closes)
         d.setOnDismissListener(x -> {
             if (answered[0]) return;
             answered[0] = true;
@@ -124,7 +121,7 @@ final class TextPrompt {
             w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             DisplayMetrics m = activity.getResources().getDisplayMetrics();
             w.setLayout(Math.min(dp(620), (int) (m.widthPixels * 0.85f)), ViewGroup.LayoutParams.WRAP_CONTENT);
-            w.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);  // arriba: el teclado de Android ocupa la mitad de abajo
+            w.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);  // at the top: the Android keyboard takes the bottom half
             w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
                     | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
         }
@@ -132,13 +129,13 @@ final class TextPrompt {
         edit.requestFocus();
     }
 
-    // ---- piezas (las del menú de ajustes) -------------------------------------------------------------------------
+    // ---- pieces (same as the settings menu) ------------------------------------------------------------------------
 
     private TextView button(String s, boolean main) {
-        TextView b = text(s, 16, main ? 0xFF281010 : ControlsMenu.CREAM, true);
+        TextView b = text(s, 16, main ? 0xFF281010 : SettingsMenu.CREAM, true);
         b.setGravity(Gravity.CENTER);
-        b.setBackground(plate(main ? ControlsMenu.GOLD : 0xFF3E2616, 1, 4));
-        b.setFocusable(true);  // (con el mando: la cruceta llega a los botones)
+        b.setBackground(plate(main ? SettingsMenu.GOLD : 0xFF3E2616, 1, 4));
+        b.setFocusable(true);  // (so the d-pad can reach the buttons on a controller)
         return b;
     }
 
@@ -152,7 +149,7 @@ final class TextPrompt {
     private GradientDrawable plate(int fill, int strokeDp, int radiusDp) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(fill);
-        g.setStroke(dp(strokeDp), ControlsMenu.EDGE);
+        g.setStroke(dp(strokeDp), SettingsMenu.EDGE);
         g.setCornerRadius(dp(radiusDp));
         return g;
     }

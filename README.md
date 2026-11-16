@@ -124,28 +124,29 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | Name | Effect |
 |---|---|
 | `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam), copied into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. |
-| `resolucion_576`, `resolucion_648`, `resolucion_720` | Base resolution of the 3D scene: 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). Live. |
-| `sin_resolucion_dinamica` | Keeps the scene at the base resolution (no dynamic resolution). Live. |
-| `sin_fsr` | Plain linear scaling to the screen instead of FSR 1. Live. |
-| `sin_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |
-| `sin_afinidad` | Doesn't pin the frame's three threads to the fast cores (they're only pinned when the phone has at least three fast cores). Live. |
+| `resolution_576`, `resolution_648`, `resolution_720` | Base resolution of the 3D scene: 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). Live. |
+| `no_dynamic_resolution` | Keeps the scene at the base resolution (no dynamic resolution). Live. |
+| `no_fsr` | Plain linear scaling to the screen instead of FSR 1. Live. |
+| `no_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |
+| `no_affinity` | Doesn't pin the frame's three threads to the fast cores (they're only pinned when the phone has at least three fast cores). Live. |
 | `fps_20`, `fps_25`, `fps_40`, `fps_45` | FPS limit other than the game's 30 (`60fps` for 60). The game measures each frame's length, so it keeps its normal speed: a lower limit saves GPU, heat and battery without slow motion. Loading screens still run at 60. Live. |
-| `sin_sombras` | Shadows off: the shadow maps aren't drawn and every shadow lookup reads as lit. Live. |
+| `no_shadows` | Shadows off: the shadow maps aren't drawn and every shadow lookup reads as lit. Live. |
 | `60fps` | Unlocks 60 fps mode (the Flip 2 GPU reaches ~45 in the village, less in hunts). |
-| `sin_fps` | Hides the FPS counter (the same switch as in the settings panel). |
-| `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |
-| `bc_en_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
-| `con_subgrupos_cortos` | On GPUs whose subgroups are smaller than the Switch's 32-wide warps (Mali Valhall: 16), shaders are translated without subgroup operations, since a game vote or ballot there would only see half a warp. This brings the device's subgroup operations back. |
-| `sin_bindless_arrays`, `con_bindless_arrays` | Texture arrays in the shaders off or on (the menu's Graphics > Texture arrays). Auto, with neither: off with Qualcomm's own driver on an Adreno 7xx or 8xx (512.863 on an Adreno 730 rejected most of the scene's pixel shaders that index them, so things came out black), on elsewhere (Turnip, the Adreno 650). Read at start-up. |
-| `sin_spirv_opt_brx` | Graphics shaders that contain a switch (a BRX) are normally also passed through spirv-opt, as compute shaders always were: the control flow Eden builds for a switch is what Qualcomm's driver miscompiled in the hunter's face skinning, and what a Mali-G615 hung on every frame. This turns that off. Read at start-up. |
-| `sin_atributos_enteros` | Vertex attributes in integer formats (bone indices, IDs) are normally declared as integers in the vertex shader, so the shader receives their raw bits the way the Switch does. Mali GPUs converted them to floats when they were declared float, which made skinned characters stretch into spikes. This declares everything float again, as before. Read at start-up. |
-| `sin_return_mali` | On Mali GPUs (ARM's driver and PanVK), the impossible branch Eden leaves after a switch is written as a plain return instead of an "unreachable", as on Qualcomm's driver, so the compiler can't make assumptions from it in the skinning shaders. This puts the "unreachable" back. Read at start-up. |
-| `sin_traduccion_segura` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
-| `migas` | Debugging: GPU breadcrumbs. If the GPU hangs, or the driver aborts a stuck job, the log names the render pass or dispatch and its shaders. Everything on the GPU runs in order: slow. |
-| `memoria_baja` | Smaller caches, as on a phone with less than 5 GB of RAM. |
-| `sin_af` | No anisotropic filtering: a little cheaper for a weak GPU, a little blurrier at a distance. |
-| `pipelines_un_hilo` | Builds every pipeline on the renderer's own thread, with no background threads or warm-up (on by itself on a PowerVR GPU, whose shader compiler crashes building several at once). `pipelines_en_paralelo` turns that off. |
-| `registro` | Verbose log (line by line) plus a watchdog that prints the game's stack if it hangs. Slower: for debugging. |
+| `no_fps` | Hides the FPS counter (the same switch as in the settings panel). |
+| `xbox_buttons`, `retro_buttons` | Force the face buttons to be read by position (`xbox_buttons`) or by name (`retro_buttons`) if a controller comes out swapped. |
+| `bc_on_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
+| `short_subgroups` | On GPUs whose subgroups are smaller than the Switch's 32-wide warps (Mali Valhall: 16), shaders are translated without subgroup operations, since a game vote or ballot there would only see half a warp. This brings the device's subgroup operations back. |
+| `no_bindless_arrays`, `bindless_arrays` | Texture arrays in the shaders off or on (the menu's Graphics > Texture arrays). Auto, with neither: off with Qualcomm's own driver on an Adreno 7xx or 8xx (512.863 on an Adreno 730 rejected most of the scene's pixel shaders that index them, so things came out black), on elsewhere (Turnip, the Adreno 650). Read at start-up. |
+| `no_spirv_opt_brx` | Graphics shaders that contain a switch (a BRX) are normally also passed through spirv-opt, as compute shaders always were: the control flow Eden builds for a switch is what Qualcomm's driver miscompiled in the hunter's face skinning, and what a Mali-G615 hung on every frame. This turns that off. Read at start-up. |
+| `no_int_attribs` | Vertex attributes in integer formats (bone indices, IDs) are normally declared as integers in the vertex shader, so the shader receives their raw bits the way the Switch does. Mali GPUs converted them to floats when they were declared float, which made skinned characters stretch into spikes. This declares everything float again, as before. Read at start-up. |
+| `keep_dead_functions` | Helper functions that a translated shader never calls are normally removed before the shader goes to the driver, along with the "variable pointers" capability they bring. On Qualcomm's own driver (512.863) every pipeline with such a pixel shader was rejected, which left characters black. This sends Eden's SPIR-V unchanged. Read at start-up. |
+| `no_return_mali` | On Mali GPUs (ARM's driver and PanVK), the impossible branch Eden leaves after a switch is written as a plain return instead of an "unreachable", as on Qualcomm's driver, so the compiler can't make assumptions from it in the skinning shaders. This puts the "unreachable" back. Read at start-up. |
+| `no_safe_translation` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
+| `breadcrumbs` | Debugging: GPU breadcrumbs. If the GPU hangs, or the driver aborts a stuck job, the log names the render pass or dispatch and its shaders. Everything on the GPU runs in order: slow. |
+| `low_memory` | Smaller caches, as on a phone with less than 5 GB of RAM. |
+| `no_af` | No anisotropic filtering: a little cheaper for a weak GPU, a little blurrier at a distance. |
+| `single_thread_pipelines` | Builds every pipeline on the renderer's own thread, with no background threads or warm-up (on by itself on a PowerVR GPU, whose shader compiler crashes building several at once). `parallel_pipelines` turns that off. |
+| `verbose_log` | Verbose log (line by line) plus a watchdog that prints the game's stack if it hangs. Slower: for debugging. |
 
 ## How it works
 

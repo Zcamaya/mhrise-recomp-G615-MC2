@@ -154,10 +154,10 @@ struct Sampler {
     SamplerDesc desc{};
     VkSampler vk = VK_NULL_HANDLE;
     // El otro anisotrópico (ver Executor::sampler), en vivo. En los de comparación (sombras): el de antes, con el mínimo de
-    // 4x forzado (<datos>/con_af_comparacion). En los demás: sin ese mínimo, el que pide el juego (<datos>/af_del_juego).
+    // 4x forzado (<datos>/af_compare). En los demás: sin ese mínimo, el que pide el juego (<datos>/game_af).
     // Se retira con vk.
     VkSampler vk_af = VK_NULL_HANDLE;
-    // Con las sombras apagadas (<datos>/sin_sombras, en vivo; Executor::sampler): el de comparación que siempre pasa. Se
+    // Con las sombras apagadas (<datos>/no_shadows, en vivo; Executor::sampler): el de comparación que siempre pasa. Se
     // retira con vk.
     VkSampler vk_lit = VK_NULL_HANDLE;
 };
@@ -265,7 +265,7 @@ inline void note_max(std::atomic<uint64_t>& a, uint64_t v) {
     }
 }
 // true si hay que usar stripped_module en vez de module: un interruptor en vivo devuelve ese compute a la traducción
-// sin las barreras de sus bucles (<datos>/sin_barrera_exposicion, sin_barrera_reduccion o sin_barrera_uniforme: todos).
+// sin las barreras de sus bucles (<datos>/no_exposure_barrier, no_reduction_barrier o no_uniform_barrier: todos).
 bool use_stripped_module(const ProgramStage& stage);
 // Geometry: el módulo para un vertex shader que escribe `previous_stores` y una topología de entrada de
 // Eden; module a VK_NULL_HANDLE si no se puede traducir.
@@ -281,6 +281,8 @@ ProgramStage::Variant vertex_variant(ProgramStage& stage, uint64_t input_types);
 // Identidad de una traducción (ProgramStage::spirv_id): huella del SPIR-V, de la etapa, de los genéricos y de lo que el
 // layout toma de cada recurso (tipo, set, binding, número). Dos etapas con la misma comparten pipelines y layouts.
 uint64_t spirv_identity(const nvnshader::Translated& t);
+// vkCreateShaderModule con el SPIR-V que va al driver (program.cpp: sin las funciones que nadie llama)
+VkResult create_shader_module(VkDevice device, const std::vector<uint32_t>& spirv, VkShaderModule* module);
 // Precalentado (ejecutor): espera a que la caché de SPIR-V esté leída (la abre si hacía falta); false si está apagada
 // o no llegó a tiempo. cached_translation: la traducción guardada con esa clave.
 bool shader_cache_ready(int timeout_ms);

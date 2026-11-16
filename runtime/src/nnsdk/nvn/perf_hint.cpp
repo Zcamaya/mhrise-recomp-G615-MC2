@@ -7,7 +7,7 @@
 // tres contaría dos veces lo que se solapa, el más cargado es el que marca el ritmo.
 // Las funciones se buscan en libandroid.so al arrancar (la app empieza en Android 9: sin ellas, nada). La sesión se crea
 // en un hilo aparte (son llamadas al sistema por binder; el frame solo informa, y eso el sistema lo agrupa).
-// <datos>/sin_adpf (en vivo): no se informa (el sistema vuelve solo a lo suyo).
+// <datos>/no_adpf (en vivo): no se informa (el sistema vuelve solo a lo suyo).
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -52,7 +52,7 @@ const Adpf& adpf() {
             a.set_threads = reinterpret_cast<decltype(a.set_threads)>(dlsym(lib, "APerformanceHint_setThreads"));
         }
         a.ok = a.get_manager && a.create_session && a.update_target && a.report;
-        NVN_LOG("pistas de rendimiento (ADPF): %s\n", a.ok ? "sí" : "no (Android anterior al 13)");
+        NVN_LOG("performance hints (ADPF): %s\n", a.ok ? "yes" : "no (Android older than 13)");
         return a;
     }();
     return api;
@@ -82,7 +82,7 @@ void regroup(std::vector<pid_t> tids, int64_t target) {
         } else if (APerformanceHintManager* m = a.get_manager()) {
             std::vector<int32_t> ids(tids.begin(), tids.end());
             APerformanceHintSession* made = a.create_session(m, ids.data(), ids.size(), target);
-            NVN_LOG("pistas de rendimiento: sesión %s con %zu hilos, objetivo %.1f ms\n", made ? "creada" : "rechazada",
+            NVN_LOG("performance hints: session %s with %zu threads, target %.1f ms\n", made ? "created" : "refused",
                     ids.size(), target / 1e6);
             g_session = made;
         }
@@ -95,7 +95,7 @@ void regroup(std::vector<pid_t> tids, int64_t target) {
 void perf_hint_frame(int64_t period_ns) {
     static std::unordered_map<pid_t, int64_t> last_cpu;
     static bool given_up = false;
-    if (given_up || NVN_FLAG("sin_adpf")) return;
+    if (given_up || NVN_FLAG("no_adpf")) return;
     const Adpf& a = adpf();
     if (!a.ok) {
         given_up = true;

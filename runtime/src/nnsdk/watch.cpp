@@ -146,7 +146,7 @@ void protect_runs(const std::vector<std::pair<uintptr_t, size_t>>& runs) {
 
 void init_heap(uintptr_t map, size_t size) {
     const char* data = getenv("NIER_DATA");
-    g_enabled = access((std::string(data ? data : ".") + "/sin_vigilancia").c_str(), F_OK) != 0;
+    g_enabled = access((std::string(data ? data : ".") + "/no_write_watch").c_str(), F_OK) != 0;
     if (!g_enabled) return;
     g_version = table<std::atomic<uint32_t>>(size / kPage);
     g_state = table<std::atomic<uint8_t>>(size / kPage);
@@ -245,8 +245,8 @@ void collect(uintptr_t address, size_t size, std::vector<uint64_t>& keys, std::v
     // señal de cualquier hilo que escribiera en memoria vigilada esperaba detrás). Perfil del 4-11: 21700 en el envío que
     // carga el selector de personaje ("724.1 tramos cerrados por frame"), 10800 en la aldea y 60600 al entrar en la
     // misión. Ahora el rango va seguido (un tramo si no tiene huecos) y lo del heap se ordena y se junta (16 páginas
-    // seguidas por tile de 64 KB como poco). <datos>/vigilancia_por_pagina: como antes.
-    const bool per_page = NVN_FLAG("vigilancia_por_pagina");
+    // seguidas por tile de 64 KB como poco). <datos>/watch_per_page: como antes.
+    const bool per_page = NVN_FLAG("watch_per_page");
     std::vector<std::pair<uintptr_t, size_t>> close, close_heap;
     {
         Lock lock;

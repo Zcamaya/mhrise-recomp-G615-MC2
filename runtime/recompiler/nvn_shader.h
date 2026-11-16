@@ -79,7 +79,7 @@ struct Options {
     bool keep_conditional_barriers = false;
     uint32_t workgroup[3] = {1, 1, 1};
     // Bindless de los uniform buffers del juego: arrays con índice dinámico contados hasta el final del cbuf (64 KB), con
-    // la máscara y el sampler fijo del handle, y movidos al set 1. Sin esto (<datos>/sin_bindless_arrays al traducir), como
+    // la máscara y el sampler fijo del handle, y movidos al set 1. Sin esto (<datos>/no_bindless_arrays al traducir), como
     // antes. nonuniform_indexing: el dispositivo tiene shaderSampledImageArrayNonUniformIndexing (cada píxel lee su
     // decal o su sonda: el índice no es uniforme en el draw).
     bool bindless_arrays = true;
@@ -114,7 +114,7 @@ struct Options {
     // Memoria compartida que solo es privada de cada invocación (el compilador de NVN derrama registros ahí, en
     // tid·28 + k en el skinning de la cara) a la memoria local (Private): con esos stores a Workgroup dentro de los casos
     // de un switch, el driver de Qualcomm dejaba los pesos a cero (NaN en todo el grupo). Solo si se demuestra que las
-    // ventanas de las invocaciones no se solapan (nvn_shader.cpp, shared_to_local). <datos>/sin_compartida_privada: como antes.
+    // ventanas de las invocaciones no se solapan (nvn_shader.cpp, shared_to_local). <datos>/no_private_shared: como antes.
     bool shared_to_local = true;
     // Etapas (bit 1 << Stage) cuyo SPIR-V se pasa por el optimizador de SPIRV-Tools (spirv_opt.cpp: el -O de spirv-opt
     // sin tocar la interfaz ni los bindings) antes de devolverlo. El driver de Qualcomm compila mal el flujo con banderas
