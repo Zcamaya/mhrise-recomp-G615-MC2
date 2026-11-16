@@ -457,8 +457,8 @@ volatile float* game_quality_rate() {
     return renderer ? reinterpret_cast<volatile float*>(renderer + kRateField) : nullptr;
 }
 
-// Desde el hilo que presenta, una vez por frame. interval: el de presentación (presupuesto = interval x 16,7 ms).
-void dynamic_resolution(int interval) {
+// Desde el hilo que presenta, una vez por frame. period_ns: lo que dura un frame (el presupuesto).
+void dynamic_resolution(int64_t period_ns) {
     DynamicResolution& d = g_dynres;
     volatile float* rate = game_quality_rate();
     if (!rate) return;
@@ -489,7 +489,7 @@ void dynamic_resolution(int interval) {
         d.next = (d.next + 1) % 90;
         d.count = std::min(d.count + 1, 90);
         d.since_change++;
-        const double budget = interval * 16.6667e6;
+        const double budget = static_cast<double>(period_ns);
         auto last = [&](int k) { return d.samples[(d.next - 1 - k + 180) % 90]; };
         int level = d.level;
         if (d.count >= 8 && d.since_change >= 15 && level + 1 < kLevels) {
@@ -577,26 +577,44 @@ void log_pace(const nvn::Window& w) {
     frames = slow = worst_ns = 0;
 }
 
-// <datos>/60fps: MaxFps 60 mientras esté (lo que el juego tenía, de vuelta al quitarlo). Desde el hilo que presenta.
-void game_max_fps(bool fps60) {
+// Límite de FPS (el menú de opciones; en vivo): <datos>/fps_20, fps_25, fps_40, fps_45 o 60fps. Sin ninguno, lo del juego
+// (30 jugando, 60 en las cargas). El paso del juego es variable (ver GameClock): entre 7,5 y 60 fps va a su velocidad, así
+// que bajar el límite ahorra GPU y batería sin cámara lenta; subirlo pide más. En las cargas el juego pide 60 y se le deja
+// (un límite bajo las alargaría).
+int fps_cap() {
+    if (NVN_FLAG("60fps")) return 60;
+    if (NVN_FLAG("fps_45")) return 45;
+    if (NVN_FLAG("fps_40")) return 40;
+    if (NVN_FLAG("fps_25")) return 25;
+    if (NVN_FLAG("fps_20")) return 20;
+    return 0;
+}
+
+// Pone el MaxFps del juego para ese límite (0: el suyo, de vuelta si se había cambiado). Devuelve los fps a los que va
+// el juego, o 0 si no se conoce su reloj. Desde el hilo que presenta.
+float game_max_fps(int cap) {
     static float wanted = 30.0f;  // lo último que puso el juego
-    static bool forced = false;
+    static float ours = 0.0f;     // lo que pusimos nosotros (0: nada)
+    static float logged = 0.0f;
     GameClock* c = game_clock();
-    if (!c) return;
+    if (!c) return 0.0f;
     volatile float& max_fps = c->max_fps;
     const float now = max_fps;
-    if (fps60) {
-        if (now != 60.0f) {
-            wanted = now;
-            max_fps = 60.0f;
-        }
-        if (!forced) NVN_LOG("reloj del juego: MaxFps %.0f -> 60 (<datos>/60fps)\n", now);
-        forced = true;
-    } else if (forced) {
-        if (now == 60.0f && wanted != 60.0f) max_fps = wanted;
-        NVN_LOG("reloj del juego: MaxFps de vuelta a %.0f\n", wanted);
-        forced = false;
+    if (ours == 0.0f || now != ours) wanted = now;  // lo ha cambiado el juego
+    float target = wanted;
+    if (cap) {
+        target = wanted >= 60.0f ? 60.0f : static_cast<float>(cap);
+        if (now != target) max_fps = target;
+        ours = target;
+    } else if (ours != 0.0f) {
+        if (now == ours) max_fps = wanted;
+        ours = 0.0f;
     }
+    if (target != logged) {
+        NVN_LOG("reloj del juego: MaxFps %.0f%s\n", target, cap ? " (límite del menú)" : "");
+        logged = target;
+    }
+    return target;
 }
 }  // namespace
 
@@ -631,6 +649,12 @@ void follow_native_window(nvn::Window& w) {
     state->done.store(serial, std::memory_order_release);
 }
 
+namespace {
+std::atomic<int64_t> g_frame_period_ns{33'333'333};
+}  // namespace
+
+int64_t nvn::frame_period_ns() { return g_frame_period_ns.load(std::memory_order_relaxed); }
+
 void nvn::present(Window& w, int index) {
     VkContext* c = vk();
     if (!c || index < 0 || index >= static_cast<int>(w.textures.size())) return;
@@ -645,19 +669,24 @@ void nvn::present(Window& w, int index) {
     {
         using clock = std::chrono::steady_clock;
         static clock::time_point next = clock::now();
-        static int logged_interval = 0;
-        const bool fps60 = NVN_FLAG("60fps");
-        game_max_fps(fps60);
-        const int interval = fps60 ? 1 : std::max(w.present_interval, 1);
-        dynamic_resolution(interval);
-        if (interval != logged_interval) {
-            NVN_LOG("ritmo de presentación: intervalo %d%s\n", interval, fps60 ? " (forzado por <datos>/60fps)" : "");
-            logged_interval = interval;
+        static int64_t logged_period = 0;
+        const int cap = fps_cap();
+        const float game_fps = game_max_fps(cap);
+        // Con límite, el frame dura lo que pide (lo que el juego tenga de MaxFps; sin su reloj, el límite tal cual); sin él,
+        // el intervalo de NVN que pide el juego (x 16,7 ms)
+        const float fps = cap ? (game_fps > 0.0f ? game_fps : static_cast<float>(cap)) : 0.0f;
+        const int64_t period_ns = fps > 0.0f ? static_cast<int64_t>(1e9 / fps) : 16'666'667LL * std::max(w.present_interval, 1);
+        g_frame_period_ns.store(period_ns, std::memory_order_relaxed);
+        dynamic_resolution(period_ns);
+        if (period_ns != logged_period) {
+            NVN_LOG("ritmo de presentación: %.1f ms por frame (%.0f fps)%s\n", period_ns / 1e6, 1e9 / period_ns,
+                    cap ? " (límite del menú)" : "");
+            logged_period = period_ns;
         }
-        const auto period = std::chrono::microseconds(16667) * interval;
-        // A intervalo 2 se despierta 2 ms antes (FIFO pone el resto). A 1, en `next`: un frame de menos de 16,7 ms
-        // le cuenta al juego como uno entero y lo aceleraría un poco.
-        const auto early = std::chrono::milliseconds(interval == 1 ? 0 : 2);
+        const auto period = std::chrono::nanoseconds(period_ns);
+        // Con frames de más de 20 ms se despierta 2 ms antes (FIFO pone el resto). A 60, en `next`: un frame de menos de
+        // 16,7 ms le cuenta al juego como uno entero y lo aceleraría un poco.
+        const auto early = std::chrono::milliseconds(period_ns > 20'000'000 ? 2 : 0);
         auto now = clock::now();
         if (now < next - early) std::this_thread::sleep_until(next - early);
         next = std::max(next + period, clock::now() + period / 2);

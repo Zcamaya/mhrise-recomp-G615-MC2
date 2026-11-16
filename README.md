@@ -116,7 +116,7 @@ may stutter while its shaders are translated and compiled; they are cached for t
 ## Options
 
 The in-game settings menu (the gear of the touch controls) sets the common ones by section: **Display** (base
-resolution, dynamic resolution, FSR, 60 fps, FPS counter), **Graphics** (anisotropic filtering, GPU driver),
+resolution, dynamic resolution, FSR, FPS limit, FPS counter), **Graphics** (shadows, anisotropic filtering, GPU driver),
 **Performance** (performance hints, fast cores, low memory, shader warm-up, pipelines on one thread), and the touch
 controls, combos and controller. Underneath, each is an empty file (or folder) with one of these names in the game
 folder, which the game checks once a second; the ones only read at start-up say so.
@@ -129,6 +129,8 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | `sin_fsr` | Plain linear scaling to the screen instead of FSR 1. Live. |
 | `sin_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |
 | `sin_afinidad` | Doesn't pin the frame's three threads to the fast cores (they're only pinned when the phone has at least three fast cores). Live. |
+| `fps_20`, `fps_25`, `fps_40`, `fps_45` | FPS limit other than the game's 30 (`60fps` for 60). The game measures each frame's length, so it keeps its normal speed: a lower limit saves GPU, heat and battery without slow motion. Loading screens still run at 60. Live. |
+| `sin_sombras` | Shadows off: the shadow maps aren't drawn and every shadow lookup reads as lit. Live. |
 | `60fps` | Unlocks 60 fps mode (the Flip 2 GPU reaches ~45 in the village, less in hunts). |
 | `sin_fps` | Hides the FPS counter (the same switch as in the settings panel). |
 | `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |
@@ -168,7 +170,10 @@ adb install -r build/mhriseport.apk
 ```
 
 `ANDROID_HOME` selects the SDK (default `~/Library/Android/sdk`). The APK is signed with the Android debug key unless you
-pass `KEYSTORE=… KS_PASS=…`. For development, `tools/apk.sh` builds, installs, starts the game on the device connected by
+pass `KEYSTORE=… KS_PASS=…`. `RELEASE=1` makes the build for players: `-O3` without debug info, unused code and duplicate
+functions removed, symbols stripped, and an APK that isn't debuggable. Releases are built that way by the `release`
+workflow when a `v*` tag is pushed, signed with the key in the `RELEASE_KEYSTORE_B64` and `RELEASE_KS_PASS` repository
+secrets (alias `recomp`). For development, `tools/apk.sh` builds, installs, starts the game on the device connected by
 adb and prints its log. The Python scripts in `tools/` are analysis helpers that work on your own extracted files in
 `work/` (ignored by git).
 

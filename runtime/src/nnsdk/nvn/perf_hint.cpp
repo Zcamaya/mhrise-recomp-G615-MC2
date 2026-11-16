@@ -1,5 +1,5 @@
 // Pistas de rendimiento de Android (ADPF, Android 13 en adelante): los hilos críticos (el principal del juego, MainDraw y
-// NvnSubmit, los de os.cpp) van en una sesión cuyo objetivo es lo que dura un frame (intervalo x 16,7 ms), y en cada frame
+// NvnSubmit, los de os.cpp) van en una sesión cuyo objetivo es lo que dura un frame (window.cpp, frame_period_ns), y en cada frame
 // se le dice cuánto trabajó el más cargado. Así el sistema sube los relojes (y elige núcleos) para llegar al frame,
 // en vez de bajarlos en cada espera del frame y subirlos tarde, que era lo que hacía el ritmo irregular en teléfonos
 // fuera de la Flip: con Turnip en una Adreno 725, la GPU del frame en 1,4 ms y aun así frames de 40-80 ms sueltos.
@@ -92,7 +92,7 @@ void regroup(std::vector<pid_t> tids, int64_t target) {
 
 }  // namespace
 
-void perf_hint_frame(int interval) {
+void perf_hint_frame(int64_t period_ns) {
     static std::unordered_map<pid_t, int64_t> last_cpu;
     static bool given_up = false;
     if (given_up || NVN_FLAG("sin_adpf")) return;
@@ -101,7 +101,7 @@ void perf_hint_frame(int interval) {
         given_up = true;
         return;
     }
-    const int64_t target = std::max(interval, 1) * 16'666'667LL;
+    const int64_t target = std::max<int64_t>(period_ns, 8'000'000);
     std::vector<pid_t> tids = critical_threads();
     std::sort(tids.begin(), tids.end());
     APerformanceHintSession* s = g_session.load();

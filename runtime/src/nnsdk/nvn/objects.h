@@ -155,6 +155,9 @@ struct Sampler {
     // 4x forzado (<datos>/con_af_comparacion). En los demás: sin ese mínimo, el que pide el juego (<datos>/af_del_juego).
     // Se retira con vk.
     VkSampler vk_af = VK_NULL_HANDLE;
+    // Con las sombras apagadas (<datos>/sin_sombras, en vivo; Executor::sampler): el de comparación que siempre pasa. Se
+    // retira con vk.
+    VkSampler vk_lit = VK_NULL_HANDLE;
 };
 
 struct TexturePoolEntry {

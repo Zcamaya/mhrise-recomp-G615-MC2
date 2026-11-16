@@ -689,6 +689,7 @@ nvn::Boolean nvnSamplerInitialize(void* sampler, const SamplerDesc* b) {
     if (!s) s = &g_samplers.create(sampler);
     if (s->vk) nvn::retire_sampler(s->vk);
     if (s->vk_af) nvn::retire_sampler(s->vk_af);
+    if (s->vk_lit) nvn::retire_sampler(s->vk_lit);
     *s = nvn::Sampler{};
     s->desc = *b;
     return 1;
@@ -699,7 +700,8 @@ void nvnSamplerFinalize(void* sampler) {
     if (nvn::Sampler* s = g_samplers.get(sampler)) {
         if (s->vk) nvn::retire_sampler(s->vk);
         if (s->vk_af) nvn::retire_sampler(s->vk_af);
-        s->vk = s->vk_af = VK_NULL_HANDLE;
+        if (s->vk_lit) nvn::retire_sampler(s->vk_lit);
+        s->vk = s->vk_af = s->vk_lit = VK_NULL_HANDLE;
     }
 }
 

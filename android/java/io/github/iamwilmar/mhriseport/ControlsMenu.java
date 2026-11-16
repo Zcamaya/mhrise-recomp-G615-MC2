@@ -176,15 +176,34 @@ final class ControlsMenu {
                 "sin_fsr", true);
 
         header(tr("Imagen", "Picture"));
-        flag(tr("60 fps", "60 fps"),
-                tr("Quita el límite de 30. La GPU tiene que poder: en la Flip 2 llega a ~45 en la aldea, menos en misiones.",
-                        "Lifts the 30 cap. The GPU has to keep up: on the Flip 2 it reaches ~45 in the village, less in hunts."),
-                "60fps", false);
+        final String[] caps = {null, "fps_20", "fps_25", "fps_40", "fps_45", "60fps"};
+        choice(tr("Límite de FPS", "FPS limit"),
+                tr("El juego mide cuánto dura cada frame, así que entre 20 y 60 fps va a su velocidad: menos fps ahorran GPU, "
+                                + "calor y batería sin cámara lenta. 30 es el del juego (en las cargas siempre pide 60). 40 va "
+                                + "parejo en pantallas de 120 Hz; en una de 60, 40 y 45 dan algún tirón. Se aplica al momento.",
+                        "The game measures how long each frame takes, so between 20 and 60 fps it runs at its normal speed: "
+                                + "fewer fps save GPU, heat and battery with no slow motion. 30 is the game's own (loading screens "
+                                + "always ask for 60). 40 is even on 120 Hz screens; on a 60 Hz one, 40 and 45 judder a little. "
+                                + "Applies at once."),
+                new String[] {tr("30 (el del juego)", "30 (the game's)"), "20", "25", "40", "45", "60"}, () -> {
+                    for (int i = caps.length - 1; i > 0; i--)
+                        if (has(caps[i])) return i;
+                    return 0;
+                }, v -> {
+                    for (int i = 1; i < caps.length; i++) put(caps[i], i == v);
+                });
         flag(tr("Contador de FPS", "FPS counter"), tr("El número en la esquina.", "The number in the corner."), "sin_fps",
                 true);
     }
 
     private void buildGraphics() {
+        header(tr("Efectos", "Effects"));
+        flag(tr("Sombras", "Shadows"),
+                tr("Las de los cazadores, los monstruos y el escenario. Apagadas no se dibujan los mapas de sombra: menos "
+                                + "trabajo para una GPU floja. Se aplica al momento.",
+                        "Those of the hunters, monsters and scenery. Off, the shadow maps aren't drawn: less work for a weak "
+                                + "GPU. Applies at once."),
+                "sin_sombras", true);
         header(tr("Texturas", "Textures"));
         flag(tr("Filtrado anisótropo", "Anisotropic filtering"),
                 tr("Suelos y paredes en ángulo más nítidos a lo lejos. Apagado: un poco más barato para una GPU floja.",

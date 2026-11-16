@@ -1529,6 +1529,15 @@ private:
     VkExtent2D rp_extent_{};
     VkRenderPass rp_ = VK_NULL_HANDLE;  // el de LOAD/STORE (compatible con el empezado): pipelines y framebuffers
     uint32_t rp_color_count_ = 0;
+    // Un pase de sombras: sin color y con la profundidad en una textura de varias capas (las cascadas de MH Rise, 512x512
+    // D16 con una cascada por capa; las luces puntuales, cubemaps). La de la escena es de una capa (1280x720).
+    bool shadow_pass() const {
+        if (!st_.rt.depth || st_.rt.depth->layers <= 1) return false;
+        for (int k = 0; k < st_.rt.count && k < 8; k++)
+            if (st_.rt.colors[k]) return false;
+        return true;
+    }
+    bool shadow_skip_logged_ = false;
     VkSampleCountFlagBits rp_samples_ = VK_SAMPLE_COUNT_1_BIT;
     VkRect2D rp_area_{};          // renderArea del pase abierto
     bool rp_area_full_ = true;    // ...y si es el framebuffer entero
@@ -4305,7 +4314,11 @@ VkSampler Executor::sampler(Sampler* s) {
     // otro VkSampler (vk_af, que en los que no son de comparación no se usaba). Cuesta GPU en los pases con muchas texturas
     // (el de la escena a 960x540); la nitidez del suelo en ángulo baja a la de la consola.
     const bool game_af = d.compare_mode == 0 && NVN_FLAG("af_del_juego");
-    VkSampler& out = legacy_af || game_af ? s->vk_af : s->vk;
+    // Sombras apagadas (<datos>/sin_sombras, en vivo; el menú de opciones): la comparación siempre pasa, así que toda
+    // lectura de un mapa de sombras da "iluminado" se haya dibujado o no (los draws de las cascadas se saltan en draw()).
+    // En su propio VkSampler, para poder volver al momento.
+    const bool lit = d.compare_mode != 0 && NVN_FLAG("sin_sombras");
+    VkSampler& out = lit ? s->vk_lit : legacy_af || game_af ? s->vk_af : s->vk;
     if (out) return out;
     auto wrap = [](int w) {
         switch (w) {
@@ -4336,7 +4349,7 @@ VkSampler Executor::sampler(Sampler* s) {
         si.maxAnisotropy = si.anisotropyEnable ? af : 1.0f;
     }
     si.compareEnable = d.compare_mode != 0;
-    si.compareOp = vk_compare_op(d.compare_func);
+    si.compareOp = lit ? VK_COMPARE_OP_ALWAYS : vk_compare_op(d.compare_func);
     si.minLod = d.min_filter >= 2 ? std::max(d.lod_min, 0.0f) : 0.0f;
     si.maxLod = d.min_filter >= 2 ? std::min(d.lod_max, 16.0f) : 0.25f;
     si.borderColor = d.border[3] > 0.5f ? (d.border[0] > 0.5f ? VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE
@@ -6592,6 +6605,14 @@ void Executor::draw(const cmd::Draw& in) {
         return;
     }
     maybe_split();
+    if (shadow_pass() && NVN_FLAG("sin_sombras")) {
+        if (!shadow_skip_logged_) {
+            shadow_skip_logged_ = true;
+            NVN_LOG("sombras apagadas (<datos>/sin_sombras): sin los draws de los mapas de sombra (%ux%u, %u capas)\n",
+                    st_.rt.depth->desc.width, st_.rt.depth->desc.height, st_.rt.depth->layers);
+        }
+        return;
+    }
     cmd::Draw d = in;
     if (d.indirect) note_read(4, d.indirect, 20);
     // Argumentos escritos por la GPU (p. ej. el geometry shader del pre-pase de NieR compacta los triángulos
@@ -9144,8 +9165,12 @@ bool Executor::blit(Texture& t, const VkRect2D& crop, VkImage dst, VkFormat form
     bool fsr_ok = true;
     if (!NVN_FLAG("fsr_siempre")) {
         const int64_t gpu = frame_gpu_ns_.load(std::memory_order_relaxed);
-        const bool fps60 = NVN_FLAG("60fps");
-        const int64_t off_ns = fps60 ? kFsrOffNs60 : kFsrOffNs, on_ns = fps60 ? kFsrOnNs60 : kFsrOnNs;
+        // (por lo que dura el frame ahora: 30 y 60 con sus medidas; otro límite del menú, dejando sitio a los ~4,8 ms del FSR)
+        const int64_t period = frame_period_ns();
+        const bool fps60 = period < 20'000'000;
+        int64_t off_ns = fps60 ? kFsrOffNs60 : kFsrOffNs, on_ns = fps60 ? kFsrOnNs60 : kFsrOnNs;
+        if (period > 17'000'000 && (period < 33'000'000 || period > 34'000'000))
+            off_ns = period - 4'833'333, on_ns = off_ns - 3'500'000;
         if (!fsr_guard_off_) {
             fsr_guard_frames_ = gpu > off_ns ? fsr_guard_frames_ + 1 : 0;
             if (fsr_guard_frames_ >= 3) fsr_guard_off_ = true, fsr_guard_frames_ = 0;
@@ -10122,7 +10147,7 @@ void Executor::profile_frame() {
             prof_full_hash_bytes_ / double(period) / 1048576.0, (unsigned long long)prof_watched_textures_);
     prof_forced_levels_ = prof_forced_unseen_ = prof_full_hash_bytes_ = 0;
     NVN_LOG("perfil fsr: %llu de %d frames con el blit por la guarda (frame del juego > %.1f ms)\n",
-            static_cast<unsigned long long>(prof_fsr_guard_frames_), period, (NVN_FLAG("60fps") ? kFsrOffNs60 : kFsrOffNs) / 1e6);
+            static_cast<unsigned long long>(prof_fsr_guard_frames_), period, (frame_period_ns() < 20'000'000 ? kFsrOffNs60 : kFsrOffNs) / 1e6);
     prof_fsr_guard_frames_ = 0;
     NVN_LOG("perfil overlays: %.2f MB nuevos de la arena y %.2f MB en huecos reutilizados por frame, %zu huecos libres, "
             "arena %llu MB; %llu compactaciones (%.1f ms esperando a la GPU y %.1f ms copiando cada una)\n",

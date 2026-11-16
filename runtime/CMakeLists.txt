@@ -4,6 +4,13 @@ project(nier_runtime C CXX ASM)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra)
+# Release (tools/build_apk.sh RELEASE=1, la de los jugadores): cada función y dato en su sección para que el enlazador
+# tire lo que nadie usa, funciones idénticas plegadas (solo las que no se comparan por dirección) y sin tabla de
+# símbolos (la dinámica, la que enlaza el juego, se queda). Sin LTO: con lo que el juego enlaza por nombre, sin probar.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_compile_options(-ffunction-sections -fdata-sections)
+  add_link_options(-Wl,--gc-sections -Wl,--icf=safe -s)
+endif()
 
 # libnnsdk.so: nuestra reimplementación del SDK de Nintendo. Todo símbolo que
 # define se enlaza al juego con prioridad sobre bionic y sobre los stubs.

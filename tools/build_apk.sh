@@ -5,6 +5,9 @@
 #
 # Signing: by default the Android debug keystore (~/.android/debug.keystore, created if missing). For your own release
 # key: KEYSTORE=<file> KS_PASS=<password> [KEY_ALIAS=<alias>] tools/build_apk.sh
+# RELEASE=1: the build for players (the release workflow): -O3 without debug info, unused code and duplicate functions
+# dropped, symbols stripped, and an APK that isn't debuggable (ART runs a debuggable app's Java slower). Without it,
+# RelWithDebInfo and a debuggable APK, for testing.
 # Compila la APK. Firma con la clave de depuración de Android salvo que se pase KEYSTORE.
 set -euo pipefail
 
@@ -13,7 +16,12 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 NDK="${NDK_DIR:-$SDK/ndk/28.2.13676358}"  # this exact NDK (ANDROID_NDK_HOME often points to another)
 BT="$SDK/build-tools/35.0.0"
 JAR="$SDK/platforms/android-33/android.jar"
-BUILD="$ROOT/build/android"
+RELEASE="${RELEASE:-0}"
+if [ "$RELEASE" = 1 ]; then
+  BUILD_TYPE=Release BUILD="$ROOT/build/android-release" DEBUG_FLAG=""
+else
+  BUILD_TYPE=RelWithDebInfo BUILD="$ROOT/build/android" DEBUG_FLAG="--debug-mode"
+fi
 STAGE="$ROOT/build/apk"
 APK="$ROOT/build/mhriseport.apk"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 4)}"
@@ -24,7 +32,7 @@ done
 [ -d "$ROOT/third_party/eden/src/shader_recompiler" ] || { echo "run tools/setup.sh first" >&2; exit 1; }
 
 mkdir -p "$BUILD"
-cmake -S "$ROOT/runtime" -B "$BUILD" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+cmake -S "$ROOT/runtime" -B "$BUILD" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_NDK="$NDK" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static > /dev/null
 if ! cmake --build "$BUILD" -j"$JOBS" > "$BUILD/build.log" 2>&1; then
@@ -49,7 +57,7 @@ cp "$ROOT/runtime/external/libadrenotools/lib/linkernsbypass/LICENSE" "$STAGE/as
 cp "$ROOT/runtime/external/volk/LICENSE.md" "$STAGE/assets/licenses/volk.txt"
 "$BT/aapt2" compile --dir "$ROOT/android/res" -o "$STAGE/res.zip"
 "$BT/aapt2" link --manifest "$ROOT/android/AndroidManifest.xml" -I "$JAR" -R "$STAGE/res.zip" --auto-add-overlay \
-  --debug-mode -o "$STAGE/base.apk"
+  $DEBUG_FLAG -o "$STAGE/base.apk"
 (cd "$STAGE" && zip -q -r base.apk lib classes.dex assets)
 "$BT/zipalign" -f -p 4 "$STAGE/base.apk" "$STAGE/aligned.apk"
 
