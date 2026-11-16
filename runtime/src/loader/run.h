@@ -11,6 +11,8 @@ struct RunConfig {
     void* native_window = nullptr;   // ANativeWindow* en la APK; nullptr en la terminal
     struct NnsdkInput* input = nullptr;  // mando (APK)
     struct NnsdkWindow* window_state = nullptr;  // la ventana cuando cambia (APK)
+    struct NnsdkText* text_input = nullptr;          // el teclado (APK)
+    void (*ask_text)(struct NnsdkText*) = nullptr;
 };
 
 // Carga main, lo enlaza y corre nninitStartup, constructores y nnMain. Vuelve al terminar nnMain.

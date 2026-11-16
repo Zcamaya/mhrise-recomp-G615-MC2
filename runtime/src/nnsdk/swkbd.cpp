@@ -1,14 +1,14 @@
-// nn::swkbd: el teclado de software del sistema. No hay applet ni pantalla para él, así que cada teclado lo "rellena"
-// un jugador que siempre acepta lo propuesto:
-// - ShowKeyboard (nombre del cazador, del Felyne y del Canyne, main+0x6fa6984): si el juego trae texto inicial se
-//   devuelve tal cual (renombrar sin cambiar nada); si no, la siguiente línea de <datos>/nombre.txt (UTF-8, una por
-//   teclado, en orden; la última se repite) o "Flip". Se respetan la longitud máxima y mínima del config y, si el juego
-//   puso un TextCheckCallback, se le pasa el texto igual que haría el applet; si lo rechaza se prueba "Flip" y, si
-//   tampoco, el usuario "cancela".
+// nn::swkbd: el teclado de software del sistema. La Switch abre su applet; aquí cada teclado se pregunta con un cuadro de
+// texto de Android (host.h, NnsdkText; GameActivity.askText y TextPrompt en la app):
+// - ShowKeyboard (nombre del cazador, del Felyne y del Canyne, main+0x6fa6984): el cuadro sale con el texto inicial del
+//   juego (renombrar), el título y la guía del config y sus longitudes máxima y mínima. El juego espera, como con el
+//   applet. Si puso un TextCheckCallback, se le pasa el texto igual que haría el applet; si lo rechaza, el cuadro vuelve
+//   a salir con su mensaje. Cancelar es el "cancelar" del applet.
 // - InlineKeyboard (el teclado dentro del juego: el nombre del cazador al crearlo, el chat): se inicializa en el primer
-//   Calc como el applet de verdad, y cada Appear se contesta en el Calc siguiente con DecidedEnter: el texto que el
-//   juego puso con SetInputText o, si no puso ninguno, el mismo nombre que ShowKeyboard (nombre.txt o "Flip"). Sin
-//   callback de DecidedEnter, DecidedCancel.
+//   Calc como el applet de verdad; cada Appear abre el cuadro con el texto que el juego puso con SetInputText, y el Calc
+//   que ve la respuesta llama a DecidedEnter (o a DecidedCancel).
+// Sin cuadro (desde la terminal, o una app sin él), como antes: un jugador que siempre acepta. El texto inicial si lo hay;
+// si no, la siguiente línea de <datos>/nombre.txt (UTF-8, una por teclado, en orden; la última se repite) o "Flip".
 //
 // Los setters de KeyboardConfig escriben los mismos campos que el SDK: el juego también rellena algunos a mano
 // (longitud máxima, modo de contraseña… main+0x6fa5f3c) y ShowKeyboard los lee de ahí.
@@ -23,6 +23,9 @@
 #include <string>
 #include <vector>
 
+#include <unistd.h>
+
+#include "nnsdk/runtime.h"
 #include "nnsdk/types.h"
 
 namespace nn::swkbd {
@@ -289,6 +292,69 @@ size_t write_result(String* out, const std::u16string& text, bool utf8) {
     return n * sizeof(char16_t);
 }
 
+// El nombre que da el jugador que siempre acepta (sin cuadro): nombre.txt, en orden, o "Flip"
+std::u16string fallback_name() {
+    const std::vector<std::string> names = configured_names();
+    std::u16string name = utf8_to_utf16(names.empty() ? kDefaultName : names[std::min(g_names_used, names.size() - 1)]);
+    g_names_used++;
+    return name;
+}
+
+// --- el cuadro de texto de la app (host.h) ---
+
+struct Question {
+    std::u16string header, guide, initial, error;
+    int32_t min_length = 0, max_length = 0;
+    bool password = false, multiline = false;
+};
+
+void put(char16_t* dst, size_t capacity, const std::u16string& s) {
+    const size_t n = std::min(s.size(), capacity - 1);
+    if (n) memcpy(dst, s.data(), n * sizeof(char16_t));
+    dst[n] = 0;
+}
+
+// Abre el cuadro; devuelve el serial de la pregunta, o 0 si no hay cuadro
+uint32_t ask(const Question& q) {
+    static uint32_t serial = 0;
+    NnsdkText* t = nnsdk::host().text_input;
+    if (!t || !nnsdk::host().ask_text) return 0;
+    put(t->header, 65, q.header);
+    put(t->guide, 257, q.guide);
+    put(t->initial, 501, q.initial);
+    put(t->error, 513, q.error);
+    t->min_length = q.min_length;
+    t->max_length = std::min(q.max_length, 500);
+    t->password = q.password;
+    t->multiline = q.multiline;
+    t->serial = ++serial;
+    nnsdk::host().ask_text(t);
+    return t->serial;
+}
+
+// La respuesta a esa pregunta: 1 aceptada (en text), 0 cancelada, -1 no hay cuadro, 2 aún no
+int answer(uint32_t serial, std::u16string& text) {
+    NnsdkText* t = nnsdk::host().text_input;
+    if (!t || !serial) return -1;
+    if (t->answered.load(std::memory_order_acquire) != serial) return t->serial == serial ? 2 : 0;  // (otra la pisó)
+    if (t->result == 1) text.assign(t->text, size_t(std::max(t->length, 0)));
+    return t->result;
+}
+
+bool still_typing(uint32_t serial) {
+    std::u16string ignored;
+    return serial && answer(serial, ignored) == 2;
+}
+
+// Pregunta y espera (ShowKeyboard: el juego se queda parado mientras, como con el applet)
+int ask_and_wait(const Question& q, std::u16string& text) {
+    const uint32_t serial = ask(q);
+    if (!serial) return -1;
+    int r;
+    while ((r = answer(serial, text)) == 2) usleep(20'000);
+    return r;
+}
+
 }  // namespace
 
 // --- KeyboardConfig: los mismos campos que el SDK ---
@@ -393,43 +459,74 @@ void SetTextCheckCallback(ShowKeyboardArg* arg, TextCheckCallback callback) {
     if (callback) arg->keyboard_config.text_check_callback = callback;
 }
 
+// Le pasa el texto al TextCheckCallback del juego como el applet (el String lleva durante la llamada el tamaño del texto,
+// con el 0) y deja en message lo que conteste si lo rechaza (en el work buffer de comprobación).
+bool game_accepts(String* out, const ShowKeyboardArg& arg, size_t bytes, std::u16string& message) {
+    const KeyboardConfig& config = arg.keyboard_config;
+    if (!config.is_use_text_check || !config.text_check_callback) return true;
+    const size_t capacity = out->size;
+    out->size = bytes + (config.is_use_utf8 ? 1 : sizeof(char16_t));
+    size_t message_size = 0;
+    const TextCheckResult r = config.text_check_callback(arg.text_check_work_buf, &message_size, out);
+    out->size = capacity;
+    if (r != TextCheckResult_ShowFailureDialog) return true;
+    const auto* m = static_cast<const char16_t*>(arg.text_check_work_buf);
+    message.assign(m ? m : u"", m ? length16(m, 512) : 0);
+    return false;
+}
+
 Result ShowKeyboard(String* out, const ShowKeyboardArg& arg) {
     const KeyboardConfig& config = arg.keyboard_config;
     printf("[swkbd] teclado: «%s» «%s» (de %d a %d caracteres)\n", utf16_to_utf8(config.header_text, 65).c_str(),
            utf16_to_utf8(config.guide_text, 257).c_str(), config.text_min_length, config.text_max_length);
-
-    std::vector<std::u16string> candidates;
-    if (std::u16string initial = initial_text(arg); !initial.empty()) {
-        candidates.push_back(initial);
-    } else {
-        std::vector<std::string> names = configured_names();
-        if (!names.empty()) {
-            candidates.push_back(utf8_to_utf16(names[std::min(g_names_used, names.size() - 1)]));
-            g_names_used++;
-        }
-    }
-    candidates.push_back(utf8_to_utf16(kDefaultName));
+    const std::u16string initial = initial_text(arg);
     if (g_initial_arg == &arg) g_initial_arg = nullptr;
 
+    // Con el cuadro: hasta que el jugador da uno que el juego acepta, o cancela
+    Question q;
+    q.header.assign(config.header_text, length16(config.header_text, 64));
+    q.guide.assign(config.guide_text, length16(config.guide_text, 256));
+    if (q.header.empty()) q.header.assign(config.sub_text, length16(config.sub_text, 128));
+    q.initial = initial;
+    q.min_length = std::max(config.text_min_length, 0);
+    q.max_length = std::max(config.text_max_length, 0);
+    q.password = config.password_mode != 0;
+    q.multiline = config.is_use_new_line;
+    for (;;) {
+        std::u16string text;
+        const int r = ask_and_wait(q, text);
+        if (r < 0) break;  // sin cuadro: el jugador que siempre acepta
+        if (r == 0) {
+            write_result(out, {}, config.is_use_utf8);
+            printf("[swkbd] cancelado\n");
+            return kResultCanceled;
+        }
+        const size_t bytes = write_result(out, text, config.is_use_utf8);
+        std::u16string message;
+        if (game_accepts(out, arg, bytes, message)) {
+            printf("[swkbd] texto: %s\n", utf16_to_utf8(text.data(), text.size()).c_str());
+            return ResultSuccess;
+        }
+        printf("[swkbd] el juego rechaza «%s»: %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
+               utf16_to_utf8(message.data(), message.size()).c_str());
+        q.initial = text;
+        q.error = message.empty() ? u"?" : message;
+    }
+
+    std::vector<std::u16string> candidates;
+    if (!initial.empty()) candidates.push_back(initial);
+    else if (!configured_names().empty()) candidates.push_back(fallback_name());
+    candidates.push_back(utf8_to_utf16(kDefaultName));
     for (std::u16string& text : candidates) {
         if (config.text_max_length > 0 && text.size() > size_t(config.text_max_length))
             text.resize(config.text_max_length);
         if (text.size() < size_t(std::max(config.text_min_length, 0))) continue;
         const size_t bytes = write_result(out, text, config.is_use_utf8);
-        // Como el applet: el String lleva durante la llamada el tamaño del texto (con el 0), y el mensaje de error que
-        // deje el juego va al work buffer de comprobación.
-        if (config.is_use_text_check && config.text_check_callback) {
-            const size_t capacity = out->size;
-            out->size = bytes + (config.is_use_utf8 ? 1 : sizeof(char16_t));
-            size_t message_size = 0;
-            const TextCheckResult r = config.text_check_callback(arg.text_check_work_buf, &message_size, out);
-            out->size = capacity;
-            if (r == TextCheckResult_ShowFailureDialog) {
-                const auto* message = static_cast<const char16_t*>(arg.text_check_work_buf);
-                printf("[swkbd] el juego rechaza «%s»: %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
-                       message ? utf16_to_utf8(message, 1002).c_str() : "");
-                continue;
-            }
+        std::u16string message;
+        if (!game_accepts(out, arg, bytes, message)) {
+            printf("[swkbd] el juego rechaza «%s»: %s\n", utf16_to_utf8(text.data(), text.size()).c_str(),
+                   utf16_to_utf8(message.data(), message.size()).c_str());
+            continue;
         }
         printf("[swkbd] nombre: %s\n", utf16_to_utf8(text.data(), text.size()).c_str());
         return ResultSuccess;
@@ -457,6 +554,7 @@ struct InlineKeyboard::Impl {
     bool initialize_pending = true;
     bool decision_pending = false;
     bool released_user_word_pending = false;
+    uint32_t asked = 0;  // la pregunta del cuadro de texto que sigue abierta (0: ninguna)
     int32_t cursor_pos = 0;
     void (*finished_initialize)() = nullptr;
     void (*finished_keyboard)() = nullptr;
@@ -496,16 +594,19 @@ State InlineKeyboard::Calc() {
         k.initialize_pending = false;
         k.state = State_Hidden;
         if (k.finished_initialize) k.finished_initialize();
-    } else if (k.decision_pending) {
+    } else if (k.decision_pending && !still_typing(k.asked)) {
+        std::u16string text(k.text.text, length16(k.text.text, 501));
+        int r = -1;
+        if (k.asked) {
+            std::u16string typed;
+            r = answer(k.asked, typed);
+            k.asked = 0;
+            if (r == 1) text = typed;
+        }
         k.decision_pending = false;
         k.state = State_Hidden;
-        if (k.decided_enter) {
-            std::u16string text(k.text.text, length16(k.text.text, 501));
-            if (text.empty()) {
-                const std::vector<std::string> names = configured_names();
-                text = utf8_to_utf16(names.empty() ? kDefaultName : names[std::min(g_names_used, names.size() - 1)]);
-                g_names_used++;
-            }
+        if (r < 0 && text.empty()) text = fallback_name();  // sin cuadro: el jugador que siempre acepta
+        if (r != 0 && k.decided_enter) {
             DecidedEnterArg arg{};
             const size_t n = std::min<size_t>(text.size(), 501);
             memcpy(arg.text, text.data(), n * sizeof(char16_t));
@@ -528,11 +629,16 @@ void InlineKeyboard::Appear(const AppearArg&) {
     if (!impl_) return;
     impl_->state = State_Shown;
     impl_->decision_pending = true;
+    Question q;
+    q.initial.assign(impl_->text.text, length16(impl_->text.text, 501));
+    q.max_length = 500;
+    impl_->asked = ask(q);
 }
 
 void InlineKeyboard::Disappear() {
     if (!impl_) return;
     impl_->decision_pending = false;
+    impl_->asked = 0;  // (si el cuadro sigue abierto, su respuesta ya no va a ninguna parte)
     if (impl_->state != State_None) impl_->state = State_Hidden;
 }
 

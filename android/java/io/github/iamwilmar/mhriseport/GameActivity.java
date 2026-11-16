@@ -23,6 +23,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     static native void nativeTouch(long buttons, int sticksOn, float lx, float ly, float rx, float ry);
     static native void nativeTouchPoint(int action, float x, float y, long timeNs, int viewWidth, int viewHeight);
     static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos);
+    static native void nativeTextAnswer(int serial, String text);
 
     private Controls controls;
     private TouchPad pad;
@@ -131,6 +132,22 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         int amplitude = level == 1 ? 60 : level == 2 ? 140 : 255;
         vibrator.vibrate(VibrationEffect.createOneShot(ms, vibrator.hasAmplitudeControl() ? amplitude
                                                                                           : VibrationEffect.DEFAULT_AMPLITUDE));
+    }
+
+    // El teclado de la consola (swkbd.cpp): lo pide el loader desde un hilo suyo; la respuesta vuelve con el serial de la
+    // petición (null: cancelado). Los botones táctiles se sueltan: el juego espera al texto con lo que hubiera pulsado.
+    void askText(int serial, String header, String guide, String initial, String error, int minLength, int maxLength,
+                 boolean password, boolean multiline) {
+        runOnUiThread(() -> {
+            if (pad != null) pad.releaseAll();
+            new TextPrompt(this).show(header, guide, initial, error, minLength, maxLength, password, multiline, text -> {
+                try {
+                    nativeTextAnswer(serial, text);
+                } catch (UnsatisfiedLinkError e) {
+                    System.err.println("[teclado] el loader no tiene nativeTextAnswer: " + e);
+                }
+            });
+        });
     }
 
     @Override

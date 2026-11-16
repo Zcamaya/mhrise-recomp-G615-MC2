@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -200,15 +201,15 @@ struct ProgramStage {
     // apagada). El ejecutor la apunta con cada pipeline nueva para crearla al arrancar la partida siguiente (precalentado).
     spirv_cache::Key cache_key;
     // Variantes: geometry por (genéricos que escribe el vertex shader, topología de entrada); pixel por los genéricos que
-    // le llegan (los que no escribe la etapa anterior no se declaran).
+    // le llegan (los que no escribe la etapa anterior no se declaran); vertex por los tipos de sus atributos.
     struct Variant {
         VkShaderModule module = VK_NULL_HANDLE;
         uint64_t spirv_id = 0;
         spirv_cache::Key cache_key;
     };
     std::unordered_map<uint64_t, Variant> variants;
-    // Traducciones "seguras" de la etapa (safe_variant): por (genéricos de la etapa anterior, nivel)
-    std::map<std::pair<uint64_t, int>, Variant> safe_variants;
+    // Traducciones "seguras" de la etapa (safe_variant): por (genéricos de la etapa anterior, nivel, tipos de atributos)
+    std::map<std::tuple<uint64_t, int, uint64_t>, Variant> safe_variants;
 };
 
 struct Program {
@@ -273,7 +274,10 @@ ProgramStage::Variant geometry_variant(ProgramStage& stage, uint64_t previous_st
 // la decoración NonUniform; 2, además pasada por spirv-opt; 3, además sin operaciones de subgrupo. Ninguna cambia los
 // recursos (el layout es el mismo). previous_stores: el de la variante que se usaba (~0: la etapa tal cual).
 constexpr int kSafeLevels = 3;
-ProgramStage::Variant safe_variant(ProgramStage& stage, uint64_t previous_stores, int level);
+ProgramStage::Variant safe_variant(ProgramStage& stage, uint64_t previous_stores, int level, uint64_t input_types = 0);
+// Vertex: el módulo con cada atributo declarado del tipo de su formato (nvnshader::Options::input_types); module a
+// VK_NULL_HANDLE si no se puede traducir.
+ProgramStage::Variant vertex_variant(ProgramStage& stage, uint64_t input_types);
 // Identidad de una traducción (ProgramStage::spirv_id): huella del SPIR-V, de la etapa, de los genéricos y de lo que el
 // layout toma de cada recurso (tipo, set, binding, número). Dos etapas con la misma comparten pipelines y layouts.
 uint64_t spirv_identity(const nvnshader::Translated& t);

@@ -34,6 +34,21 @@ struct NnsdkWindow {
     std::atomic<uint32_t> serial{0}, done{0};
 };
 
+// El teclado de la consola (nn::swkbd): nnsdk rellena la petición, le da un serial nuevo y llama a ask_text; la app lo
+// pregunta con un cuadro de Android (GameActivity.askText) y el loader deja la respuesta y después pone answered al
+// serial de la petición. Una a la vez: la respuesta a un serial que ya no es el último se tira. Todo en UTF-16, como
+// el SDK (y Java).
+struct NnsdkText {
+    uint32_t serial = 0;
+    char16_t header[65] = {}, guide[257] = {}, initial[501] = {}, error[513] = {};
+    int32_t min_length = 0, max_length = 0;  // en caracteres; 0: sin límite
+    bool password = false, multiline = false;
+    std::atomic<uint32_t> answered{0};
+    int32_t result = 0;  // 1 aceptado, 0 cancelado, -1 no hay cuadro (la actividad no lo tiene): se sigue sin él
+    char16_t text[501] = {};
+    int32_t length = 0;
+};
+
 struct NnsdkHost {
     // El juego exporta su propio allocator: lo que libnnsdk le devuelva y él libere va por aquí.
     void* (*game_malloc)(size_t);
@@ -57,6 +72,9 @@ struct NnsdkHost {
     // Dónde quedó main (base y tamaño): para leer y tocar datos del juego por su offset (ver window.cpp, MaxFps).
     const uint8_t* main_base;
     size_t main_size;
+    // El teclado (NnsdkText); nullptr en la terminal: nombre.txt o "Flip", como antes.
+    NnsdkText* text_input;
+    void (*ask_text)(NnsdkText*);
 };
 
 extern "C" void nnsdk_attach(const NnsdkHost* host);

@@ -139,6 +139,8 @@ int nier_run(const RunConfig& cfg) {
     host.native_window = cfg.native_window;
     host.input = cfg.input;
     host.window_state = cfg.window_state;
+    host.text_input = cfg.text_input;
+    host.ask_text = cfg.ask_text;
     host.main_base = g_main.base;
     host.main_size = g_main.size;
     if (!host.game_malloc || !host.game_free || !host.game_new || !host.game_delete)

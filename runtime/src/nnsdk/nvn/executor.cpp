@@ -33,6 +33,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <fstream>
 #include <type_traits>
 #include <unordered_map>
@@ -6016,6 +6017,30 @@ Layout& Executor::layout_for(const nvnshader::Translated* const* shaders, const 
 // DIAGNÓSTICO: los formatos de los atributos de una pipeline que el driver rechazó (" 0:RGBA8_UNORM 2:RG16_I2F…"), con
 // los escalados (USCALED / SSCALED: el formato "_UI2F" / "_I2F" de NVN) marcados: Eden los emula en el driver de Qualcomm
 // porque no los compila bien.
+// El tipo de cada atributo que lee el vertex shader según su formato (nvnshader::Options::input_types): los enteros
+// ("RGBA8UI", "R32I"…) enteros; los "_UI2F" / "_I2F" de 32 bits, que no tienen formato escalado en Vulkan y van como
+// UINT / SINT, enteros que el shader pasa a float; el resto (los escalados de verdad incluidos) float. 0: todo float.
+uint64_t vertex_input_types(const PipelineKey& key, uint64_t vs_inputs) {
+    uint64_t types = 0;
+    for (uint32_t k = 0; k < 16; k++) {
+        if (!(vs_inputs & (1ull << k))) continue;
+        const FormatInfo* f = format_info(key.attribs[k].format);
+        if (!f || !f->name) continue;
+        const std::string_view name = f->name;
+        const bool vk_uint = f->vk == VK_FORMAT_R32_UINT || f->vk == VK_FORMAT_R32G32_UINT ||
+                             f->vk == VK_FORMAT_R32G32B32_UINT || f->vk == VK_FORMAT_R32G32B32A32_UINT;
+        const bool vk_sint = f->vk == VK_FORMAT_R32_SINT || f->vk == VK_FORMAT_R32G32_SINT ||
+                             f->vk == VK_FORMAT_R32G32B32_SINT || f->vk == VK_FORMAT_R32G32B32A32_SINT;
+        uint64_t type = 0;
+        if (name.find("_UI2F") != name.npos) type = vk_uint ? 4 : 0;
+        else if (name.find("_I2F") != name.npos) type = vk_sint ? 3 : 0;
+        else if (name.size() > 2 && name.substr(name.size() - 2) == "UI") type = 2;
+        else if (name.back() == 'I') type = 1;
+        types |= type << (4 * k);
+    }
+    return types;
+}
+
 std::string attrib_formats(const PipelineKey& key, uint64_t vs_inputs) {
     std::string out;
     bool scaled = false;
@@ -6278,6 +6303,10 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     VkShaderModule modules[kStages] = {};
     uint64_t previous_for[kStages];  // (el previous_stores de la variante de cada etapa: ~0, la etapa tal cual)
     std::fill(std::begin(previous_for), std::end(previous_for), ~0ull);
+    // Los tipos de los atributos del vertex shader (vertex_input_types); <datos>/sin_atributos_enteros al arrancar: todo
+    // float, como antes
+    static const bool typed_inputs = !NVN_FLAG("sin_atributos_enteros");
+    const uint64_t input_types = typed_inputs ? vertex_input_types(key, inputs) : 0;
     PipelineRecord rec;
     memset(&rec, 0, sizeof rec);
     bool recordable = true;
@@ -6287,6 +6316,10 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
         recordable &= (st_.stages[s]->cache_key.a | st_.stages[s]->cache_key.b) != 0;
         if (key.skip_gs && s == static_cast<int>(Stage::Geometry)) continue;
         ProgramStage::Variant v{st_.stages[s]->module, st_.stages[s]->spirv_id, st_.stages[s]->cache_key};
+        if (s == static_cast<int>(Stage::Vertex) && input_types) {
+            v = vertex_variant(*const_cast<ProgramStage*>(st_.stages[s]), input_types);
+            if (!v.module) v = {st_.stages[s]->module, st_.stages[s]->spirv_id, st_.stages[s]->cache_key};
+        }
         if (s == static_cast<int>(Stage::Geometry) && vs) {
             // Topología de entrada según la primitiva de NVN (orden de OpenGL).
             int topology = d.primitive == 0                       ? 0
@@ -6371,7 +6404,8 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
             for (int s : stages_to_redo) {
                 if (!st_.stages[s] || !modules[s]) continue;
                 const ProgramStage::Variant v =
-                    safe_variant(*const_cast<ProgramStage*>(st_.stages[s]), previous_for[s], level);
+                    safe_variant(*const_cast<ProgramStage*>(st_.stages[s]), previous_for[s], level,
+                                 s == static_cast<int>(Stage::Vertex) ? input_types : 0);
                 if (!v.module) {
                     usable = false;
                     break;

@@ -90,6 +90,12 @@ struct Options {
     // (InputTopology de Eden: puntos 0, líneas 1, líneas con adyacencia 2, triángulos 3, con adyacencia 4).
     uint64_t previous_stores = ~0ull;
     int input_topology = 0;
+    // Vertex: el tipo de cada atributo según el formato con el que llega (4 bits por atributo, el AttributeType de Eden:
+    // 0 float, 1 entero con signo, 2 sin signo, 3 y 4 enteros que se pasan a float). El Maxwell lee los atributos
+    // enteros tal cual, como bits en el registro; Vulkan solo define un formato UINT/SINT en una entrada entera. Con todo
+    // declarado float, el Adreno y Turnip dan los bits igual, pero la Mali los convierte (5 → 5.0) y los índices de
+    // hueso del skinning salían disparados: personajes con picos hasta el infinito. 0: todo float, como antes.
+    uint64_t input_types = 0;
     // Subgrupos del dispositivo (VkPhysicalDeviceSubgroupProperties): tamaño, etapas (bits de
     // VkShaderStageFlagBits) y operaciones (VkSubgroupFeatureFlagBits). Sin nada, no se usan.
     uint32_t subgroup_size = 32, subgroup_stages = 0, subgroup_operations = 0;  // NVN NEAR_IS_MINUS_W: z de [-w,w] a [0,w] (Vulkan)

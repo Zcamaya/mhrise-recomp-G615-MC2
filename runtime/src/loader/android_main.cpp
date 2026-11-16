@@ -18,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -758,7 +759,85 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivi
     publish();
 }
 
+// ---- el teclado de la consola (nn::swkbd: host.h, NnsdkText; android/java: GameActivity.askText, TextPrompt) ------
+
+namespace {
+
+NnsdkText g_text;
+ANativeActivity* g_activity = nullptr;
+
+void answer_text(uint32_t serial, int32_t result, const jchar* chars, jsize n) {
+    if (serial != g_text.serial) return;  // de una petición anterior
+    const jsize length = std::min<jsize>(n, 500);
+    for (jsize k = 0; k < length; k++) g_text.text[k] = static_cast<char16_t>(chars[k]);
+    g_text.text[length] = 0;
+    g_text.length = length;
+    g_text.result = result;
+    g_text.answered.store(serial, std::memory_order_release);
+}
+
+jstring utf16(JNIEnv* env, const char16_t* s, size_t max) {
+    size_t n = 0;
+    while (n < max && s[n]) n++;
+    return env->NewString(reinterpret_cast<const jchar*>(s), static_cast<jsize>(n));
+}
+
+// La pregunta, desde un hilo propio (la pide un hilo del juego, que no se engancha a Java): la actividad abre el cuadro en
+// su hilo y contesta por nativeTextAnswer. Sin el método (una app sin TextPrompt), la respuesta es "no hay cuadro".
+void* text_asker(void*) {
+    pthread_setname_np(pthread_self(), "Teclado");
+    const uint32_t serial = g_text.serial;
+    JNIEnv* env = nullptr;
+    JavaVMAttachArgs attach{JNI_VERSION_1_6, "Teclado", nullptr};
+    bool asked = false;
+    if (g_activity && g_activity->vm->AttachCurrentThread(&env, &attach) == JNI_OK && env) {
+        jclass cls = env->GetObjectClass(g_activity->clazz);
+        jmethodID ask = cls ? env->GetMethodID(cls, "askText",
+                                               "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIZZ)V")
+                            : nullptr;
+        if (env->ExceptionCheck()) env->ExceptionClear(), ask = nullptr;
+        if (ask) {
+            env->CallVoidMethod(g_activity->clazz, ask, static_cast<jint>(serial), utf16(env, g_text.header, 64),
+                                utf16(env, g_text.guide, 256), utf16(env, g_text.initial, 500), utf16(env, g_text.error, 512),
+                                g_text.min_length, g_text.max_length, g_text.password, g_text.multiline);
+            asked = !env->ExceptionCheck();
+            if (!asked) env->ExceptionClear();
+        }
+        g_activity->vm->DetachCurrentThread();
+    }
+    if (!asked) {
+        printf("[teclado] la actividad no puede abrir el cuadro de texto\n");
+        answer_text(serial, -1, nullptr, 0);
+    }
+    return nullptr;
+}
+
+void ask_text(NnsdkText*) {
+    pthread_t thread;
+    if (pthread_create(&thread, nullptr, text_asker, nullptr) != 0) {
+        answer_text(g_text.serial, -1, nullptr, 0);
+        return;
+    }
+    pthread_detach(thread);
+}
+
+}  // namespace
+
+// Lo que escribió el jugador (text) o null si canceló
+extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivity_nativeTextAnswer(JNIEnv* env, jclass,
+                                                                                                  jint serial, jstring text) {
+    if (!text) {
+        answer_text(static_cast<uint32_t>(serial), 0, nullptr, 0);
+        return;
+    }
+    const jsize n = env->GetStringLength(text);
+    const jchar* chars = env->GetStringChars(text, nullptr);
+    answer_text(static_cast<uint32_t>(serial), 1, chars, chars ? n : 0);
+    if (chars) env->ReleaseStringChars(text, chars);
+}
+
 void android_main(android_app* app) {
+    g_activity = app->activity;
     if (FILE* f = fopen((std::string(app->activity->internalDataPath) + "/carpeta.txt").c_str(), "r")) {
         char line[4096] = {};
         if (fgets(line, sizeof line, f)) g_data.assign(line, strcspn(line, "\r\n"));
@@ -803,6 +882,8 @@ void android_main(android_app* app) {
     g_cfg.watchdog_seconds = access((g_data + "/registro").c_str(), F_OK) == 0 ? 15 : 0;
     g_cfg.input = &g_input;
     g_cfg.window_state = &g_window_state;
+    g_cfg.text_input = &g_text;
+    g_cfg.ask_text = ask_text;
     if (const char* a = getenv("NIER_AUTOJUEGO"); a && *a) {
         pthread_t thread;
         pthread_create(&thread, nullptr, autoplay, nullptr);

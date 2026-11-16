@@ -240,6 +240,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.nonuniform_indexing);
     h.u64(o.previous_stores);
     h.u32(static_cast<uint32_t>(o.input_topology));
+    if (o.input_types) h.u32(0x54495053), h.u64(o.input_types);  // (solo con atributos enteros: las claves de siempre no cambian)
     h.u32(o.subgroup_size);
     h.u32(o.subgroup_stages);
     h.u32(o.subgroup_operations);
@@ -275,9 +276,10 @@ bool qualcomm_7xx_stock() {
     return yes;
 }
 
-// safe: el nivel de traducción prudente (nvn::safe_variant; 0, la de siempre)
+// safe: el nivel de traducción prudente (nvn::safe_variant; 0, la de siempre). input_types: los de los atributos de un
+// vertex shader (nvnshader::Options; nvn::vertex_variant)
 bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, int input_topology = 0, size_t bound = 0,
-                     int safe = 0) {
+                     int safe = 0, uint64_t input_types = 0) {
     if (!bound) bound = code_bound(out.code);
     if (!bound) {
         if (!t_prefetch) NVN_LOG("shader en 0x%llx fuera de cualquier memory pool\n", static_cast<unsigned long long>(out.code));
@@ -326,6 +328,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     }
     options.previous_stores = previous_stores;
     options.input_topology = input_topology;
+    options.input_types = input_types;
     if (nvn::VkContext* c = nvn::vk()) {
         options.subgroup_size = c->subgroup.subgroupSize;
         options.subgroup_stages = c->subgroup.supportedStages;
@@ -347,7 +350,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // <datos>/sin_shuffle_qualcomm al traducir (al arrancar): el OpGroupNonUniformShuffle de siempre.
         options.broken_subgroup_shuffle = c->props.vendorID == 0x5143 && !NVN_FLAG("sin_shuffle_qualcomm");
         // <datos>/sin_return_qualcomm al traducir (al arrancar): el OpUnreachable de siempre.
-        options.broken_unreachable = c->props.vendorID == 0x5143 && !NVN_FLAG("sin_return_qualcomm");
+        // En las Mali (vendorID 0x13B5: el driver de ARM y PanVK) también: nunca se ejecuta, y sus compiladores son los
+        // que menos hemos podido probar con el skinning de la cara (el caso que se cuelga en el 512.8xx).
+        // <datos>/sin_return_mali: el OpUnreachable de siempre en ellas.
+        options.broken_unreachable = (c->props.vendorID == 0x5143 && !NVN_FLAG("sin_return_qualcomm")) ||
+                                     (c->props.vendorID == 0x13B5 && !NVN_FLAG("sin_return_mali"));
         // <datos>/sin_no_uniforme al traducir: sin la decoración NonUniform (si el driver se lleva mal con ella).
         options.nonuniform_indexing = c->nonuniform_sampled && !NVN_FLAG("sin_no_uniforme");
         options.multi_viewport = c->multi_viewport;
@@ -772,8 +779,33 @@ nvn::ProgramStage::Variant nvn::geometry_variant(ProgramStage& stage, uint64_t p
     return stage.variants[key] = v;
 }
 
-nvn::ProgramStage::Variant nvn::safe_variant(ProgramStage& stage, uint64_t previous_stores, int level) {
-    const auto key = std::make_pair(previous_stores, level);
+nvn::ProgramStage::Variant nvn::vertex_variant(ProgramStage& stage, uint64_t input_types) {
+    if (auto it = stage.variants.find(input_types); it != stage.variants.end()) return it->second;
+    ProgramStage variant;
+    variant.code = stage.code;
+    variant.control = stage.control;
+    variant.constants = stage.constants;
+    variant.constants_size = stage.constants_size;
+    ProgramStage::Variant v;
+    // (los mismos recursos, o el layout no valdría; con otros tipos solo cambian las entradas)
+    if (translate_stage(variant, ~0ull, 0, 0, 0, input_types)) {
+        if (variant.shader.resources.size() == stage.shader.resources.size()) {
+            v.module = variant.module;
+            v.spirv_id = variant.spirv_id;
+            v.cache_key = variant.cache_key;
+        } else if (variant.module) {
+            vkDestroyShaderModule(nvn::vk()->device, variant.module, nullptr);
+        }
+    }
+    static int logged = 0;
+    if (logged++ < 8)
+        NVN_LOG("vertex %016llx con atributos enteros (tipos 0x%llx): variante%s\n", static_cast<unsigned long long>(stage.print),
+                static_cast<unsigned long long>(input_types), v.module ? "" : " (no se pudo: la de siempre)");
+    return stage.variants[input_types] = v;
+}
+
+nvn::ProgramStage::Variant nvn::safe_variant(ProgramStage& stage, uint64_t previous_stores, int level, uint64_t input_types) {
+    const auto key = std::make_tuple(previous_stores, level, input_types);
     if (auto it = stage.safe_variants.find(key); it != stage.safe_variants.end()) return it->second;
     ProgramStage variant;
     variant.code = stage.code;
@@ -782,7 +814,7 @@ nvn::ProgramStage::Variant nvn::safe_variant(ProgramStage& stage, uint64_t previ
     variant.constants_size = stage.constants_size;
     ProgramStage::Variant v;
     // (los mismos recursos que la de siempre, o el layout no valdría: si no, sin variante)
-    if (translate_stage(variant, previous_stores, 0, 0, level)) {
+    if (translate_stage(variant, previous_stores, 0, 0, level, input_types)) {
         if (variant.shader.resources.size() == stage.shader.resources.size()) {
             v.module = variant.module;
             v.spirv_id = variant.spirv_id;
