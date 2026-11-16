@@ -53,6 +53,24 @@ namespace nvn {
 
 namespace {
 
+// DIAGNÓSTICO, siempre: el SPIR-V de cada etapa de una pipeline que el driver no quiso crear (el VK_ERROR_UNKNOWN del
+// compilador de Qualcomm 512.8xx en la Adreno 730 con muchos pixel shaders de la escena; con Turnip salen bien), en
+// <datos>/pipelines_fallidas/<nombre>.spv, para ver fuera qué tienen. 64 como mucho por partida, cada módulo una vez.
+void dump_rejected_spirv(const std::string& name, const std::vector<uint32_t>& spirv) {
+    static std::mutex m;
+    static std::unordered_set<std::string> done;
+    std::lock_guard lock(m);
+    if (spirv.empty() || done.size() >= 64 || !done.insert(name).second) return;
+    const char* data = getenv("NIER_DATA");
+    const std::string dir = std::string(data ? data : ".") + "/pipelines_fallidas";
+    mkdir(dir.c_str(), 0755);
+    if (FILE* f = fopen((dir + "/" + name + ".spv").c_str(), "wb")) {
+        fwrite(spirv.data(), sizeof(uint32_t), spirv.size(), f);
+        fclose(f);
+        if (done.size() == 1) NVN_LOG("SPIR-V de las pipelines rechazadas: en %s\n", dir.c_str());
+    }
+}
+
 using nvnshader::Resource;
 using nvnshader::Stage;
 
@@ -6315,9 +6333,15 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     {
         std::string stages;
         for (int k = 0; k < kStages; k++)
-            if (st_.stages[k])
-                stages += std::string(" ") + nvnshader::stage_name(static_cast<Stage>(k)) + "(entradas 0x" +
-                          [&] { char b[20]; snprintf(b, sizeof b, "%llx", (unsigned long long)st_.stages[k]->shader.input_generics); return std::string(b); }() + ")";
+            if (st_.stages[k]) {
+                const ProgramStage& ps = *st_.stages[k];
+                char b[64];
+                snprintf(b, sizeof b, "(entradas 0x%llx, %016llx)", (unsigned long long)ps.shader.input_generics,
+                         (unsigned long long)ps.print);
+                stages += std::string(" ") + nvnshader::stage_name(static_cast<Stage>(k)) + b;
+                snprintf(b, sizeof b, "%016llx_%s", (unsigned long long)ps.print, nvnshader::stage_name(static_cast<Stage>(k)));
+                dump_rejected_spirv(b, ps.shader.spirv);
+            }
         NVN_LOG("vkCreateGraphicsPipelines: %s (%d), primitiva %d, etapas:%s%s\n", vk_result_name(r), static_cast<int>(r),
                 d.primitive, stages.c_str(), key.skip_gs ? " (sin el geometry shader: se vuelve a usar)" : "");
         if (key.skip_gs) const_cast<ProgramStage*>(gs)->compaction_gs = false;  // el siguiente draw, con él
@@ -9795,10 +9819,11 @@ void Executor::async_loop() {
             async_queue_.pop_front();
         }
         VkShaderModule modules[kStages] = {};
+        nvnshader::Translated translated[kStages];  // (si el driver la rechaza, su SPIR-V a pipelines_fallidas)
         bool ok = true;
         for (int s = 0; s < kStages && ok; s++) {
             if (!(job.rec.module[s].a | job.rec.module[s].b)) continue;
-            nvnshader::Translated t;
+            nvnshader::Translated& t = translated[s];
             ok = cached_translation(job.rec.module[s], t) && spirv_identity(t) != 0;
             if (!ok) break;
             VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -9820,6 +9845,13 @@ void Executor::async_loop() {
         if (ok && r != VK_SUCCESS) {
             static std::atomic<int> logged{0};
             if (logged++ < 16) NVN_LOG("pipeline en segundo plano: vkCreateGraphicsPipelines %s (%d)\n", vk_result_name(r), static_cast<int>(r));
+            for (int s = 0; s < kStages; s++)
+                if (!translated[s].spirv.empty()) {
+                    char name[64];  // (sin la huella del código aquí: la clave de la caché de SPIR-V)
+                    snprintf(name, sizeof name, "seg_%016llx%016llx_%s", (unsigned long long)job.rec.module[s].a,
+                             (unsigned long long)job.rec.module[s].b, nvnshader::stage_name(static_cast<Stage>(s)));
+                    dump_rejected_spirv(name, translated[s].spirv);
+                }
         }
         bool abandoned;
         {
