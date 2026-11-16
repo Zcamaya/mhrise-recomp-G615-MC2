@@ -206,6 +206,7 @@ final class SettingsMenu {
                 "Those of the hunters, monsters and scenery. Off, the shadow maps aren't drawn: less work for a weak "
                         + "GPU. Applies at once.",
                 "no_shadows", true);
+        note(gameStatus());
         exclusive("Shadow quality",
                 "The size of the shadow maps, as a share of the game's own. Lower: blurrier shadow edges and a lot less "
                         + "GPU work in one of the heaviest passes. Applies at once.",
@@ -306,10 +307,11 @@ final class SettingsMenu {
         flag("Retry rejected pipelines",
                 "When the driver rejects a pipeline, its shaders are translated again with safer options.",
                 "no_safe_translation", true);
-        flag("Subgroups under 32",
-                "Uses subgroup operations even when the GPU's subgroups are under 32 (Mali: 16). Off by default: on "
-                        + "a Mali-G615 they stalled the GPU for hundreds of ms." + next,
-                "short_subgroups", false);
+        exclusive("Subgroups under 32",
+                "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
+                        + "scene is missing pieces without them; off with ARM's own driver, where they stalled the GPU "
+                        + "for hundreds of ms." + next,
+                new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
         header("Driver workarounds");
         flag("Qualcomm: return after a switch",
                 "On Qualcomm's driver, a return on a switch's impossible path instead of \"unreachable\" (without "
@@ -697,6 +699,32 @@ final class SettingsMenu {
     // An on / off row backed by a switch file. inverted: the file turns it off (the sin_* ones).
     private void flag(String title, String help, String file, boolean inverted) {
         toggle(title, help, () -> has(file) != inverted ? 1 : 0, v -> put(file, (v != 0) != inverted));
+    }
+
+    // What the game is using right now (game_settings.txt, written by the game when a value changes). The menu shows it
+    // when it opens: change a setting, close the menu and open it again to see it applied.
+    private String gameStatus() {
+        String shadow = null, model = null, texture = null;
+        try {
+            for (String line : Files.readAllLines(new File(folder, "game_settings.txt").toPath())) {
+                String[] w = line.trim().split(" ");
+                if (w[0].equals("shadow") && w.length >= 3)
+                    shadow = w[1].equals(w[2]) ? "shadow maps " + w[1] + " (game's)" : "shadow maps " + w[1] + " (game's " + w[2] + ")";
+                else if (w[0].equals("model") && w.length >= 2)
+                    model = Math.abs(Float.parseFloat(w[1]) - 1f) < 0.001f ? "model detail game's"
+                            : String.format(java.util.Locale.ROOT, "model detail x%.2f", Float.parseFloat(w[1]));
+                else if (w[0].equals("texture") && w.length >= 3)
+                    texture = w[1].equals(w[2]) ? "texture streaming game's"
+                            : "textures " + (Integer.parseInt(w[1]) - Integer.parseInt(w[2])) + " size(s) smaller";
+            }
+        } catch (IOException | RuntimeException e) {
+            return "In the game now: nothing yet (the game writes it while running; this game version may not be supported).";
+        }
+        StringBuilder b = new StringBuilder("In the game now: ");
+        for (String part : new String[] {shadow, model, texture})
+            if (part != null) b.append(b.length() > 17 ? " · " : "").append(part);
+        if (b.length() == 17) return "In the game now: nothing yet (the game writes it once it's in town or a hunt).";
+        return b.append(". Reopen the menu after a change to see it.").toString();
     }
 
     // A choice where each option (but the first, the default) is its own switch file

@@ -11,11 +11,15 @@
 // Called from the thread that presents, once per frame: the game calls these setters from its own threads too, and
 // the shadow setter only stores the new size and lets the engine rebuild the maps.
 // Before touching anything the instructions at those addresses are checked, so another build of main is left alone.
+// What's in effect goes to <datos>/game_settings.txt (one line per setting) whenever it changes, for the settings menu.
 // Switches (live): shadow_half, shadow_quarter / model_detail_low, model_detail_lowest, model_detail_high /
 // texture_bias_1, texture_bias_2.
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "nnsdk/nvn/commands.h"
 #include "nnsdk/nvn/flags.h"
@@ -95,6 +99,35 @@ uint32_t wanted_texture_bias() {
     return 0;
 }
 
+// What the game has right now, for game_settings.txt
+struct Status {
+    uint32_t shadow = 0, shadow_game = 0;
+    float lod = 0, lod_game = 0, lod_scale = 1;
+    uint32_t bias = 0, bias_game = 0;
+    bool shadow_seen = false, lod_seen = false, bias_seen = false;
+};
+Status g_status;
+
+void write_status() {
+    const Status& st = g_status;
+    char text[512];
+    int n = 0;
+    if (st.shadow_seen)
+        n += snprintf(text + n, sizeof text - n, "shadow %u %u\n", st.shadow, st.shadow_game);
+    if (st.lod_seen)
+        n += snprintf(text + n, sizeof text - n, "model %.3f %g %g\n", st.lod_scale, st.lod, st.lod_game);
+    if (st.bias_seen) n += snprintf(text + n, sizeof text - n, "texture %u %u\n", st.bias, st.bias_game);
+    static std::string last;
+    if (last == text) return;
+    last = text;
+    const char* data = getenv("NIER_DATA");
+    const std::string path = std::string(data ? data : ".") + "/game_settings.txt";
+    if (FILE* f = fopen(path.c_str(), "w")) {
+        fputs(text, f);
+        fclose(f);
+    }
+}
+
 void shadows(const uint8_t* base) {
     uint8_t* sys = object_at<uint8_t>(base, kShadowPointer);
     if (!sys) return;
@@ -105,11 +138,14 @@ void shadows(const uint8_t* base) {
     if (!ours || *size != ours) game_size = *size;  // the game changed it (a load, a cutscene): that's the new default
     const uint32_t divisor = wanted_shadow_divisor();
     const uint32_t target = divisor > 1 ? std::max<uint32_t>(game_size / divisor, 256) : game_size;
+    g_status.shadow_seen = true;
+    g_status.shadow = *size, g_status.shadow_game = game_size;
     if (*size == target) return;
     using Setter = void (*)(void*, uint32_t);
     reinterpret_cast<Setter>(const_cast<uint8_t*>(base) + kShadowSetter)(sys, target);
     NVN_LOG("game settings: shadow maps %u -> %u (game default %u)\n", ours ? ours : game_size, target, game_size);
     ours = divisor > 1 ? target : 0;
+    g_status.shadow = *size;
 }
 
 void model_detail(const uint8_t* base) {
@@ -130,6 +166,8 @@ void model_detail(const uint8_t* base) {
         if (*r != target) *r = target;
         ours[k] = scale != 1.0f ? target : 0.0f;
     }
+    g_status.lod_seen = true;
+    g_status.lod = *rate, g_status.lod_game = game[0], g_status.lod_scale = scale;
     if (scale != logged) {
         NVN_LOG("game settings: model detail x%.2f (LOD rates %g / %g -> %g / %g)\n", scale, game[0], game[1],
                 game[0] * scale, game[1] * scale);
@@ -150,6 +188,8 @@ void texture_detail(const uint8_t* base) {
         NVN_LOG("game settings: texture streaming skips %u mip levels (game default %u)\n", target, game);
     }
     ours = want ? target : ~0u;
+    g_status.bias_seen = true;
+    g_status.bias = *bias, g_status.bias_game = game;
 }
 
 }  // namespace
@@ -160,6 +200,7 @@ void game_tweaks() {
     shadows(base);
     model_detail(base);
     texture_detail(base);
+    write_status();
 }
 
 }  // namespace nvn

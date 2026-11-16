@@ -336,8 +336,18 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // Subgrupos más pequeños que el warp de 32 de Maxwell (las Mali Valhall: 16): Eden solo sabe de iguales o mayores,
         // y un voto o un ballot del juego vería medio warp (un bucle que espera a que todo el warp acabe puede no salir).
         // Ahí, sin operaciones de subgrupo: Eden emula los votos como si cada invocación fuera su propio warp.
-        // <datos>/short_subgroups al traducir: las del dispositivo, como antes.
-        if (options.subgroup_size < 32 && !NVN_FLAG("short_subgroups")) {
+        // <datos>/short_subgroups al traducir: las del dispositivo, como antes. PanVK (Mesa) las da bien con 16: con ellas
+        // la escena sale entera y sin ellas faltaba el suelo (la emulación de Eden pierde las derivadas de los quads);
+        // ahí van por defecto, y <datos>/no_short_subgroups las quita. Los cortes de 700 ms eran del driver de ARM.
+        static const bool panvk = [c] {
+            VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+            VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            p2.pNext = &driver;
+            if (vkGetPhysicalDeviceProperties2) vkGetPhysicalDeviceProperties2(c->gpu, &p2);
+            return driver.driverID == VK_DRIVER_ID_MESA_PANVK;
+        }();
+        const bool short_ok = NVN_FLAG("short_subgroups") || (panvk && !NVN_FLAG("no_short_subgroups"));
+        if (options.subgroup_size < 32 && !short_ok) {
             static bool logged = false;
             if (!logged) {
                 logged = true;
