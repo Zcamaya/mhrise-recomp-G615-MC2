@@ -340,9 +340,23 @@ struct PadSettings {
     float deadzone = 0.12f, trigger = 0.35f;
     int right_axes = kAxesAuto;
     std::vector<std::pair<uint64_t, uint64_t>> combos;  // (los botones del mando que lo disparan, los que pulsa)
+    // Button mapping (the settings menu): a controller key that presses these buttons instead of its usual one.
+    // Analog triggers are read as BUTTON_L2 / BUTTON_R2 here and a hat as the DPAD keys, so they can be mapped too.
+    std::vector<std::pair<int32_t, uint64_t>> mapping;
 };
 std::mutex g_pad_mutex;
 PadSettings g_pad;
+
+// The buttons a mapped key presses; false if the key keeps its usual meaning
+bool mapped_key(int32_t keycode, uint64_t* out) {
+    std::lock_guard lock(g_pad_mutex);
+    bool any = false;
+    uint64_t bits = 0;
+    for (const auto& [key, buttons] : g_pad.mapping)
+        if (key == keycode) any = true, bits |= buttons;
+    *out = bits;
+    return any;
+}
 
 std::mutex g_publish_mutex;
 void publish() {
@@ -570,7 +584,9 @@ int32_t on_input(android_app* app, AInputEvent* event) {
         const int32_t keycode = AKeyEvent_getKeyCode(event);
         const bool face = keycode == AKEYCODE_BUTTON_A || keycode == AKEYCODE_BUTTON_B || keycode == AKEYCODE_BUTTON_X ||
                           keycode == AKEYCODE_BUTTON_Y;
-        uint64_t bit = button_for(keycode, face && xbox_layout(app->activity, AInputEvent_getDeviceId(event)));
+        uint64_t bit = 0;
+        if (!mapped_key(keycode, &bit))
+            bit = button_for(keycode, face && xbox_layout(app->activity, AInputEvent_getDeviceId(event)));
         static int logged = 0;  // DEPURACIÓN: las primeras teclas que llegan (de qué dispositivo)
         if (logged++ < 12)
             printf("[entrada] tecla %d acción %d dispositivo %d fuente %#x -> %#llx (en %p)\n", AKeyEvent_getKeyCode(event),
@@ -641,12 +657,18 @@ int32_t on_input(android_app* app, AInputEvent* event) {
             rt = std::fmax(rt, pad.z_signed ? (rz + 1.0f) * 0.5f : rz);
         }
         uint64_t b = 0;
-        if (hx < -0.5f) b |= kLeft;
-        if (hx > 0.5f) b |= kRight;
-        if (hy < -0.5f) b |= kUp;
-        if (hy > 0.5f) b |= kDown;
-        if (lt > set.trigger) b |= kZL;
-        if (rt > set.trigger) b |= kZR;
+        // (each one through the button mapping, as the key it stands for)
+        auto press = [&](bool on, int32_t key, uint64_t usual) {
+            if (!on) return;
+            uint64_t bits = 0;
+            b |= mapped_key(key, &bits) ? bits : usual;
+        };
+        press(hx < -0.5f, AKEYCODE_DPAD_LEFT, kLeft);
+        press(hx > 0.5f, AKEYCODE_DPAD_RIGHT, kRight);
+        press(hy < -0.5f, AKEYCODE_DPAD_UP, kUp);
+        press(hy > 0.5f, AKEYCODE_DPAD_DOWN, kDown);
+        press(lt > set.trigger, AKEYCODE_BUTTON_L2, kZL);
+        press(rt > set.trigger, AKEYCODE_BUTTON_R2, kZR);
         if (lx < -0.5f) b |= kStickLLeft;
         if (lx > 0.5f) b |= kStickLRight;
         if (ly < -0.5f) b |= kStickLUp;
@@ -735,7 +757,8 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivi
 // Los ajustes del mando físico. combos: pares (botones del mando que lo disparan, botones que pulsa)
 extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivity_nativePad(JNIEnv* env, jclass, jfloat deadzone,
                                                                                             jfloat trigger, jint right_axes,
-                                                                                            jlongArray combos) {
+                                                                                            jlongArray combos,
+                                                                                            jlongArray mapping) {
     PadSettings set;
     set.deadzone = std::fmin(0.6f, std::fmax(0.0f, deadzone));
     set.trigger = std::fmin(0.95f, std::fmax(0.05f, trigger));
@@ -748,6 +771,14 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivi
             env->ReleaseLongArrayElements(combos, p, JNI_ABORT);
         }
     }
+    if (mapping) {
+        const jsize n = env->GetArrayLength(mapping);
+        if (jlong* p = env->GetLongArrayElements(mapping, nullptr)) {
+            for (jsize k = 0; k + 1 < n; k += 2)
+                if (p[k] && p[k + 1]) set.mapping.emplace_back(static_cast<int32_t>(p[k]), static_cast<uint64_t>(p[k + 1]));
+            env->ReleaseLongArrayElements(mapping, p, JNI_ABORT);
+        }
+    }
     {
         std::lock_guard lock(g_pad_mutex);
         g_pad = std::move(set);
@@ -755,7 +786,10 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivi
                g_pad.deadzone * 100.0f, g_pad.trigger * 100.0f,
                g_pad.right_axes == kAxesZ ? "en Z/RZ" : g_pad.right_axes == kAxesRx ? "en RX/RY" : "según el mando",
                g_pad.combos.size());
+        for (const auto& [key, buttons] : g_pad.mapping)
+            printf("[input] controller key %d mapped to %#llx\n", key, static_cast<unsigned long long>(buttons));
     }
+    g_key_buttons = 0;  // (a key held while its mapping changed would stay pressed)
     publish();
 }
 

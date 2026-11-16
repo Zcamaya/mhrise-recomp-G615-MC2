@@ -82,6 +82,9 @@ final class Controls {
     final boolean[] shown = new boolean[Ctl.values().length];
     // Los combos
     final long[] combo = new long[COMBOS];     // los botones que pulsa (0: ninguno, y no sale en pantalla)
+    // Button mapping: the controller key (an Android keycode) that presses each of BUTTONS instead of its own
+    // (0: the usual one). Analog triggers count as L2 / R2 and a hat as the d-pad keys (android_main.cpp).
+    final int[] mapKey = new int[BUTTONS.length];
     final long[] comboPad = new long[COMBOS];  // el botón (o los dos) del mando que lo dispara (0: ninguno)
     // El mando físico
     int padDeadzone = 12;   // % del recorrido del stick
@@ -134,6 +137,7 @@ final class Controls {
         padDeadzone = prefs.getInt("zona_mando", padDeadzone);
         trigger = prefs.getInt("gatillo", trigger);
         rightAxes = prefs.getInt("stick_derecho", rightAxes);
+        for (int i = 0; i < BUTTONS.length; i++) mapKey[i] = prefs.getInt("map_key" + i, 0);
         for (int i = 0; i < COMBOS; i++) {
             combo[i] = prefs.getLong("combo" + i, 0);
             comboPad[i] = prefs.getLong("combo_mando" + i, 0);
@@ -171,6 +175,7 @@ final class Controls {
                 .putBoolean("camera_swipe", cameraSwipe).putInt("swipe_speed", swipeSpeed)
                 .putString("disposicion", layout.toString()).putInt("layout_version", 2);
         for (int i = 0; i < COMBOS; i++) e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]);
+        for (int i = 0; i < BUTTONS.length; i++) e.putInt("map_key" + i, mapKey[i]);
         e.apply();
     }
 
@@ -187,5 +192,36 @@ final class Controls {
                 out[n++] = combo[i];
             }
         return java.util.Arrays.copyOf(out, n);
+    }
+
+    // The button mapping for the loader: pairs (keycode, the buttons it presses)
+    long[] padMapping() {
+        long[] out = new long[BUTTONS.length * 2];
+        int n = 0;
+        for (int i = 0; i < BUTTONS.length; i++) {
+            if (mapKey[i] == 0) continue;
+            out[n++] = mapKey[i];
+            out[n++] = BUTTONS[i];
+        }
+        return java.util.Arrays.copyOf(out, n);
+    }
+
+    // A controller key's name in the menu ("A", "L1", "Start", "D-pad up"…)
+    static String keyName(int keycode) {
+        switch (keycode) {
+            case android.view.KeyEvent.KEYCODE_DPAD_UP: return "D-pad up";
+            case android.view.KeyEvent.KEYCODE_DPAD_DOWN: return "D-pad down";
+            case android.view.KeyEvent.KEYCODE_DPAD_LEFT: return "D-pad left";
+            case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: return "D-pad right";
+            case android.view.KeyEvent.KEYCODE_BUTTON_THUMBL: return "Left stick press";
+            case android.view.KeyEvent.KEYCODE_BUTTON_THUMBR: return "Right stick press";
+            case android.view.KeyEvent.KEYCODE_BACK: return "Back";
+            default:
+        }
+        String s = android.view.KeyEvent.keyCodeToString(keycode);
+        if (s.startsWith("KEYCODE_")) s = s.substring(8);
+        if (s.startsWith("BUTTON_")) s = s.substring(7);
+        if (s.length() <= 2) return s;
+        return s.charAt(0) + s.substring(1).toLowerCase(java.util.Locale.ROOT).replace('_', ' ');
     }
 }

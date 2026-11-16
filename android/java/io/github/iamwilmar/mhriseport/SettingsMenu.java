@@ -9,6 +9,9 @@ import android.graphics.drawable.GradientDrawable;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -535,6 +538,113 @@ final class SettingsMenu {
                         + "triggers on Z/RZ) on many generic ones. Change it if the camera won't move or moves on its own.",
                 new String[] {"By controller", "Z / RZ", "RX / RY"}, () -> cfg.rightAxes,
                 v -> cfg.rightAxes = v);
+
+        header("Button mapping");
+        note("Tap a Switch button, then press the controller button you want for it. Everything else keeps its usual "
+                + "place. To swap two buttons, map each one to the other.");
+        for (int i = 0; i < Controls.BUTTONS.length; i++) {
+            final int b = i;
+            String value = cfg.mapKey[i] == 0 ? "Default" : Controls.keyName(cfg.mapKey[i]);
+            row(MAP_NAMES[i], value, "The controller button that presses " + MAP_NAMES[i] + " in the game.",
+                    v -> captureKey(b), false);
+        }
+        row("Reset mapping", "", "Every controller button back to its usual place.", v -> {
+            Arrays.fill(cfg.mapKey, 0);
+            changed();
+            build();
+        }, false);
+    }
+
+    private static final String[] MAP_NAMES = {"A", "B", "X", "Y", "L", "R", "ZL", "ZR", "+ (Plus)", "− (Minus)",
+        "L3 (left stick press)", "R3 (right stick press)", "D-pad up", "D-pad down", "D-pad left", "D-pad right"};
+
+    // ---- button mapping -------------------------------------------------------------------------------------------------
+
+    // Waits for one controller button (or an analog trigger, or a hat direction) and maps it to Controls.BUTTONS[b]
+    private void captureKey(int b) {
+        final Dialog d = new Dialog(activity);
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(12), dp(16), dp(14));
+        box.setBackground(plate(PANEL, 2, 0));
+        TextView title = text("Map " + MAP_NAMES[b], 20, GOLD, true);
+        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
+        box.addView(title);
+        box.addView(rule(RED, 2));
+        box.addView(rule(GREEN, 1));
+        TextView ask = text("Press the controller button for " + MAP_NAMES[b] + ".", 16, CREAM, false);
+        ask.setPadding(0, dp(12), 0, dp(4));
+        box.addView(ask);
+        box.addView(text(cfg.mapKey[b] == 0 ? "Now: its usual button" : "Now: " + Controls.keyName(cfg.mapKey[b]), 14,
+                DIM, false));
+
+        final boolean[] done = {false};
+        final IntConsumer take = key -> {
+            if (done[0]) return;
+            done[0] = true;
+            for (int i = 0; i < cfg.mapKey.length; i++)
+                if (cfg.mapKey[i] == key) cfg.mapKey[i] = 0;  // (one controller button, one Switch button)
+            cfg.mapKey[b] = key;
+            d.dismiss();
+            changed();
+            build();
+        };
+        d.setOnKeyListener((dialog, keyCode, ev) -> {
+            boolean pad = (ev.getSource() & (InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK
+                    | InputDevice.SOURCE_DPAD)) != 0 && ev.getDevice() != null && !ev.getDevice().isVirtual();
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) return false;
+            if (!pad) return keyCode != KeyEvent.KEYCODE_BACK;  // (the back gesture still closes it)
+            if (ev.getAction() == KeyEvent.ACTION_UP && ev.getRepeatCount() == 0) take.accept(keyCode);
+            return true;  // (on release, so the press doesn't also reach the menu)
+        });
+        // Analog triggers and hats send motion, not keys: they're mapped as the keys they stand for
+        box.setFocusable(true);
+        box.setFocusableInTouchMode(true);
+        box.setOnGenericMotionListener((v, ev) -> {
+            if ((ev.getSource() & InputDevice.SOURCE_JOYSTICK) == 0) return false;
+            float lt = Math.max(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE));
+            float rt = Math.max(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(MotionEvent.AXIS_GAS));
+            float hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X), hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y);
+            if (lt > 0.6f) take.accept(KeyEvent.KEYCODE_BUTTON_L2);
+            else if (rt > 0.6f) take.accept(KeyEvent.KEYCODE_BUTTON_R2);
+            else if (hy < -0.5f) take.accept(KeyEvent.KEYCODE_DPAD_UP);
+            else if (hy > 0.5f) take.accept(KeyEvent.KEYCODE_DPAD_DOWN);
+            else if (hx < -0.5f) take.accept(KeyEvent.KEYCODE_DPAD_LEFT);
+            else if (hx > 0.5f) take.accept(KeyEvent.KEYCODE_DPAD_RIGHT);
+            return true;
+        });
+
+        LinearLayout buttons = new LinearLayout(activity);
+        buttons.setPadding(0, dp(14), 0, 0);
+        TextView usual = button("Default", false);
+        usual.setOnClickListener(v -> {
+            done[0] = true;
+            cfg.mapKey[b] = 0;
+            d.dismiss();
+            changed();
+            build();
+        });
+        TextView cancel = button("Cancel", true);
+        cancel.setOnClickListener(v -> {
+            done[0] = true;
+            d.dismiss();
+        });
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, dp(46), 1);
+        half.setMargins(dp(4), 0, dp(4), 0);
+        buttons.addView(usual, half);
+        buttons.addView(cancel, new LinearLayout.LayoutParams(half));
+        box.addView(buttons);
+
+        d.setContentView(box);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            DisplayMetrics m = activity.getResources().getDisplayMetrics();
+            w.setLayout(Math.min(dp(520), (int) (m.widthPixels * 0.7f)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        d.show();
+        box.requestFocus();
     }
 
     // ---- combo editor ---------------------------------------------------------------------------------------------------

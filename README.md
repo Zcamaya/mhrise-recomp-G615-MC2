@@ -129,6 +129,9 @@ may stutter while its shaders are translated and compiled; they are cached for t
   - *Controller:* the sticks' dead zone, how far an analog trigger travels before it is ZL / ZR, and where the right stick
     is read from. *By controller* picks Z/RZ or RX/RY from the axes each pad says it has, with triggers on LTRIGGER /
     RTRIGGER, BRAKE / GAS or Z/RZ, so Xbox, DualSense and generic pads all work. The log says what it chose for each pad.
+  - *Button mapping* (under Controller): tap a Switch button and press the controller button you want for it. Analog
+    triggers and a hat d-pad can be mapped too. To swap two buttons, map each one to the other; *Reset mapping* puts
+    everything back. The log lists each mapping (`[input] controller key … mapped to …`).
 
 ## Options
 

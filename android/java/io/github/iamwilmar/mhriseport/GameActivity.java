@@ -22,7 +22,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     static native void nativeTouch(long buttons, int sticksOn, float lx, float ly, float rx, float ry);
     static native void nativeTouchPoint(int action, float x, float y, long timeNs, int viewWidth, int viewHeight);
-    static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos);
+    static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos, long[] mapping);
     static native void nativeTextAnswer(int serial, String text);
 
     private Controls controls;
@@ -86,7 +86,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     // Los ajustes del mando físico, al loader
     void applyPad() {
         try {
-            nativePad(controls.padDeadzone / 100f, controls.trigger / 100f, controls.rightAxes, controls.padCombos());
+            nativePad(controls.padDeadzone / 100f, controls.trigger / 100f, controls.rightAxes, controls.padCombos(),
+                    controls.padMapping());
         } catch (UnsatisfiedLinkError e) {
             System.err.println("[controles] el loader no tiene nativePad: " + e);
         }
