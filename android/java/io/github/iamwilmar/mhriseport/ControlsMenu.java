@@ -43,10 +43,14 @@ final class ControlsMenu {
     private final ScrollView scroll;
     private final TextView sub;
     private final File folder;  // la del juego (files/carpeta.txt), donde van los interruptores
+    private final float scale;  // el tamaño del menú (Pantalla > Tamaño del menú): textos y medidas, 0,8 de partida
+    static final String PREFS = "menu", SCALE_KEY = "escala";
+    static final int SCALE_DEFAULT = 80;
 
     ControlsMenu(GameActivity activity, Controls cfg) {
         this.activity = activity;
         this.cfg = cfg;
+        this.scale = menuScale(activity) / 100f;
         dialog = new Dialog(activity);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
@@ -144,6 +148,17 @@ final class ControlsMenu {
     }
 
     private void buildDisplay() {
+        header(tr("Menú", "Menu"));
+        number(tr("Tamaño del menú", "Menu size"), tr("El de los textos y los botones de este menú.",
+                "The size of this menu's text and buttons."), 60, 130, 5, " %", () -> menuScale(activity), v -> {
+                    try {
+                        activity.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit().putInt(SCALE_KEY, v).apply();
+                    } catch (RuntimeException ignored) {
+                        // (sin preferencias: se queda como está)
+                    }
+                    dialog.dismiss();
+                    new ControlsMenu(activity, cfg).show();  // (todo se mide al construirlo: se vuelve a abrir con el nuevo)
+                });
         header(tr("Resolución", "Resolution"));
         note(tr("La del 3D del juego. En la consola portátil es 960x540 dentro de una imagen de 720p, que luego se escala a "
                         + "la pantalla. Más alta: más nítido y más trabajo para la GPU.",
@@ -205,6 +220,23 @@ final class ControlsMenu {
                                 + "GPU. Applies at once."),
                 "sin_sombras", true);
         header(tr("Texturas", "Textures"));
+        {
+            final String[] files = {null, "con_bindless_arrays", "sin_bindless_arrays"};
+            choice(tr("Arrays de texturas (bindless)", "Texture arrays (bindless)"),
+                    tr("Cómo leen los shaders muchas texturas del juego. Auto: sin ellos con el driver de Qualcomm en una "
+                                    + "Adreno 7xx u 8xx, que no compila muchos de esos shaders (sale todo negro); con ellos en "
+                                    + "las demás. Apágalos si con tu driver hay cosas negras. Vale desde el siguiente arranque.",
+                            "How shaders read many of the game's textures. Auto: off with Qualcomm's driver on an Adreno 7xx "
+                                    + "or 8xx, which can't compile many of those shaders (things come out black); on elsewhere. "
+                                    + "Turn them off if your driver draws things black. Takes effect on the next start."),
+                    new String[] {tr("Auto", "Auto"), tr("Activos", "On"), tr("Apagados", "Off")}, () -> {
+                        for (int i = files.length - 1; i > 0; i--)
+                            if (has(files[i])) return i;
+                        return 0;
+                    }, v -> {
+                        for (int i = 1; i < files.length; i++) put(files[i], i == v);
+                    });
+        }
         flag(tr("Filtrado anisótropo", "Anisotropic filtering"),
                 tr("Suelos y paredes en ángulo más nítidos a lo lejos. Apagado: un poco más barato para una GPU floja.",
                         "Sharper floors and walls at an angle in the distance. Off: a little cheaper for a weak GPU."),
@@ -376,18 +408,24 @@ final class ControlsMenu {
         }
         box.addView(grid);
 
-        // el botón del mando que lo hace: se recorren los de Controls.PAD_TRIGGERS
+        // el botón del mando que lo hace: uno de Controls.PAD_TRIGGERS, en un desplegable
         final TextView padValue = text("", 16, GOLD, false);
         LinearLayout padRow = rowView(tr("Botón del mando", "Controller button"), padValue,
                 tr("Mientras se pulsa, el juego recibe los botones del combo en lugar de él.",
                         "While it is held, the game gets the combo's buttons instead of it."));
-        Runnable showPad = () -> padValue.setText(padMask[0] == 0 ? tr("Ninguno", "None") : Controls.names(padMask[0]));
+        Runnable showPad = () -> padValue.setText((padMask[0] == 0 ? tr("Ninguno", "None") : Controls.names(padMask[0])) + "  ▾");
         showPad.run();
         padRow.setOnClickListener(v -> {
             int at = 0;
-            for (int i = 0; i < Controls.PAD_TRIGGERS.length; i++) if (Controls.PAD_TRIGGERS[i] == padMask[0]) at = i;
-            padMask[0] = Controls.PAD_TRIGGERS[(at + 1) % Controls.PAD_TRIGGERS.length];
-            showPad.run();
+            final String[] names = new String[Controls.PAD_TRIGGERS.length];
+            for (int i = 0; i < names.length; i++) {
+                if (Controls.PAD_TRIGGERS[i] == padMask[0]) at = i;
+                names[i] = Controls.PAD_TRIGGERS[i] == 0 ? tr("Ninguno", "None") : Controls.names(Controls.PAD_TRIGGERS[i]);
+            }
+            dropDown(tr("Botón del mando", "Controller button"), names, at, i -> {
+                padMask[0] = Controls.PAD_TRIGGERS[i];
+                showPad.run();
+            });
         });
         box.addView(padRow);
 
@@ -492,13 +530,96 @@ final class ControlsMenu {
         choice(title, help, onOff, get, set);
     }
 
+    // Dos opciones (encendido / apagado): un toque cambia. Más: un desplegable con todas, la de ahora resaltada.
     private void choice(String title, String help, String[] options, IntSupplier get, IntConsumer set) {
         final TextView[] value = new TextView[1];
-        value[0] = row(title, options[get.getAsInt()], help, step -> {
-            set.accept((get.getAsInt() + step) % options.length);
-            value[0].setText(options[get.getAsInt()]);
-            changed();
+        final boolean list = options.length > 2;
+        value[0] = row(title, options[get.getAsInt()] + (list ? "  ▾" : ""), help, step -> {
+            if (!list) {
+                set.accept((get.getAsInt() + step) % options.length);
+                value[0].setText(options[get.getAsInt()]);
+                changed();
+                return;
+            }
+            dropDown(title, options, get.getAsInt(), i -> {
+                set.accept(i);
+                value[0].setText(options[get.getAsInt()] + "  ▾");
+                changed();
+            });
         }, false);
+    }
+
+    // El desplegable: un panel como el del menú, con el título, la X y una fila por opción (la elegida en dorado)
+    private void dropDown(String title, String[] options, int current, IntConsumer pick) {
+        final Dialog d = new Dialog(activity);
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackground(plate(PANEL, 2, 0));
+        LinearLayout top = new LinearLayout(activity);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(16), dp(8), dp(8), dp(8));
+        TextView t = text("◆  " + title, 18, GOLD, true);
+        t.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
+        TextView close = text("✕", 20, CREAM, false);
+        close.setPadding(dp(12), dp(2), dp(12), dp(2));
+        close.setBackground(plate(0xFF1A0C09, 1, 2));
+        close.setOnClickListener(v -> d.dismiss());
+        top.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        top.addView(close);
+        root.addView(top);
+        root.addView(rule(RED, 2));
+        root.addView(rule(GREEN, 1));
+        LinearLayout items = new LinearLayout(activity);
+        items.setOrientation(LinearLayout.VERTICAL);
+        items.setPadding(dp(10), dp(6), dp(10), dp(10));
+        for (int i = 0; i < options.length; i++) {
+            final int k = i;
+            final boolean on = i == current;
+            LinearLayout r = new LinearLayout(activity);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            r.setPadding(dp(14), dp(12), dp(14), dp(12));
+            r.setBackground(on ? gold() : plate(ROW, 1, 2));
+            TextView name = text((on ? "◆  " : "") + options[i], 16, on ? 0xFF281010 : CREAM, on);
+            r.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            if (on) r.addView(text("◆", 14, 0xFF281010, true));
+            r.setOnClickListener(v -> {
+                d.dismiss();
+                if (k != current) pick.accept(k);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(4);
+            items.addView(r, lp);
+        }
+        ScrollView sv = new ScrollView(activity);
+        sv.addView(items);
+        root.addView(sv);
+        d.setContentView(root);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            DisplayMetrics m = activity.getResources().getDisplayMetrics();
+            w.setLayout(Math.min(dp(460), (int) (m.widthPixels * 0.6f)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        d.show();
+    }
+
+    // La fila elegida de un desplegable: dorado con brillo, como la del menú del juego
+    private GradientDrawable gold() {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[] {0xFFD4A43C, 0xFF8E5A22});
+        g.setStroke(dp(2), 0xFFF0D080);
+        g.setCornerRadius(dp(2));
+        return g;
+    }
+
+    // El tamaño del menú guardado, en %
+    static int menuScale(android.content.Context c) {
+        try {
+            return c.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getInt(SCALE_KEY, SCALE_DEFAULT);
+        } catch (RuntimeException e) {
+            return SCALE_DEFAULT;
+        }
     }
 
     // Un número con − y +: un toque en la fila también sube (y vuelve al mínimo pasado el máximo)
@@ -594,13 +715,14 @@ final class ControlsMenu {
     private TextView text(String s, int sp, int color, boolean bold) {
         TextView t = new TextView(activity);
         t.setText(s);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp * scale);
         t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
         return t;
     }
 
-    private int dp(int v) {
-        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, activity.getResources().getDisplayMetrics()));
+    private int dp(int v) {  // (con el tamaño del menú; las rayas de 1 dp no desaparecen)
+        float px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v * scale, activity.getResources().getDisplayMetrics());
+        return v > 0 ? Math.max(1, Math.round(px)) : Math.round(px);
     }
 }

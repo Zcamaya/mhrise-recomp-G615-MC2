@@ -115,8 +115,8 @@ may stutter while its shaders are translated and compiled; they are cached for t
 
 ## Options
 
-The in-game settings menu (the gear of the touch controls) sets the common ones by section: **Display** (base
-resolution, dynamic resolution, FSR, FPS limit, FPS counter), **Graphics** (shadows, anisotropic filtering, GPU driver),
+The in-game settings menu (the gear of the touch controls) sets the common ones by section; choices with more than two options open a drop-down, and Display > Menu size scales the menu's text: **Display** (base
+resolution, dynamic resolution, FSR, FPS limit, FPS counter), **Graphics** (shadows, texture arrays, anisotropic filtering, GPU driver),
 **Performance** (performance hints, fast cores, low memory, shader warm-up, pipelines on one thread), and the touch
 controls, combos and controller. Underneath, each is an empty file (or folder) with one of these names in the game
 folder, which the game checks once a second; the ones only read at start-up say so.
@@ -136,6 +136,7 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |
 | `bc_en_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
 | `con_subgrupos_cortos` | On GPUs whose subgroups are smaller than the Switch's 32-wide warps (Mali Valhall: 16), shaders are translated without subgroup operations, since a game vote or ballot there would only see half a warp. This brings the device's subgroup operations back. |
+| `sin_bindless_arrays`, `con_bindless_arrays` | Texture arrays in the shaders off or on (the menu's Graphics > Texture arrays). Auto, with neither: off with Qualcomm's own driver on an Adreno 7xx or 8xx (512.863 on an Adreno 730 rejected most of the scene's pixel shaders that index them, so things came out black), on elsewhere (Turnip, the Adreno 650). Read at start-up. |
 | `sin_traduccion_segura` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
 | `migas` | Debugging: GPU breadcrumbs. If the GPU hangs, or the driver aborts a stuck job, the log names the render pass or dispatch and its shaders. Everything on the GPU runs in order: slow. |
 | `memoria_baja` | Smaller caches, as on a phone with less than 5 GB of RAM. |

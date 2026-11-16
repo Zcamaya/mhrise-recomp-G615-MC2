@@ -401,13 +401,20 @@ public final class DriverActivity extends Activity {
     private TextView text(String s, int sp, int color, boolean bold) {
         TextView t = new TextView(this);
         t.setText(s);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp * scale());
         t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
         return t;
     }
 
+    private float scale = -1;  // (el tamaño del menú de ajustes, el mismo aquí)
+    private float scale() {
+        if (scale < 0) scale = ControlsMenu.menuScale(this) / 100f;
+        return scale;
+    }
+
     private int dp(int v) {
-        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+        float px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v * scale(), getResources().getDisplayMetrics());
+        return v > 0 ? Math.max(1, Math.round(px)) : Math.round(px);
     }
 }

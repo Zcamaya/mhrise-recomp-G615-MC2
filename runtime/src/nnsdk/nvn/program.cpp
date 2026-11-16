@@ -258,6 +258,23 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
 }
 
 // bound: hasta dónde se puede leer el código; 0, el final de su memory pool (la precarga traduce una copia suya).
+// El driver propio de Qualcomm en una Adreno de la serie 7 u 8 ("Adreno (TM) 730"; Turnip dice "Turnip Adreno (TM) …")
+bool qualcomm_7xx_stock() {
+    static const bool yes = [] {
+        nvn::VkContext* c = nvn::vk();
+        if (!c || c->props.vendorID != 0x5143) return false;
+        const char* name = c->props.deviceName;
+        const bool stock = strncmp(name, "Adreno", 6) == 0;
+        const char* digits = strpbrk(name, "0123456789");
+        const bool newer = digits && (digits[0] == '7' || digits[0] == '8');
+        if (stock && newer)
+            NVN_LOG("arrays bindless: %s con el driver de Qualcomm, sin ellos por defecto (<datos>/con_bindless_arrays: con "
+                    "ellos)\n", name);
+        return stock && newer;
+    }();
+    return yes;
+}
+
 // safe: el nivel de traducción prudente (nvn::safe_variant; 0, la de siempre)
 bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, int input_topology = 0, size_t bound = 0,
                      int safe = 0) {
@@ -338,7 +355,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // Bindless de los uniform buffers del juego (arrays hasta el final del cbuf, máscara y sampler fijo del handle; ver
     // nvnshader::Options). <datos>/sin_bindless_arrays al traducir (al arrancar): como antes; los arrays que ya hacía Eden
     // siguen en el set 1. <datos>/sin_bindless apaga la resolución en vivo.
-    options.bindless_arrays = !NVN_FLAG("sin_bindless_arrays");
+    // Auto: sin ellos con el driver propio de Qualcomm en las Adreno 7xx y posteriores (Turnip se presenta como "Turnip
+    // Adreno"): el 512.863 de una Adreno 730 rechazaba (VK_ERROR_UNKNOWN) casi todos los pixel shaders que indexan esos
+    // arrays, el 94 % de los que fallaban frente al 55 % de todos, con NonUniform o sin él. En la Adreno 650 (512.746),
+    // donde se hicieron, van bien. <datos>/con_bindless_arrays: con ellos siempre (el menú de opciones: Gráficos).
+    options.bindless_arrays = !NVN_FLAG("sin_bindless_arrays") && (NVN_FLAG("con_bindless_arrays") || !qualcomm_7xx_stock());
     // Memoria compartida privada de cada invocación (spill del compilador de NVN) a memoria local: el skinning de la cara
     // (793657b4f1e65631) salía NaN en el Adreno con esos stores a Workgroup en los casos de su switch.
     // <datos>/sin_compartida_privada al traducir (al arrancar): se queda en Workgroup, como antes.
