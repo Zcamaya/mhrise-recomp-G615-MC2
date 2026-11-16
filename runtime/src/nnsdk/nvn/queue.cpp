@@ -73,7 +73,10 @@ void nvnQueuePresentTexture(void*, void* window, int index) {
         nvn::pin_critical_thread();
     }
     nvn::refresh_critical_threads();
-    if (nvn::Window* w = nvn::g_windows.get(window)) nvn::queue_present(*w, index);
+    if (nvn::Window* w = nvn::g_windows.get(window)) {
+        nvn::perf_hint_frame(w->present_interval);
+        nvn::queue_present(*w, index);
+    }
 }
 
 nvn::Boolean nvnSyncInitialize(void* sync, void*) {

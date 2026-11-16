@@ -557,9 +557,12 @@ const CpuMasks& cpu_masks() {
         }
         for (int cpu = 0; cpu < n; cpu++)
             if (freq[cpu] && freq[cpu] > lowest) CPU_SET(cpu, &m.big);
-        m.usable = CPU_COUNT(&m.big) > 0;
+        // Con menos de 3 rápidos (los 2+6 de muchos MediaTek: Helio G99, Dimensity 700…) los tres hilos críticos y lo que
+        // heredan se pisaban en dos núcleos: mejor que el planificador los reparta.
+        m.usable = CPU_COUNT(&m.big) >= 3;
         printf("[nnsdk] afinidad: núcleos grandes %#llx de %#llx%s\n", static_cast<unsigned long long>(mask_bits(m.big)),
-               static_cast<unsigned long long>(mask_bits(m.all)), m.usable ? "" : " (todos iguales o sin datos: no se usa)");
+               static_cast<unsigned long long>(mask_bits(m.all)),
+               m.usable ? "" : CPU_COUNT(&m.big) ? " (menos de 3 rápidos: no se usa)" : " (todos iguales o sin datos: no se usa)");
         return m;
     }();
     return masks;
@@ -595,18 +598,20 @@ bool apply_mask(const CriticalThread& t, const cpu_set_t& want, bool refreshing)
     return true;
 }
 
+// Se apunta aunque no haya máscara que poner: la lista es también la de las pistas de rendimiento (nvn/perf_hint.cpp).
 void pin_current_thread() {
     const CpuMasks& m = cpu_masks();
-    if (!m.usable || t_critical) return;
+    if (t_critical) return;
     t_critical = true;
     CriticalThread t{gettid(), {}};
     pthread_getname_np(pthread_self(), t.name, sizeof t.name);
     const bool off = affinity_off();
     std::lock_guard lock(g_critical_m);
-    apply_mask(t, off ? m.all : m.big, false);
+    if (m.usable) apply_mask(t, off ? m.all : m.big, false);
     g_critical.push_back(t);
-    g_any_critical = true;
-    printf("[nnsdk] hilo crítico '%s' (tid %d): %s\n", t.name, t.tid, off ? "sin afinidad (sin_afinidad)" : "núcleos grandes");
+    g_any_critical = m.usable;
+    printf("[nnsdk] hilo crítico '%s' (tid %d): %s\n", t.name, t.tid,
+           !m.usable ? "sin máscara" : off ? "sin afinidad (sin_afinidad)" : "núcleos grandes");
 }
 
 void unpin_current_thread() {  // el hilo termina: su tid se puede reutilizar
@@ -1342,6 +1347,13 @@ void pin_background_thread() {
     for (int cpu = 0; cpu < 64; cpu++)
         if (CPU_ISSET(cpu, &m.all) && !CPU_ISSET(cpu, &m.big)) CPU_SET(cpu, &little);
     if (CPU_COUNT(&little) > 0) sched_setaffinity(0, sizeof little, &little);
+}
+
+std::vector<pid_t> critical_threads() {
+    std::lock_guard lock(g_critical_m);
+    std::vector<pid_t> tids;
+    for (const CriticalThread& t : g_critical) tids.push_back(t.tid);
+    return tids;
 }
 
 void refresh_critical_threads() {

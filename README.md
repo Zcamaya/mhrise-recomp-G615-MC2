@@ -115,12 +115,20 @@ may stutter while its shaders are translated and compiled; they are cached for t
 
 ## Options
 
-Creating an empty file (or folder) with one of these names in the game folder changes how the port runs. Most are read
-at start-up.
+The in-game settings menu (the gear of the touch controls) sets the common ones by section: **Display** (base
+resolution, dynamic resolution, FSR, 60 fps, FPS counter), **Graphics** (anisotropic filtering, GPU driver),
+**Performance** (performance hints, fast cores, low memory, shader warm-up, pipelines on one thread), and the touch
+controls, combos and controller. Underneath, each is an empty file (or folder) with one of these names in the game
+folder, which the game checks once a second; the ones only read at start-up say so.
 
 | Name | Effect |
 |---|---|
 | `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam), copied into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. |
+| `resolucion_576`, `resolucion_648`, `resolucion_720` | Base resolution of the 3D scene: 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). Live. |
+| `sin_resolucion_dinamica` | Keeps the scene at the base resolution (no dynamic resolution). Live. |
+| `sin_fsr` | Plain linear scaling to the screen instead of FSR 1. Live. |
+| `sin_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |
+| `sin_afinidad` | Doesn't pin the frame's three threads to the fast cores (they're only pinned when the phone has at least three fast cores). Live. |
 | `60fps` | Unlocks 60 fps mode (the Flip 2 GPU reaches ~45 in the village, less in hunts). |
 | `sin_fps` | Hides the FPS counter (the same switch as in the settings panel). |
 | `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |

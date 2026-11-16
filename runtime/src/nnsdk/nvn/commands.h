@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <sys/types.h>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -287,6 +288,11 @@ void pin_critical_thread();
 // la quita a los críticos ni calienta los grandes (el SoC caliente baja la GPU). sin_afinidad: como estén.
 void pin_background_thread();
 void refresh_critical_threads();
+// Los tids de los hilos críticos de ahora (los que sigan vivos)
+std::vector<pid_t> critical_threads();
+// Pistas de rendimiento de Android (perf_hint.cpp): una vez por frame del juego, desde el hilo que presenta.
+// interval: el de presentación (el frame dura interval x 16,7 ms).
+void perf_hint_frame(int interval);
 // Copia la textura de la ventana a la imagen del swapchain (la llama window.cpp al presentar).
 // Con FSR 1 (fsr.cpp) si el formato lo permite; si no, un blit lineal.
 bool blit_to_swapchain(Texture& texture, const VkRect2D& crop, VkImage swapchain_image, VkFormat format, VkExtent2D extent,

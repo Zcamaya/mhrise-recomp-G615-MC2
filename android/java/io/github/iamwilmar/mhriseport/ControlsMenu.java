@@ -16,22 +16,33 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.function.IntConsumer;
 import java.util.function.IntSupplier;
 
 import static io.github.iamwilmar.mhriseport.SetupActivity.tr;
 
-// El menú de los controles, sobre el juego, en el estilo de su menú: paneles de vino oscuro con borde de bronce, títulos
+// El menú de ajustes, sobre el juego, en el estilo de su menú: paneles de vino oscuro con borde de bronce, títulos
 // dorados con la raya roja y verde, y un "?" en cada fila que despliega lo que hace. Se abre con el engranaje de los
-// controles táctiles. Cada cambio se guarda y se aplica al momento (GameActivity.refresh).
+// controles táctiles. A la izquierda las secciones; a la derecha las filas de la elegida.
+// Los controles se guardan y se aplican al momento (GameActivity.refresh). Pantalla, Gráficos y Rendimiento son los
+// interruptores del juego: ficheros vacíos en la carpeta del juego (runtime/src/nnsdk/nvn/flags.h), que el juego mira
+// una vez por segundo; los que solo se leen al arrancar lo dicen en su ayuda.
 final class ControlsMenu {
     static final int PANEL = 0xF0201010, ROW = 0xFF2C1614, EDGE = 0xFFC49646, GOLD = 0xFFE2B65C, CREAM = 0xFFF0E4C8,
             DIM = 0xFFB09C84, RED = 0xFFB0221E, GREEN = 0xFF508E36;
 
+    private static int section = 0;  // la última abierta (mientras viva el proceso)
+
     private final GameActivity activity;
     private final Controls cfg;
     private final Dialog dialog;
-    private final LinearLayout list;
+    private final LinearLayout list, sections;
+    private final ScrollView scroll;
+    private final TextView sub;
+    private final File folder;  // la del juego (files/carpeta.txt), donde van los interruptores
 
     ControlsMenu(GameActivity activity, Controls cfg) {
         this.activity = activity;
@@ -49,7 +60,7 @@ final class ControlsMenu {
         top.setPadding(dp(18), dp(10), dp(10), dp(10));
         TextView title = text(tr("AJUSTES", "SETTINGS"), 22, GOLD, true);
         title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
-        TextView sub = text("  ◆  " + tr("Controles", "Controls"), 17, CREAM, false);
+        sub = text("", 17, CREAM, false);
         TextView close = text("✕", 22, CREAM, false);
         close.setPadding(dp(14), dp(4), dp(14), dp(4));
         close.setBackground(plate(0xFF1A0C09, 1, 2));
@@ -61,12 +72,24 @@ final class ControlsMenu {
         root.addView(rule(RED, 2));
         root.addView(rule(GREEN, 1));
 
+        folder = gameFolder(activity);
+        LinearLayout body = new LinearLayout(activity);
+        sections = new LinearLayout(activity);
+        sections.setOrientation(LinearLayout.VERTICAL);
+        sections.setPadding(dp(10), dp(8), dp(6), dp(10));
+        ScrollView side = new ScrollView(activity);
+        side.addView(sections);
+        body.addView(side, new LinearLayout.LayoutParams(dp(176), ViewGroup.LayoutParams.MATCH_PARENT));
+        View divider = new View(activity);
+        divider.setBackgroundColor(EDGE);
+        body.addView(divider, new LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT));
         list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(12), dp(6), dp(12), dp(12));
-        ScrollView scroll = new ScrollView(activity);
+        scroll = new ScrollView(activity);
         scroll.addView(list);
-        root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        body.addView(scroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         build();
 
         dialog.setContentView(root);
@@ -74,7 +97,7 @@ final class ControlsMenu {
         if (w != null) {
             w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             DisplayMetrics m = activity.getResources().getDisplayMetrics();
-            w.setLayout(Math.min(dp(760), (int) (m.widthPixels * 0.9f)), (int) (m.heightPixels * 0.9f));
+            w.setLayout(Math.min(dp(940), (int) (m.widthPixels * 0.94f)), (int) (m.heightPixels * 0.92f));
         }
     }
 
@@ -82,8 +105,137 @@ final class ControlsMenu {
 
     private void changed() { activity.refresh(); }
 
+    // ---- secciones -------------------------------------------------------------------------------------------------------
+
+    private String[] sectionNames() {
+        return new String[] {tr("Pantalla", "Display"), tr("Gráficos", "Graphics"), tr("Rendimiento", "Performance"),
+                tr("Controles táctiles", "Touch controls"), tr("Combos", "Combos"), tr("Mando físico", "Controller")};
+    }
+
     private void build() {
+        String[] names = sectionNames();
+        sections.removeAllViews();
+        for (int i = 0; i < names.length; i++) {
+            final int k = i;
+            boolean on = k == section;
+            TextView b = text(names[k], 15, on ? GOLD : CREAM, on);
+            b.setPadding(dp(12), dp(11), dp(8), dp(11));
+            b.setBackground(plate(on ? 0xFF3E2616 : ROW, on ? 2 : 1, 2));
+            b.setOnClickListener(v -> {
+                section = k;
+                build();
+                scroll.scrollTo(0, 0);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(4);
+            sections.addView(b, lp);
+        }
+        sub.setText("  ◆  " + names[section]);
         list.removeAllViews();
+        switch (section) {
+            case 0: buildDisplay(); break;
+            case 1: buildGraphics(); break;
+            case 2: buildPerformance(); break;
+            case 3: buildTouch(); break;
+            case 4: buildCombos(); break;
+            default: buildController(); break;
+        }
+    }
+
+    private void buildDisplay() {
+        header(tr("Resolución", "Resolution"));
+        note(tr("La del 3D del juego. En la consola portátil es 960x540 dentro de una imagen de 720p, que luego se escala a "
+                        + "la pantalla. Más alta: más nítido y más trabajo para la GPU.",
+                "The game's 3D resolution. On the handheld console it's 960x540 inside a 720p picture, which is then scaled "
+                        + "to the screen. Higher: sharper, and more work for the GPU."));
+        final String[] files = {null, "resolucion_576", "resolucion_648", "resolucion_720"};
+        choice(tr("Resolución base", "Base resolution"),
+                tr("540p es la del juego. 720p dibuja la escena entera a 1280x720, sin escalarla dentro del juego. Se aplica "
+                                + "al momento.",
+                        "540p is the game's own. 720p draws the whole scene at 1280x720, with no scaling inside the game. "
+                                + "Applies at once."),
+                new String[] {"540p (960x540)", "576p (1024x576)", "648p (1152x648)", "720p (1280x720)"}, () -> {
+                    for (int i = files.length - 1; i > 0; i--)
+                        if (has(files[i])) return i;
+                    return 0;
+                }, v -> {
+                    for (int i = 1; i < files.length; i++) put(files[i], i == v);
+                });
+        flag(tr("Resolución dinámica", "Dynamic resolution"),
+                tr("Si la GPU no llega a tiempo al frame, baja la resolución por pasos (hasta un 73 % de la base) y la vuelve "
+                                + "a subir cuando sobra. Apagada: siempre la base.",
+                        "If the GPU can't finish a frame in time, it lowers the resolution in steps (down to 73 % of the base) "
+                                + "and raises it again when there's room. Off: always the base."),
+                "sin_resolucion_dinamica", true);
+        flag(tr("Escalado FSR", "FSR upscaling"),
+                tr("FSR 1 de AMD lleva la imagen de 720p a la pantalla con más nitidez que un escalado normal. Apagado: "
+                                + "escalado lineal, un poco más barato.",
+                        "AMD FSR 1 takes the 720p picture to the screen sharper than a plain scale. Off: linear scaling, a "
+                                + "little cheaper."),
+                "sin_fsr", true);
+
+        header(tr("Imagen", "Picture"));
+        flag(tr("60 fps", "60 fps"),
+                tr("Quita el límite de 30. La GPU tiene que poder: en la Flip 2 llega a ~45 en la aldea, menos en misiones.",
+                        "Lifts the 30 cap. The GPU has to keep up: on the Flip 2 it reaches ~45 in the village, less in hunts."),
+                "60fps", false);
+        flag(tr("Contador de FPS", "FPS counter"), tr("El número en la esquina.", "The number in the corner."), "sin_fps",
+                true);
+    }
+
+    private void buildGraphics() {
+        header(tr("Texturas", "Textures"));
+        flag(tr("Filtrado anisótropo", "Anisotropic filtering"),
+                tr("Suelos y paredes en ángulo más nítidos a lo lejos. Apagado: un poco más barato para una GPU floja.",
+                        "Sharper floors and walls at an angle in the distance. Off: a little cheaper for a weak GPU."),
+                "sin_af", true);
+        header(tr("Driver", "Driver"));
+        action(tr("Driver de GPU", "GPU driver"),
+                tr("El del sistema, o uno propio para una Adreno (Turnip…), agregado desde un .zip. Vale desde el siguiente arranque.",
+                        "The system's, or one of your own for an Adreno (Turnip…), added from a .zip. Takes effect on the next start."),
+                () -> {
+                    dialog.dismiss();
+                    activity.startActivity(new Intent(activity, DriverActivity.class).putExtra(DriverActivity.FROM_GAME, true));
+                });
+    }
+
+    private void buildPerformance() {
+        header(tr("CPU", "CPU"));
+        flag(tr("Pistas de rendimiento", "Performance hints"),
+                tr("Le dice a Android cuánto dura cada frame y cuánto trabajo lleva, para que suba los relojes a tiempo en vez "
+                                + "de dejarlos bajar en cada espera (Android 13 o más nuevo). Suele dar un ritmo más regular.",
+                        "Tells Android how long each frame should take and how much work it took, so it raises the clocks in "
+                                + "time instead of letting them drop on every wait (Android 13 or newer). Usually a steadier pace."),
+                "sin_adpf", true);
+        flag(tr("Hilos del juego en los núcleos rápidos", "Game threads on the fast cores"),
+                tr("Los tres hilos que hacen el frame van a los núcleos rápidos (si el teléfono tiene al menos tres). Apagado: "
+                                + "los reparte Android.",
+                        "The three threads that build each frame go on the fast cores (if the phone has at least three). Off: "
+                                + "Android places them."),
+                "sin_afinidad", true);
+        header(tr("Memoria y shaders", "Memory and shaders"));
+        flag(tr("Memoria baja", "Low memory"),
+                tr("Cachés más pequeñas, como en un teléfono de menos de 5 GB (ahí ya va así solo). Vale desde el siguiente "
+                                + "arranque.",
+                        "Smaller caches, as on a phone with less than 5 GB (it's already like that there). Takes effect on the "
+                                + "next start."),
+                "memoria_baja", false);
+        flag(tr("Precalentar shaders", "Shader warm-up"),
+                tr("Al arrancar crea las pipelines que ya se vieron otras veces, para que no tiren el ritmo al aparecer. "
+                                + "Vale desde el siguiente arranque.",
+                        "At start it builds the pipelines seen in earlier runs, so they don't drop frames when they appear. "
+                                + "Takes effect on the next start."),
+                "sin_precalentado", true);
+        flag(tr("Pipelines en un solo hilo", "Pipelines on one thread"),
+                tr("Sin hilos de fondo ni precalentado: más tirones, pero algunos drivers se cuelgan creando varias a la vez "
+                                + "(PowerVR va así solo). Vale desde el siguiente arranque.",
+                        "No background threads or warm-up: more stutter, but some drivers crash building several at once "
+                                + "(PowerVR is like that by itself). Takes effect on the next start."),
+                "pipelines_un_hilo", false);
+    }
+
+    private void buildTouch() {
         header(tr("Controles táctiles", "Touch controls"));
         toggle(tr("Controles en pantalla", "On-screen controls"),
                 tr("Los botones y sticks sobre el juego. Apagados queda solo el engranaje, para volver aquí.",
@@ -127,6 +279,9 @@ final class ControlsMenu {
                     changed();
                 });
 
+    }
+
+    private void buildCombos() {
         header(tr("Combos", "Combos"));
         note(tr("Un combo pulsa varios botones a la vez: con su botón en pantalla, o con uno (o dos) del mando.",
                 "A combo presses several buttons at once: with its button on the screen, or with one (or two) of the controller's."));
@@ -139,6 +294,9 @@ final class ControlsMenu {
                     "Choose the buttons it presses and, if you like, the controller button that does it."), v -> editCombo(k), false);
         }
 
+    }
+
+    private void buildController() {
         header(tr("Mando físico", "Controller"));
         number(tr("Zona muerta", "Dead zone"), tr("Cuánto hay que mover un stick del mando antes de que cuente (los dos sticks).",
                 "How far a controller stick moves before it counts (both sticks)."), 0, 40, 1, " %",
@@ -154,15 +312,6 @@ final class ControlsMenu {
                                 + "triggers on Z/RZ) on many generic ones. Change it if the camera won't move or moves on its own."),
                 new String[] {tr("Según el mando", "By controller"), "Z / RZ", "RX / RY"}, () -> cfg.rightAxes,
                 v -> cfg.rightAxes = v);
-
-        header(tr("Gráficos", "Graphics"));
-        action(tr("Driver de GPU", "GPU driver"),
-                tr("El del sistema, o uno propio para una Adreno (Turnip…), agregado desde un .zip. Vale desde el siguiente arranque.",
-                        "The system's, or one of your own for an Adreno (Turnip…), added from a .zip. Takes effect on the next start."),
-                () -> {
-                    dialog.dismiss();
-                    activity.startActivity(new Intent(activity, DriverActivity.class).putExtra(DriverActivity.FROM_GAME, true));
-                });
     }
 
     // ---- el editor de un combo ----------------------------------------------------------------------------------------
@@ -355,6 +504,37 @@ final class ControlsMenu {
             changed();
         });
         list.addView(r);
+    }
+
+    // ---- interruptores del juego -----------------------------------------------------------------------------------------
+
+    private static File gameFolder(GameActivity a) {
+        try {
+            String path = new String(Files.readAllBytes(new File(a.getFilesDir(), "carpeta.txt").toPath())).trim();
+            return path.isEmpty() ? null : new File(path);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private boolean has(String name) {
+        return folder != null && new File(folder, name).exists();
+    }
+
+    private void put(String name, boolean on) {
+        if (folder == null) return;
+        File f = new File(folder, name);
+        try {
+            if (on) f.createNewFile();
+            else f.delete();
+        } catch (IOException ignored) {
+            // (la SD no deja: se queda como estaba, y la fila lo enseña al volver a abrir)
+        }
+    }
+
+    // Una fila de encendido / apagado sobre un interruptor. inverted: el fichero lo apaga (sin_*).
+    private void flag(String title, String help, String file, boolean inverted) {
+        toggle(title, help, () -> has(file) != inverted ? 1 : 0, v -> put(file, (v != 0) != inverted));
     }
 
     private void action(String title, String help, Runnable run) {

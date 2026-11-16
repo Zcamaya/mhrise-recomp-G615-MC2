@@ -403,7 +403,11 @@ GameClock* game_clock() {
 // pasan del 100 %, como pronto 0,5 s después del cambio anterior y solo si el ejecutor cabe (si el frame lo limita la CPU,
 // bajar la resolución no lo arregla). Sube tras 3 s sin cambios si el peor de esos 90 frames, escalado por los píxeles
 // del paso de arriba, cabe en el 78 % (con 2 s y el 80 % subía y bajaba 7 veces en 10 s al entrar en la misión).
-// <datos>/sin_resolucion_dinamica (en vivo): de vuelta a 1,0 (lo del juego), y quieta.
+// <datos>/sin_resolucion_dinamica (en vivo): quieta en la resolución base.
+// Resolución base (en vivo, el menú de opciones): la escena de portátil es 960x540 dentro de la salida de 1280x720, y la
+// profundidad y el resto de la escena ya son de 1280x720, así que el ratio puede subir hasta llenarla. <datos>/resolucion_576,
+// resolucion_648 o resolucion_720: la escena a 1024x576, 1152x648 o 1280x720 (720p de verdad, sin escalar del juego), y
+// la dinámica baja desde ahí con los mismos pasos. Sin ninguno, 960x540 como el juego.
 constexpr size_t kRendererPointer = 0x12950538;  // via.render.Renderer* (dato de main)
 constexpr size_t kRateField = 0x1a78;
 constexpr size_t kRateSetter = 0x78a0ea0;  // set_ImageQualityRate: adrp/ldr del Renderer y str s0, [x8, #0x1a78]
@@ -412,6 +416,18 @@ constexpr size_t kRateLoad = 0x7936e20;  // ldr s1, [x8, #0x1a78] en la actualiz
 constexpr uint32_t kRateLoadCode = 0xBD5A7901;
 constexpr float kRates[] = {1.0f, 0.93334f, 0.86667f, 0.80001f, 0.73334f};  // un poco por encima: floor no pierde un píxel
 constexpr int kLevels = static_cast<int>(std::size(kRates));
+
+// La base elegida: el ratio sobre 960x540 y las líneas, para el log
+struct BaseResolution {
+    float rate;
+    int lines;
+};
+BaseResolution base_resolution() {
+    if (NVN_FLAG("resolucion_720")) return {1.33334f, 720};
+    if (NVN_FLAG("resolucion_648")) return {1.20001f, 648};
+    if (NVN_FLAG("resolucion_576")) return {1.06668f, 576};
+    return {1.0f, 540};
+}
 
 struct DynamicResolution {
     int level = 0;
@@ -453,10 +469,17 @@ void dynamic_resolution(int interval) {
         d.since_change = 1000;
         return;
     }
+    const BaseResolution base = base_resolution();
+    static int base_logged = 0;
+    if (base.lines != base_logged) {
+        NVN_LOG("resolución base: %dp (escena %dx%d)%s\n", base.lines, static_cast<int>(960 * base.rate),
+                static_cast<int>(540 * base.rate), NVN_FLAG("sin_resolucion_dinamica") ? ", fija" : ", la dinámica baja desde ahí");
+        base_logged = base.lines;
+    }
     if (NVN_FLAG("sin_resolucion_dinamica")) {
-        if (d.written) *rate = 1.0f;
-        d.written = false;
         d.level = 0;
+        if (now != base.rate) *rate = base.rate;
+        d.written = base.rate != 1.0f;
         return;
     }
     int64_t gpu = 0;
@@ -485,13 +508,14 @@ void dynamic_resolution(int interval) {
         if (level != d.level) {
             if (d.logged++ < 40)
                 NVN_LOG("resolución dinámica: x%.3f -> x%.3f (escena ~%dx%d), GPU del juego %.1f ms\n", kRates[d.level],
-                        kRates[level], static_cast<int>(960 * kRates[level]), static_cast<int>(540 * kRates[level]), gpu / 1e6);
+                        kRates[level], static_cast<int>(960 * base.rate * kRates[level]),
+                        static_cast<int>(540 * base.rate * kRates[level]), gpu / 1e6);
             d.level = level;
             d.since_change = 0;
             d.changes++;
         }
     }
-    const float want = kRates[d.level];
+    const float want = base.rate * kRates[d.level];
     if (now != want) {
         *rate = want;
         d.written = d.written || want != 1.0f;
