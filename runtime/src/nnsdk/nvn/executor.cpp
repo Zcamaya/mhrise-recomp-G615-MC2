@@ -6276,6 +6276,8 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
 
     // El módulo de cada etapa (con su clave de la caché de SPIR-V, para el registro del precalentado).
     VkShaderModule modules[kStages] = {};
+    uint64_t previous_for[kStages];  // (el previous_stores de la variante de cada etapa: ~0, la etapa tal cual)
+    std::fill(std::begin(previous_for), std::end(previous_for), ~0ull);
     PipelineRecord rec;
     memset(&rec, 0, sizeof rec);
     bool recordable = true;
@@ -6301,6 +6303,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
             const ProgramStage* gs = key.skip_gs ? nullptr : st_.stages[static_cast<int>(Stage::Geometry)];
             const uint64_t previous = gs ? gs->shader.output_generics : vs->shader.output_generics;
             if (st_.stages[s]->shader.input_generics & ~previous) {
+                previous_for[s] = previous;
                 v = geometry_variant(*const_cast<ProgramStage*>(st_.stages[s]), previous, 0);
                 if (!v.module) return pipelines_[h] = VK_NULL_HANDLE;
                 static int logged = 0;
@@ -6354,6 +6357,47 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     g_drop_stats.pipelines_live.fetch_add(1, std::memory_order_relaxed);
     g_drop_stats.pipelines_live_ns.fetch_add(created_us * 1000, std::memory_order_relaxed);
     if (during_save || cache_reading_.load(std::memory_order_relaxed)) note_pipeline_during_save(created_us);
+    // El driver no la quiere (el VK_ERROR_UNKNOWN del compilador de Qualcomm 512.8xx, el de otros): sus etapas vertex y
+    // pixel traducidas con más prudencia, por niveles (safe_variant), hasta que una valga. La que vale queda como la de
+    // esta pipeline y en el registro del precalentado, así que la partida siguiente ya la crea sin fallar antes.
+    // <datos>/sin_traduccion_segura: sin reintentos, como antes.
+    if (created != VK_SUCCESS && !NVN_FLAG("sin_traduccion_segura")) {
+        const int stages_to_redo[] = {static_cast<int>(Stage::Vertex), static_cast<int>(Stage::Fragment)};
+        for (int level = 1; level <= kSafeLevels && created != VK_SUCCESS; level++) {
+            VkShaderModule safe[kStages];
+            std::copy(std::begin(modules), std::end(modules), safe);
+            PipelineRecord safe_rec = rec;
+            bool usable = true;
+            for (int s : stages_to_redo) {
+                if (!st_.stages[s] || !modules[s]) continue;
+                const ProgramStage::Variant v =
+                    safe_variant(*const_cast<ProgramStage*>(st_.stages[s]), previous_for[s], level);
+                if (!v.module) {
+                    usable = false;
+                    break;
+                }
+                safe[s] = v.module;
+                safe_rec.module[s] = v.cache_key;
+            }
+            if (!usable) continue;
+            {
+                LoadTimer timer(*this, kLdPipeline);
+                std::shared_lock cache_lock(pipeline_cache_lock_);
+                created = make_graphics_pipeline(key, safe, inputs, l.pipeline, rp, pipeline_cache_, p);
+            }
+            static std::atomic<int> logged{0};
+            if (created == VK_SUCCESS) {
+                rec = safe_rec;
+                for (int s : stages_to_redo) recordable &= !st_.stages[s] || (rec.module[s].a | rec.module[s].b) != 0;
+                if (logged++ < 24)
+                    NVN_LOG("pipeline rechazada por el driver: con la traducción prudente de nivel %d sí (vertex %016llx, "
+                            "pixel %016llx)\n", level,
+                            static_cast<unsigned long long>(vs ? vs->print : 0),
+                            static_cast<unsigned long long>(st_.stages[static_cast<int>(Stage::Fragment)]
+                                                                ? st_.stages[static_cast<int>(Stage::Fragment)]->print : 0));
+            }
+        }
+    }
     if (VkResult r = created; r != VK_SUCCESS)
     {
         std::string stages;
@@ -9886,7 +9930,8 @@ void Executor::async_loop() {
             std::lock_guard lock(async_mutex_);
             async_pending_.erase(job.h);
             abandoned = async_abandoned_.erase(job.h) != 0;
-            if (!abandoned && ok) async_ready_[job.h] = p;
+            // (rechazada por el driver: la vuelve a crear NvnSubmit, que prueba las traducciones prudentes)
+            if (!abandoned && ok && (p || r == VK_SUCCESS)) async_ready_[job.h] = p;
             else if (!abandoned) async_retry_.insert(job.h);
         }
         if (abandoned && p) {  // NvnSubmit no pudo esperarla (un pase de una vez) y la creó él

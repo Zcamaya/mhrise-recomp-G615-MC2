@@ -258,7 +258,9 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
 }
 
 // bound: hasta dónde se puede leer el código; 0, el final de su memory pool (la precarga traduce una copia suya).
-bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, int input_topology = 0, size_t bound = 0) {
+// safe: el nivel de traducción prudente (nvn::safe_variant; 0, la de siempre)
+bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, int input_topology = 0, size_t bound = 0,
+                     int safe = 0) {
     if (!bound) bound = code_bound(out.code);
     if (!bound) {
         if (!t_prefetch) NVN_LOG("shader en 0x%llx fuera de cualquier memory pool\n", static_cast<unsigned long long>(out.code));
@@ -345,6 +347,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // un shader que salga mal.
     options.optimize_stages = spirv_opt_stages();
     if (options.optimize_stages && listed_in("sin_spirv_opt_huellas", print)) options.optimize_stages = 0;
+    // Traducción prudente (safe_variant): lo que más se ha visto que rompe los compiladores de los drivers, quitado por
+    // pasos. Todo entra en la clave de la caché (cada nivel es su propia entrada).
+    if (safe >= 1) options.nonuniform_indexing = false;
+    if (safe >= 2) options.optimize_stages = 0x3F;
+    if (safe >= 3) options.subgroup_operations = 0;
     // Barreras de grupo dentro de un if o un bucle: Eden las quita (una barrera que no todos alcanzan cuelga la GPU),
     // pero sin ellas la memoria compartida queda en carrera. Se dejan en las de kUniformBarrierShaders (bucles uniformes)
     // y en las de <datos>/con_barrera (huellas o "*"). De las primeras también se guarda la traducción sin ellas
@@ -712,6 +719,28 @@ nvn::ProgramStage::Variant nvn::geometry_variant(ProgramStage& stage, uint64_t p
         v.cache_key = variant.cache_key;
     }
     return stage.variants[key] = v;
+}
+
+nvn::ProgramStage::Variant nvn::safe_variant(ProgramStage& stage, uint64_t previous_stores, int level) {
+    const auto key = std::make_pair(previous_stores, level);
+    if (auto it = stage.safe_variants.find(key); it != stage.safe_variants.end()) return it->second;
+    ProgramStage variant;
+    variant.code = stage.code;
+    variant.control = stage.control;
+    variant.constants = stage.constants;
+    variant.constants_size = stage.constants_size;
+    ProgramStage::Variant v;
+    // (los mismos recursos que la de siempre, o el layout no valdría: si no, sin variante)
+    if (translate_stage(variant, previous_stores, 0, 0, level)) {
+        if (variant.shader.resources.size() == stage.shader.resources.size()) {
+            v.module = variant.module;
+            v.spirv_id = variant.spirv_id;
+            v.cache_key = variant.cache_key;
+        } else if (variant.module) {
+            vkDestroyShaderModule(nvn::vk()->device, variant.module, nullptr);
+        }
+    }
+    return stage.safe_variants[key] = v;
 }
 
 // 8 bytes por paso y mezcla final (como hash_bytes del ejecutor): ~10 µs para el SPIR-V de un pixel shader de MH Rise.

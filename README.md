@@ -136,6 +136,7 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |
 | `bc_en_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
 | `con_subgrupos_cortos` | On GPUs whose subgroups are smaller than the Switch's 32-wide warps (Mali Valhall: 16), shaders are translated without subgroup operations, since a game vote or ballot there would only see half a warp. This brings the device's subgroup operations back. |
+| `sin_traduccion_segura` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
 | `migas` | Debugging: GPU breadcrumbs. If the GPU hangs, or the driver aborts a stuck job, the log names the render pass or dispatch and its shaders. Everything on the GPU runs in order: slow. |
 | `memoria_baja` | Smaller caches, as on a phone with less than 5 GB of RAM. |
 | `sin_af` | No anisotropic filtering: a little cheaper for a weak GPU, a little blurrier at a distance. |

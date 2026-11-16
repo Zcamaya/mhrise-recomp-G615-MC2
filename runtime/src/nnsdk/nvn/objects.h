@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -206,6 +207,8 @@ struct ProgramStage {
         spirv_cache::Key cache_key;
     };
     std::unordered_map<uint64_t, Variant> variants;
+    // Traducciones "seguras" de la etapa (safe_variant): por (genéricos de la etapa anterior, nivel)
+    std::map<std::pair<uint64_t, int>, Variant> safe_variants;
 };
 
 struct Program {
@@ -266,6 +269,11 @@ bool use_stripped_module(const ProgramStage& stage);
 // Geometry: el módulo para un vertex shader que escribe `previous_stores` y una topología de entrada de
 // Eden; module a VK_NULL_HANDLE si no se puede traducir.
 ProgramStage::Variant geometry_variant(ProgramStage& stage, uint64_t previous_stores, int input_topology);
+// La misma etapa traducida con opciones más prudentes, para un driver que rechazó la pipeline (executor.cpp): nivel 1 sin
+// la decoración NonUniform; 2, además pasada por spirv-opt; 3, además sin operaciones de subgrupo. Ninguna cambia los
+// recursos (el layout es el mismo). previous_stores: el de la variante que se usaba (~0: la etapa tal cual).
+constexpr int kSafeLevels = 3;
+ProgramStage::Variant safe_variant(ProgramStage& stage, uint64_t previous_stores, int level);
 // Identidad de una traducción (ProgramStage::spirv_id): huella del SPIR-V, de la etapa, de los genéricos y de lo que el
 // layout toma de cada recurso (tipo, set, binding, número). Dos etapas con la misma comparten pipelines y layouts.
 uint64_t spirv_identity(const nvnshader::Translated& t);
