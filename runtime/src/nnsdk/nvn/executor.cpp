@@ -6664,11 +6664,12 @@ void Executor::trace_draw(const cmd::Draw& d) {
             d.primitive, d.count, d.instances, d.index_type, st_.rt.count, rts.c_str(), static_cast<void*>(st_.rt.depth),
             v.x, v.y, v.width, v.height, v.minDepth, v.maxDepth, st_.scissor_set ? "on" : "off", st_.scissor.offset.x,
             st_.scissor.offset.y, st_.scissor.extent.width, st_.scissor.extent.height);
-    NVN_LOG("F   masks 0x%08x blend_en 0x%x b0 %d/%d/%d/%d eq %d | depth t%d w%d f%d sten %d | cull %d front %d mode %d | attribs %zu streams %zu | reinicio %d 0x%x\n",
+    NVN_LOG("F   masks 0x%08x blend_en 0x%x b0 %d/%d/%d/%d eq %d | depth t%d w%d f%d sten %d | cull %d front %d mode %d | attribs %zu streams %zu | reinicio %d 0x%x | ms %d a2c %d atest %d\n",
             st_.masks.masks, st_.color.blend_enable, st_.blend[0].src_rgb, st_.blend[0].dst_rgb, st_.blend[0].src_alpha,
             st_.blend[0].dst_alpha, st_.blend[0].eq_rgb, int(ds.depth_test), int(ds.depth_write), int(ds.depth_func),
             int(ds.stencil_test), st_.polygon.cull_face, st_.polygon.front_face, st_.polygon.polygon_mode,
-            st_.attribs.size(), st_.streams.size(), int(st_.primitive_restart), st_.restart_index);
+            st_.attribs.size(), st_.streams.size(), int(st_.primitive_restart), st_.restart_index,
+            int(st_.multisample.samples), int(st_.multisample.alpha_to_coverage), int(st_.color.alpha_test));
     for (size_t k = 0; k < st_.attribs.size(); k++)
         NVN_LOG("F   attrib %zu: formato 0x%x stream %d offset %d\n", k, st_.attribs[k].format, st_.attribs[k].stream,
                 st_.attribs[k].offset);
