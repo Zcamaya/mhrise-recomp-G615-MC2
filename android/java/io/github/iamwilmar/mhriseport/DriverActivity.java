@@ -49,6 +49,7 @@ import static io.github.iamwilmar.mhriseport.SettingsMenu.ROW;
 public final class DriverActivity extends Activity {
     static final String FROM_GAME = "desde_juego";
     private static final int PICK = 1;
+    private static final int PICK_DLL = 2;
     private static final int PANEL = 0xFF201010;
 
     private LinearLayout list;
@@ -132,6 +133,8 @@ public final class DriverActivity extends Activity {
         lp.topMargin = dp(14);
         list.addView(add, lp);
 
+        buildLossless();
+
         String now = selected()[0];
         boolean changed = now == null ? startedWith != null : !now.equals(startedWith);
         if (getIntent().getBooleanExtra(FROM_GAME, false) && changed) {
@@ -212,6 +215,98 @@ public final class DriverActivity extends Activity {
         build();
     }
 
+    // ---- Lossless Scaling -------------------------------------------------------------------------------------------------
+
+    // Frame generation needs the player's own Lossless.dll (from Lossless Scaling on Steam; not shipped with the app).
+    // It's copied to files/Lossless.dll, where the game looks first (runtime/src/nnsdk/nvn/lsfg/dll.cpp); the on/off
+    // switch is the lsfg folder in the game folder, as before. The swapchain is sized at start-up, so both changes take
+    // effect the next time the game starts.
+    private File losslessDll() {
+        return new File(getFilesDir(), "Lossless.dll");
+    }
+
+    private File gameFolder() {
+        try {
+            String path = new String(Files.readAllBytes(new File(getFilesDir(), "carpeta.txt").toPath())).trim();
+            return path.isEmpty() ? null : new File(path);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private void buildLossless() {
+        header("Lossless Scaling");
+        note("Frame generation (LSFG 2x) shows about twice the game's fps using Lossless.dll from your own copy of "
+                + "Lossless Scaling (Steam, Windows: it's in the program's folder). It isn't included with the app. Takes "
+                + "effect the next time the game starts.");
+        File dll = losslessDll();
+        File folder = gameFolder();
+        File toggle = folder != null ? new File(folder, "lsfg") : null;
+        if (dll.isFile()) {
+            boolean on = toggle != null && toggle.exists();
+            String size = String.format(java.util.Locale.ROOT, "%.1f MB", dll.length() / 1048576.0);
+            entry("Frame generation", (on ? "On" : "Off") + " · Lossless.dll imported (" + size + "). Tap to turn it "
+                    + (on ? "off." : "on."), on, () -> {
+                if (toggle == null) {
+                    say("Choose the game folder first.", true);
+                    return;
+                }
+                if (toggle.exists()) deleteTree(toggle);
+                else if (!toggle.mkdirs()) say("Couldn't write to the game folder.", true);
+                build();
+            }, () -> {
+                dll.delete();
+                build();
+            });
+        }
+        TextView add = button(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll", !dll.isFile());
+        add.setOnClickListener(v -> pickDll());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
+        lp.topMargin = dp(10);
+        list.addView(add, lp);
+    }
+
+    private void pickDll() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(i, PICK_DLL);
+        } catch (android.content.ActivityNotFoundException e) {
+            say("There's no file picker on this phone.", true);
+        }
+    }
+
+    // Copies the picked file next to the drivers, after checking it's a Windows DLL (starts with "MZ")
+    private String importDll(Uri uri) throws IOException {
+        File tmp = new File(getFilesDir(), "Lossless.dll.new");
+        long total = 0;
+        try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(tmp)) {
+            if (in == null) throw new IOException("couldn't open the file");
+            byte[] buf = new byte[1 << 16];
+            boolean first = true;
+            for (int n; (n = in.read(buf)) > 0; ) {
+                if (first && (n < 2 || buf[0] != 'M' || buf[1] != 'Z')) throw new IOException("that's not a .dll");
+                first = false;
+                out.write(buf, 0, n);
+                total += n;
+            }
+        } catch (IOException e) {
+            tmp.delete();
+            throw e;
+        }
+        if (total < 1 << 20) {
+            tmp.delete();
+            throw new IOException("too small to be Lossless.dll");
+        }
+        File dll = losslessDll();
+        dll.delete();
+        if (!tmp.renameTo(dll)) throw new IOException("couldn't save it");
+        File folder = gameFolder();
+        if (folder != null) new File(folder, "lsfg").mkdirs();  // (on by default once it's there)
+        return String.format(java.util.Locale.ROOT, "%.1f MB", total / 1048576.0);
+    }
+
     // ---- agregar --------------------------------------------------------------------------------------------------------
 
     private void pick() {
@@ -230,7 +325,27 @@ public final class DriverActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (request != PICK || result != RESULT_OK || data == null || data.getData() == null) return;
+        if (result != RESULT_OK || data == null || data.getData() == null) return;
+        if (request == PICK_DLL) {
+            Uri dll = data.getData();
+            say("Importing…", false);
+            new Thread(() -> {
+                String size = null, error = null;
+                try {
+                    size = importDll(dll);
+                } catch (IOException e) {
+                    error = e.getMessage();
+                }
+                final String ok = size, bad = error;
+                runOnUiThread(() -> {
+                    build();
+                    if (ok != null) say("Lossless.dll imported (" + ok + "). Frame generation is on from the next start.", false);
+                    else say("Couldn't import it: " + bad, true);
+                });
+            }, "ImportarLossless").start();
+            return;
+        }
+        if (request != PICK) return;
         Uri zip = data.getData();
         say("Adding…", false);
         new Thread(() -> {

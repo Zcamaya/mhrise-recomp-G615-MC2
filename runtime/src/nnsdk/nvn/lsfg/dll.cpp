@@ -215,7 +215,9 @@ const char* dll_status_name(DllStatus s) {
 
 std::string find_dll() {
     const char* data = getenv("NIER_DATA");
-    const std::string candidates[] = {std::string(data ? data : ".") + "/lsfg/Lossless.dll",
+    const char* home = getenv("NIER_INTERNO");  // the one imported from the GPU driver screen (DriverActivity)
+    const std::string candidates[] = {std::string(home && *home ? home : ".") + "/Lossless.dll",
+                                      std::string(data ? data : ".") + "/lsfg/Lossless.dll",
                                       "/storage/emulated/0/Download/Lossless.dll"};
     for (const std::string& path : candidates)
         if (access(path.c_str(), R_OK) == 0) return path;

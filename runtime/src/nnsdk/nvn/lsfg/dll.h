@@ -31,8 +31,8 @@ constexpr uint32_t kOffsetFp16 = 49, kOffsetFp32 = 98;
 enum class DllStatus { Ok, NotFound, Unreadable, NotPortableExecutable, MissingShaders };
 const char* dll_status_name(DllStatus s);
 
-// Dónde está la DLL: <NIER_DATA>/lsfg/Lossless.dll y si no /storage/emulated/0/Download/Lossless.dll; "" si
-// no hay ninguna legible.
+// Where the DLL is: the app's own copy (<interno>/Lossless.dll, imported from the GPU driver screen), then
+// <NIER_DATA>/lsfg/Lossless.dll, then /storage/emulated/0/Download/Lossless.dll; "" if none can be read.
 std::string find_dll();
 
 // id de rendimiento (255, 256, 280..302) -> SPIR-V con los bindings renumerados 0..N-1 en orden (set, binding),

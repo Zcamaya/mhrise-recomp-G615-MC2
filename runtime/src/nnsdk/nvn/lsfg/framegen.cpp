@@ -341,7 +341,7 @@ bool FrameGen::compile(std::string* why, bool* missing) {
     const std::string path = find_dll();
     if (path.empty()) {
         *missing = true;
-        *why = "no encuentro Lossless.dll (ni <datos>/lsfg/Lossless.dll ni /storage/emulated/0/Download/Lossless.dll)";
+        *why = "Lossless.dll not found (import it from the GPU driver screen, or put it in <datos>/lsfg/ or Download/)";
         return false;
     }
     Modules fp16, fp32;

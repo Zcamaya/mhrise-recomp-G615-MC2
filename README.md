@@ -123,7 +123,7 @@ folder, which the game checks once a second; the ones only read at start-up say 
 
 | Name | Effect |
 |---|---|
-| `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam), copied into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. |
+| `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam): import it from the GPU driver screen (it's copied into the app), or copy it into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. Read at start-up. |
 | `resolution_576`, `resolution_648`, `resolution_720` | Base resolution of the 3D scene: 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). Live. |
 | `no_dynamic_resolution` | Keeps the scene at the base resolution (no dynamic resolution). Live. |
 | `no_fsr` | Plain linear scaling to the screen instead of FSR 1. Live. |
