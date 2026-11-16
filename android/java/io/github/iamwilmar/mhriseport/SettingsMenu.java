@@ -424,6 +424,10 @@ final class SettingsMenu {
                 "Integer vertex data (bone indices…) reaches the shader as integers, as on the console. Without "
                         + "it, characters stretch into spikes on Mali GPUs." + next,
                 "no_int_attribs", true);
+        flag("Depth compression (Adreno)",
+                "Lets Adreno compress depth buffers (UBWC), which saves bandwidth. Turn it off if parts of the picture "
+                        + "flash black in blocks: some drivers read compressed depth wrong in the lighting pass." + next,
+                "no_ubwc", true);
         flag("spirv-opt on switch shaders",
                 "Runs shaders that contain a switch (BRX) through the optimizer; some drivers miscompile them." + next,
                 "no_spirv_opt_brx", true);
