@@ -11,7 +11,8 @@ namespace nvn::fsr {
 // TRANSFER_DST_OPTIMAL (dst_extent, formato dst_format). false si no puede (formato, recursos, push descriptors): quien
 // llama hace el blit de siempre.
 // viewport: la zona de src (desde 0,0) que se escala; src_extent, el tamaño de la textura entera.
+// dst_extent and dst_offset: the rectangle of dst the picture goes to (the aspect ratio setting, window.cpp).
 bool record(VkCommandBuffer cmd, VkImageView src, VkExtent2D src_extent, VkExtent2D viewport, VkImage dst,
-            VkFormat dst_format, VkExtent2D dst_extent);
+            VkFormat dst_format, VkExtent2D dst_extent, VkOffset2D dst_offset = {});
 
 }  // namespace nvn::fsr

@@ -536,11 +536,21 @@ bool FrameGen::record_blit(Slot& s, const Window& w, uint32_t image) {
                          1, &b);
     const Image& out = chain_->output();
     // Con FSR, como el frame real (window.cpp): si no, el generado salía más blando y la nitidez parpadeaba a 30 Hz.
-    if (!fsr::record(s.blit, out.view, out.extent, out.extent, w.images[image], w.format, w.extent)) {
+    // (in the same rectangle as the real frames: the aspect ratio setting)
+    VkExtent2D rect;
+    VkOffset2D at;
+    picture_rect(w.extent, &rect, &at);
+    if (rect.width != w.extent.width || rect.height != w.extent.height) {
+        const VkClearColorValue black{};
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(s.blit, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    }
+    if (!fsr::record(s.blit, out.view, out.extent, out.extent, w.images[image], w.format, rect, at)) {
         VkImageBlit region{};
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.srcOffsets[1] = {static_cast<int32_t>(out.extent.width), static_cast<int32_t>(out.extent.height), 1};
-        region.dstOffsets[1] = {static_cast<int32_t>(w.extent.width), static_cast<int32_t>(w.extent.height), 1};
+        region.dstOffsets[0] = {at.x, at.y, 0};
+        region.dstOffsets[1] = {at.x + static_cast<int32_t>(rect.width), at.y + static_cast<int32_t>(rect.height), 1};
         vkCmdBlitImage(s.blit, out.image, VK_IMAGE_LAYOUT_GENERAL, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                        &region, VK_FILTER_LINEAR);
     }

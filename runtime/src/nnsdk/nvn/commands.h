@@ -139,6 +139,10 @@ struct Stencil {
     enum What { Ref, Mask, ValueMask } what;
     int faces, value;
 };
+// nvnCommandBufferSetPolygonOffsetClamp: depth bias, as glPolygonOffsetClamp (slope factor, constant units, clamp)
+struct PolygonOffset {
+    float factor, units, clamp;
+};
 struct Draw {
     int primitive;
     int index_type;  // -1: sin índices
@@ -233,7 +237,7 @@ using Command = std::variant<cmd::SetRenderTargets, cmd::ClearColor, cmd::ClearD
                              cmd::Stencil, cmd::Draw, cmd::Dispatch, cmd::CopyBuffer, cmd::CopyTexture,
                              cmd::CopyBufferToTexture, cmd::Barrier, cmd::ReportCounter, cmd::BlendColor,
                              cmd::RenderEnable, cmd::ReportValue, cmd::ClearBuffer, cmd::BindImage, cmd::ClearTexture,
-                             cmd::UpdateBuffer, cmd::PrimitiveRestart, cmd::FenceSync>;
+                             cmd::UpdateBuffer, cmd::PrimitiveRestart, cmd::FenceSync, cmd::PolygonOffset>;
 
 // Las listas se reciclan (cmdbuf.cpp) y vaciarlas no recorre sus ~35k comandos: que siga siendo así.
 static_assert(std::is_trivially_destructible_v<Command> && std::is_trivially_copyable_v<Command>);
@@ -300,6 +304,8 @@ void game_tweaks();
 // Con FSR 1 (fsr.cpp) si el formato lo permite; si no, un blit lineal.
 bool blit_to_swapchain(Texture& texture, const VkRect2D& crop, VkImage swapchain_image, VkFormat format, VkExtent2D extent,
                        VkCommandBuffer cmd);
+// Where the picture goes on a screen of that size (the aspect ratio setting): its size and top-left corner
+void picture_rect(VkExtent2D screen, VkExtent2D* out, VkOffset2D* at);
 // Se presentó un frame (window.cpp): las texturas que escribe la CPU se revisan una vez por frame.
 void next_frame();
 // Para la resolución dinámica (window.cpp): la GPU del último frame del juego que ya se leyó (sus timestamps de

@@ -190,7 +190,7 @@ struct VariantIndex<T, std::variant<Ts...>> {
 };
 template <typename T>
 constexpr size_t kCommandIndex = VariantIndex<T, Command>::value;
-static_assert(kCommandIndex<cmd::SetRenderTargets> == 0 && kCommandIndex<cmd::FenceSync> == std::variant_size_v<Command> - 1);
+static_assert(kCommandIndex<cmd::SetRenderTargets> == 0 && kCommandIndex<cmd::PolygonOffset> == std::variant_size_v<Command> - 1);
 
 // Mismos targets con las mismas vistas (lo que hay más allá de count no cuenta).
 bool same_targets(const cmd::SetRenderTargets& a, const cmd::SetRenderTargets& b) {
@@ -981,6 +981,7 @@ struct QueueState {
     DescriptorPool* texture_pool = nullptr;
     DescriptorPool* sampler_pool = nullptr;
     uint32_t stencil_ref[2] = {}, stencil_mask[2] = {0xFF, 0xFF}, stencil_value_mask[2] = {0xFF, 0xFF};
+    float depth_bias[3] = {};  // units, clamp, slope factor (vkCmdSetDepthBias order)
     float blend_color[4] = {};
     bool render_enabled = true;
     bool primitive_restart = false;
@@ -1492,6 +1493,7 @@ private:
         VkRect2D scissor;
         float blend[4];
         uint32_t ref[2], write_mask[2], compare_mask[2];
+        float bias[3];
     };
     DynamicState bound_dynamic_{};  // el puesto en cmd_ (válido si dynamic_valid_)
     VkBuffer bound_vb_buf_[16] = {};  // vertex buffers enlazados en cmd_
@@ -2420,7 +2422,7 @@ constexpr const char* kCommandNames[] = {
     "ColorState", "ChannelMaskState", "DepthStencilState", "PolygonState", "MultisampleState", "BindVertexAttribs",
     "BindVertexStreams", "SetPools", "Stencil", "Draw", "Dispatch", "CopyBuffer", "CopyTexture", "CopyBufferToTexture",
     "Barrier", "ReportCounter", "BlendColor", "RenderEnable", "ReportValue", "ClearBuffer", "BindImage", "ClearTexture",
-    "UpdateBuffer", "PrimitiveRestart", "FenceSync"};
+    "UpdateBuffer", "PrimitiveRestart", "FenceSync", "PolygonOffset"};
 static_assert(std::size(kCommandNames) == std::variant_size_v<Command>);
 
 bool Executor::init() {
@@ -3583,6 +3585,8 @@ void Executor::apply(const Command& c) {
             } else if constexpr (std::is_same_v<T, cmd::SetPools>) {
                 if (v.textures) st_.texture_pool = v.textures;
                 if (v.samplers) st_.sampler_pool = v.samplers;
+            } else if constexpr (std::is_same_v<T, cmd::PolygonOffset>) {
+                st_.depth_bias[0] = v.units, st_.depth_bias[1] = v.clamp, st_.depth_bias[2] = v.factor;
             } else if constexpr (std::is_same_v<T, cmd::Stencil>) {
                 uint32_t* target = v.what == cmd::Stencil::Ref ? st_.stencil_ref
                                    : v.what == cmd::Stencil::Mask ? st_.stencil_mask
@@ -6100,6 +6104,11 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     rs.cullMode = vk_cull_mode(key.polygon.cull_face);
     // Con el viewport invertido (ver draw) el giro coincide con el de NVN: CW es CW.
     rs.frontFace = key.polygon.front_face ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+    // Depth bias where the game turns it on for this polygon mode (NVN: POINT 1, LINE 2, FILL 4); its values are
+    // dynamic (cmd::PolygonOffset). <datos>/no_depth_bias at start-up: never, as before.
+    static const bool no_bias = NVN_FLAG("no_depth_bias");
+    rs.depthBiasEnable = !no_bias && (key.polygon.offset_enables & (1u << std::min<uint8_t>(key.polygon.polygon_mode, 2)))
+                             ? VK_TRUE : VK_FALSE;
     rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = static_cast<VkSampleCountFlagBits>(key.samples);
@@ -6132,7 +6141,7 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     cb.pAttachments = blends.data();
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE,
-                            VK_DYNAMIC_STATE_BLEND_CONSTANTS};
+                            VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_DEPTH_BIAS};
     VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dy.dynamicStateCount = 6;
     dy.pDynamicStates = dyn;
@@ -7467,10 +7476,13 @@ void Executor::draw(const cmd::Draw& in) {
     memcpy(ds.blend, st_.blend_color, sizeof ds.blend);
     for (int f = 0; f < 2; f++)
         ds.ref[f] = st_.stencil_ref[f], ds.write_mask[f] = st_.stencil_mask[f], ds.compare_mask[f] = st_.stencil_value_mask[f];
+    memcpy(ds.bias, st_.depth_bias, sizeof ds.bias);
+    if (!vk()->depth_bias_clamp) ds.bias[1] = 0.0f;
     const bool all = !dynamic_valid_;
     if (all || memcmp(&ds.viewport, &bound_dynamic_.viewport, sizeof ds.viewport)) vkCmdSetViewport(cmd_, 0, 1, &ds.viewport);
     if (all || memcmp(&ds.scissor, &bound_dynamic_.scissor, sizeof ds.scissor)) vkCmdSetScissor(cmd_, 0, 1, &ds.scissor);
     if (all || memcmp(ds.blend, bound_dynamic_.blend, sizeof ds.blend)) vkCmdSetBlendConstants(cmd_, ds.blend);
+    if (all || memcmp(ds.bias, bound_dynamic_.bias, sizeof ds.bias)) vkCmdSetDepthBias(cmd_, ds.bias[0], ds.bias[1], ds.bias[2]);
     constexpr VkStencilFaceFlags kFace[2] = {VK_STENCIL_FACE_FRONT_BIT, VK_STENCIL_FACE_BACK_BIT};
     for (int f = 0; f < 2; f++) {
         if (all || ds.ref[f] != bound_dynamic_.ref[f]) vkCmdSetStencilReference(cmd_, kFace[f], ds.ref[f]);
@@ -9431,14 +9443,23 @@ bool Executor::blit(Texture& t, const VkRect2D& crop, VkImage dst, VkFormat form
     }
     const VkExtent2D size{static_cast<uint32_t>(t.desc.width), static_cast<uint32_t>(t.desc.height)};
     const VkExtent2D viewport{static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)};
-    if (fsr_ok && x0 == 0 && y0 == 0 && fsr::record(cmd, view(t, TextureViewDesc{}, false), size, viewport, dst, format, extent))
+    VkExtent2D out;
+    VkOffset2D at;
+    picture_rect(extent, &out, &at);
+    if (out.width != extent.width || out.height != extent.height) {
+        const VkClearColorValue black{};
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    }
+    if (fsr_ok && x0 == 0 && y0 == 0 && fsr::record(cmd, view(t, TextureViewDesc{}, false), size, viewport, dst, format, out, at))
         return true;
     VkImageBlit b{};
     b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     b.srcOffsets[0] = {x0, y0, 0};
     b.srcOffsets[1] = {x1, y1, 1};
     b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    b.dstOffsets[1] = {static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1};
+    b.dstOffsets[0] = {at.x, at.y, 0};
+    b.dstOffsets[1] = {at.x + static_cast<int32_t>(out.width), at.y + static_cast<int32_t>(out.height), 1};
     vkCmdBlitImage(cmd, t.image, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
                    VK_FILTER_LINEAR);
     return true;
@@ -10898,6 +10919,23 @@ bool wait_submit(uint64_t submit, uint64_t timeout_ns) { return g_submit_queue.w
 void wait_idle() {
     g_submit_queue.drain();
     g_executor.wait_idle();
+}
+
+// Aspect ratio (Display → Aspect ratio, live), like Eden's: the picture in the largest rectangle of that shape that fits
+// the screen, centred, black around it. 16:9 is the game's own; stretch fills the screen as before.
+void picture_rect(VkExtent2D screen, VkExtent2D* out, VkOffset2D* at) {
+    float aspect = 16.0f / 9.0f;
+    if (NVN_FLAG("aspect_4_3")) aspect = 4.0f / 3.0f;
+    else if (NVN_FLAG("aspect_16_10")) aspect = 16.0f / 10.0f;
+    else if (NVN_FLAG("aspect_21_9")) aspect = 21.0f / 9.0f;
+    else if (NVN_FLAG("aspect_stretch")) aspect = 0.0f;
+    *out = screen;
+    *at = {};
+    if (aspect <= 0.0f || !screen.width || !screen.height) return;
+    const float shape = static_cast<float>(screen.width) / static_cast<float>(screen.height);
+    if (shape > aspect + 0.01f) out->width = std::max(1u, static_cast<uint32_t>(std::lround(screen.height * aspect)));
+    else if (shape < aspect - 0.01f) out->height = std::max(1u, static_cast<uint32_t>(std::lround(screen.width / aspect)));
+    *at = {static_cast<int32_t>((screen.width - out->width) / 2), static_cast<int32_t>((screen.height - out->height) / 2)};
 }
 
 bool blit_to_swapchain(Texture& texture, const VkRect2D& crop, VkImage image, VkFormat format, VkExtent2D extent,

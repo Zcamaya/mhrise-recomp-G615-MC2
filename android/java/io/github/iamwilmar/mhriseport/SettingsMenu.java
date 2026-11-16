@@ -177,6 +177,12 @@ final class SettingsMenu {
                         "648p (1152x648)", "720p (1280x720)"},
                 new String[] {null, "resolution_360", "resolution_432", "resolution_480", "resolution_576",
                         "resolution_648", "resolution_720"});
+        exclusive("Aspect ratio",
+                "The shape of the picture on your screen, like Eden's setting. 16:9 is the game's own, with black bars at "
+                        + "the sides on a long phone. The others stretch the game's picture to that shape; Stretch fills the "
+                        + "whole screen. Applies at once.",
+                new String[] {"Default (16:9)", "Force 4:3", "Force 21:9", "Force 16:10", "Stretch to screen"},
+                new String[] {null, "aspect_4_3", "aspect_21_9", "aspect_16_10", "aspect_stretch"});
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "

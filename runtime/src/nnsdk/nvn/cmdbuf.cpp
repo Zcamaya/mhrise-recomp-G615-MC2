@@ -365,10 +365,14 @@ void nvnCommandBufferSetSubpixelPrecisionBias(void*, int, int) {}
 // Sin equivalente directo o sin efecto visible todavía: se ignoran.
 void nvnCommandBufferSetDepthBounds(void*, nvn::Boolean, float, float) {}
 void nvnCommandBufferSetDepthClamp(void*, nvn::Boolean) {}
-void nvnCommandBufferSetPolygonOffsetClamp(void*, float, float, float) {}
 void nvnCommandBufferSetShaderScratchMemory(void*, const void*, int64_t, size_t) {}
 void nvnCommandBufferSaveZCullData(void*, uint64_t, size_t) {}
 void nvnCommandBufferRestoreZCullData(void*, uint64_t, size_t) {}
+// The depth bias of the polygons whose PolygonState turns it on: shadow maps (without it the ground shadows itself:
+// stripes and triangles flickering on the floor) and decals on the terrain. Ignored before.
+void nvnCommandBufferSetPolygonOffsetClamp(void* cmd, float factor, float units, float clamp) {
+    record(cmd, cmd::PolygonOffset{factor, units, clamp});
+}
 void nvnCommandBufferSetStencilRef(void* cmd, int faces, int ref) {
     record(cmd, cmd::Stencil{cmd::Stencil::Ref, faces, ref});
 }

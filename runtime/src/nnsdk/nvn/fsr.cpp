@@ -28,7 +28,7 @@ uint32_t find_memory(uint32_t bits, VkMemoryPropertyFlags props) {
 class Fsr {
 public:
     bool record(VkCommandBuffer cmd, VkImageView src, VkExtent2D in, VkExtent2D viewport, VkImage dst, VkFormat format,
-                VkExtent2D out) {
+                VkExtent2D out, VkOffset2D at) {
         if (failed_ || !src || format != VK_FORMAT_R8G8B8A8_UNORM || NVN_FLAG("no_fsr")) return false;
         if (!setup() || !images(out)) return false;
 
@@ -65,6 +65,7 @@ public:
         VkImageCopy region{};
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.extent = {out.width, out.height, 1};
+        region.dstOffset = {at.x, at.y, 0};
         vkCmdCopyImage(cmd, out_.image, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         return true;
     }
@@ -229,8 +230,8 @@ Fsr g_fsr;
 }  // namespace
 
 bool record(VkCommandBuffer cmd, VkImageView src, VkExtent2D src_extent, VkExtent2D viewport, VkImage dst,
-            VkFormat dst_format, VkExtent2D dst_extent) {
-    return g_fsr.record(cmd, src, src_extent, viewport, dst, dst_format, dst_extent);
+            VkFormat dst_format, VkExtent2D dst_extent, VkOffset2D dst_offset) {
+    return g_fsr.record(cmd, src, src_extent, viewport, dst, dst_format, dst_extent, dst_offset);
 }
 
 }  // namespace nvn::fsr
