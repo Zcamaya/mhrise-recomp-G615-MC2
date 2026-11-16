@@ -1927,6 +1927,9 @@ private:
     // por una lectura (un SSBO o el origen de una copia que cae en parte en lo de la GPU), que meten en la unión bytes que
     // solo escribe la CPU: si la CPU los reescribe sin un comando, la unión entera se tira.
     bool keep_gpu_overlays_ = true, merge_reads_ = true;
+    // Overlays de la GPU que un rango nuevo solapa solo en parte: se parten en vez de tirarse (merge_overlays).
+    // <datos>/no_split_overlays (en vivo): como antes, se tiran y lo suyo sale de la memoria del juego.
+    bool split_overlays_ = true;
     static constexpr uint64_t kMergeReadMax = 1ull << 20;  // unión por una lectura: hasta esto
     // Perfil (con registro, en "perfil overlays"): overlays escritos por la GPU tirados, por motivo (erase_reason; su
     // texto, el mismo que el de '[vigía] se tira el overlay'), y uniones y parches parciales. Siempre se cuentan, sin el
@@ -1936,7 +1939,7 @@ private:
         uint64_t count, bytes;
     };
     std::vector<LostCount> prof_lost_;
-    uint64_t prof_merged_ = 0, prof_merged_parts_ = 0, prof_merged_bytes_ = 0, prof_partial_patched_ = 0;
+    uint64_t prof_merged_ = 0, prof_merged_parts_ = 0, prof_merged_bytes_ = 0, prof_partial_patched_ = 0, prof_split_ = 0;
     void note_lost(const Overlay& o) {
         if (!o.writers) return;  // solo la copia de la memoria del juego: no se pierde nada
         for (LostCount& l : prof_lost_)
@@ -3448,6 +3451,7 @@ void Executor::read_flags() {
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
     keep_gpu_overlays_ = !NVN_FLAG("no_keep_overlays");
     merge_reads_ = !NVN_FLAG("no_merge_reads");
+    split_overlays_ = !NVN_FLAG("no_split_overlays");
     vigilar_nan_ = NVN_FLAG("watch_nan");  // DEPURACIÓN
     trace_on_print_ = NVN_FLAG("trace_print");  // DEPURACIÓN
     read_after_ = NVN_FLAG("read_after_dispatch");  // DEPURACIÓN
@@ -6055,13 +6059,6 @@ std::string attrib_formats(const PipelineKey& key, uint64_t vs_inputs) {
     return " atributos" + out + (scaled ? " (con escalados)" : "");
 }
 
-// Ties a stage to the subgroup size its shader was translated for, where the driver would pick one itself (vk.cpp)
-static void pin_subgroup(VkPipelineShaderStageCreateInfo& si) {
-    static const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT pin{
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT, nullptr, vk()->subgroup_pin};
-    if (vk()->subgroup_pin && (vk()->subgroup_pin_stages & si.stage)) si.pNext = &pin;
-}
-
 VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* modules, uint64_t vs_inputs,
                                 VkPipelineLayout layout, VkRenderPass rp, VkPipelineCache cache, VkPipeline& p) {
     p = VK_NULL_HANDLE;
@@ -6072,7 +6069,6 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
         si.stage = vk_stage(static_cast<Stage>(s));
         si.module = modules[s];
         si.pName = "main";
-        pin_subgroup(si);
         stages.push_back(si);
     }
 
@@ -6167,7 +6163,6 @@ VkResult make_compute_pipeline(VkShaderModule module, VkPipelineLayout layout, V
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = module;
     ci.stage.pName = "main";
-    pin_subgroup(ci.stage);
     ci.layout = layout;
     return vkCreateComputePipelines(vk()->device, cache, 1, &ci, nullptr, &p);
 }
@@ -8283,15 +8278,11 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
         return nullptr;
     const uint64_t end = address + size;
     std::vector<uint64_t> keep_at;  // los que se conservan (por su inicio), en orden
-    bool straddles = false;         // alguno de la GPU que sobresale del rango
+    bool straddles = false;         // alguno de la GPU que sobresale del rango (y no se parte)
+    std::vector<uint64_t> split_at;  // los que sobresalen y se parten (split_overlays_)
     for (auto it = first_overlay_touching(address); it != overlays_.end() && it->first < end;) {
         Overlay& o = it->second;
         if (!o.writers || !o.buffer) {
-            ++it;
-            continue;
-        }
-        if (it->first < address || it->first + o.size > end) {
-            straddles = true;
             ++it;
             continue;
         }
@@ -8304,11 +8295,22 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
                 continue;
             }
         }
+        if (it->first < address || it->first + o.size > end) {
+            // The game carves the same memory into ranges with different edges from frame to frame (GPU-made vertices
+            // and particles: A, then B over the end of A and the start of C). Throwing A and C away left their outside
+            // parts with the game's stale memory, and whatever drew from there blew up for a frame (big black
+            // triangles on the Adreno 830). Split instead: the inside part goes into the union like the others, the
+            // outside parts stay overlays of their own. The union never grows past the range asked for.
+            if (split_overlays_) split_at.push_back(it->first);
+            else straddles = true;
+            ++it;
+            continue;
+        }
         keep_at.push_back(it->first);
         ++it;
     }
     if (for_read && straddles) return nullptr;  // ese lector ve la memoria del juego (watch_nan lo dice: note_partial_read)
-    if (keep_at.empty()) return nullptr;
+    if (keep_at.empty() && split_at.empty()) return nullptr;
     std::optional<LoadTimer> timer;  // la de una escritura ya la mide make_overlay
     if (for_read) timer.emplace(*this, kLdOverlay, size);
     Staging::Alloc a;
@@ -8322,15 +8324,36 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
         uint64_t start, size;
     };
     std::vector<Part> parts;
+    // The outside parts of split overlays: a new overlay each, filled with the game's memory and then, on the GPU, with
+    // what the old one had there
+    struct Piece {
+        uint64_t start, size;
+        VkBuffer from;
+        VkDeviceSize from_offset;
+        uint8_t writers;
+        uint64_t written;
+    };
+    std::vector<Piece> pieces;
     uint8_t writers = 0;
     uint64_t written = 0;
     Provenance merged_prov;  // DEPURACIÓN (watch_nan): la procedencia de las partes, sumada
     for (auto it = first_overlay_touching(address); it != overlays_.end() && it->first < end;) {
         const Overlay& o = it->second;
         const bool part = std::find(keep_at.begin(), keep_at.end(), it->first) != keep_at.end();
+        const bool split = std::find(split_at.begin(), split_at.end(), it->first) != split_at.end();
         // DEPURACIÓN: los que sobresalen (solo con un rango escrito) se sustituyen como antes; los de dentro sin nada de
         // la GPU son la copia de la memoria del juego (no se pierde nada).
         erase_reason(it->first < address || it->first + o.size > end ? kWhyStraddled : kWhyReplaced, address, size);
+        if (split) {
+            const uint64_t lo = std::max(it->first, address), hi = std::min(it->first + o.size, end);
+            parts.push_back({o.buffer, o.offset + (lo - it->first), lo, hi - lo});
+            if (it->first < address)
+                pieces.push_back({it->first, address - it->first, o.buffer, o.offset, o.writers, o.written});
+            if (it->first + o.size > end)
+                pieces.push_back({end, it->first + o.size - end, o.buffer, o.offset + (end - it->first), o.writers, o.written});
+            writers |= o.writers;
+            written = std::max(written, o.written);
+        }
         if (part) {
             parts.push_back({o.buffer, o.offset, it->first, o.size});
             writers |= o.writers;
@@ -8342,7 +8365,43 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
                     merged_prov.last = pv->second.last, merged_prov.last_frame = pv->second.last_frame;
             }
         }
-        it = erase_overlay(it, !part);  // lo de las partes va a la unión: no se pierde
+        it = erase_overlay(it, !part && !split);  // lo de las partes va a la unión (o a sus trozos): no se pierde
+    }
+    // The pieces, before the union (each one its own slot; one that doesn't get a slot is lost as before)
+    struct PieceCopy {
+        VkBuffer from, to;
+        VkDeviceSize from_offset, to_offset, size;
+    };
+    std::vector<PieceCopy> piece_copies;
+    for (const Piece& pc : pieces) {
+        if (pc.size + 256 > kStagingChunk) continue;
+        Staging::Alloc pa;
+        VkDeviceSize piece_slot = 0;
+        if (!alloc_overlay_slot(pc.size + 256, &pa, &piece_slot, pc.size)) continue;
+        const VkDeviceSize pskew = pc.start & 255;
+        std::unique_lock wb_lock(wb_mutex_);
+        memcpy(pa.data + pskew, reinterpret_cast<const void*>(pc.start), pc.size);
+        Overlay& po = overlays_[pc.start];
+        po.buffer = pa.buffer;
+        po.offset = pa.offset + pskew;
+        po.data = pa.data + pskew;
+        po.size = pc.size;
+        po.slot_offset = pa.offset, po.slot_size = piece_slot, po.slot_data = pa.data;
+        po.cpu_hash = range_hash(reinterpret_cast<const uint8_t*>(pc.start), pc.size);
+        po.checked = submit_index_;
+        po.writers = pc.writers;
+        po.written = pc.written;
+        wb_lock.unlock();
+        filter_overlay(pc.start, pc.size, +1);
+        piece_copies.push_back({pc.from, po.buffer, pc.from_offset, po.offset, pc.size});
+    }
+    if (!pieces.empty()) {
+        static int logged = 0;
+        if (logged++ < 16 || logged % 1000 == 0)
+            NVN_LOG("overlays partidos: %#llx+%llu keeps what the GPU wrote around it in %zu piece(s) (%d times)\n",
+                    static_cast<unsigned long long>(address), static_cast<unsigned long long>(size), piece_copies.size(),
+                    logged);
+        prof_split_ += pieces.size();
     }
     const VkDeviceSize skew = address & 255;
     Overlay* made = nullptr;
@@ -8367,6 +8426,11 @@ const Executor::Overlay* Executor::merge_overlays(uint64_t address, uint64_t siz
     // Lo de la GPU encima de lo de la CPU, en orden con lo que escribía los viejos y con lo que lea o escriba el nuevo.
     split_why_ = "unión de overlays";
     barrier();  // cierra el render pass: las copias no van dentro de uno
+    for (const PieceCopy& pc : piece_copies) {
+        VkBufferCopy region{pc.from_offset, pc.to_offset, pc.size};
+        note_gpu_work();
+        vkCmdCopyBuffer(cmd_, pc.from, pc.to, 1, &region);
+    }
     for (const Part& p : parts) {
         VkBufferCopy region{p.offset, made->offset + (p.start - address), p.size};
         note_gpu_work();
@@ -10350,13 +10414,13 @@ void Executor::profile_frame() {
             reasons += std::string(" | ") + l.why + b;
         }
         NVN_LOG("perfil overlays: lo escrito por la GPU tirado en %llu overlays (%.1f KB)%s; %llu uniones (%llu de la GPU "
-                "conservados dentro, %.1f KB), %llu parches parciales de la CPU%s\n",
+                "conservados dentro, %.1f KB), %llu parches parciales de la CPU, %llu trozos de partidos%s\n",
                 static_cast<unsigned long long>(lost), lost_bytes / 1024.0, reasons.c_str(),
                 static_cast<unsigned long long>(prof_merged_), static_cast<unsigned long long>(prof_merged_parts_),
                 prof_merged_bytes_ / 1024.0, static_cast<unsigned long long>(prof_partial_patched_),
-                !keep_gpu_overlays_ ? " (no_keep_overlays)" : !merge_reads_ ? " (no_merge_reads)" : "");
+                static_cast<unsigned long long>(prof_split_), !keep_gpu_overlays_ ? " (no_keep_overlays)" : !merge_reads_ ? " (no_merge_reads)" : "");
         prof_lost_.clear();
-        prof_merged_ = prof_merged_parts_ = prof_merged_bytes_ = prof_partial_patched_ = 0;
+        prof_merged_ = prof_merged_parts_ = prof_merged_bytes_ = prof_partial_patched_ = prof_split_ = 0;
     }
     prof_overlay_new_bytes_ = prof_overlay_reused_bytes_ = prof_compactions_ = prof_compact_wait_us_ = prof_compact_copy_us_ = 0;
     prof_partial_ = 0;

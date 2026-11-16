@@ -424,11 +424,6 @@ final class SettingsMenu {
                 "Integer vertex data (bone indices…) reaches the shader as integers, as on the console. Without "
                         + "it, characters stretch into spikes on Mali GPUs." + next,
                 "no_int_attribs", true);
-        flag("Subgroups in compute shaders",
-                "Votes and shuffles across a subgroup in compute shaders. Off: each invocation works alone, as Eden does "
-                        + "without them. Try it if blocks of the picture flash black (Rise's tiled lighting is a compute "
-                        + "shader). The shaders are translated again, so the first start stutters." + next,
-                "no_subgroup_compute", true);
         flag("spirv-opt on switch shaders",
                 "Runs shaders that contain a switch (BRX) through the optimizer; some drivers miscompile them." + next,
                 "no_spirv_opt_brx", true);
