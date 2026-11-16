@@ -1,6 +1,7 @@
 package io.github.iamwilmar.mhriseport;
 
 import android.app.Dialog;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -153,6 +154,15 @@ final class ControlsMenu {
                                 + "triggers on Z/RZ) on many generic ones. Change it if the camera won't move or moves on its own."),
                 new String[] {tr("Según el mando", "By controller"), "Z / RZ", "RX / RY"}, () -> cfg.rightAxes,
                 v -> cfg.rightAxes = v);
+
+        header(tr("Gráficos", "Graphics"));
+        action(tr("Driver de GPU", "GPU driver"),
+                tr("El del sistema, o uno propio para una Adreno (Turnip…), agregado desde un .zip. Vale desde el siguiente arranque.",
+                        "The system's, or one of your own for an Adreno (Turnip…), added from a .zip. Takes effect on the next start."),
+                () -> {
+                    dialog.dismiss();
+                    activity.startActivity(new Intent(activity, DriverActivity.class).putExtra(DriverActivity.FROM_GAME, true));
+                });
     }
 
     // ---- el editor de un combo ----------------------------------------------------------------------------------------

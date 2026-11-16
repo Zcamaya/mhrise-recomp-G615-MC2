@@ -220,6 +220,10 @@ public final class SetupActivity extends Activity {
             change.requestFocus();
         }
         row.addView(change);
+        Button driver = new Button(this);
+        driver.setText(tr("Driver de GPU", "GPU driver"));
+        driver.setOnClickListener(v -> startActivity(new Intent(this, DriverActivity.class)));
+        row.addView(driver);
     }
 
     private void startGame() {

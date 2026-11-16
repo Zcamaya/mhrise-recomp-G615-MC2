@@ -22,6 +22,7 @@ add_library(nnsdk SHARED
   src/nnsdk/swkbd.cpp
   src/nnsdk/time.cpp
   src/nnsdk/nvn/bcn.cpp
+  src/nnsdk/nvn/driver.cpp
   src/nnsdk/nvn/buffer.cpp
   src/nnsdk/nvn/device.cpp
   src/nnsdk/nvn/cmdbuf.cpp
@@ -80,7 +81,18 @@ target_include_directories(nnsdk PRIVATE src)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(recompiler)
 target_link_libraries(nnsdk PRIVATE eden_shader)
-target_link_libraries(nnsdk PRIVATE vulkan android mediandk aaudio z)
+# Vulkan por punteros (volk, desde nvn/vk.h): sin enlazar libvulkan.so, para que el driver pueda ser el
+# del sistema o uno del usuario cargado con libadrenotools (nvn/driver.cpp). Las librerías de hooks de libadrenotools
+# (libhook_impl.so, libmain_hook.so, libfile_redirect_hook.so, libgsl_alloc_hook.so) van en la APK junto a libnnsdk.so.
+set(EXTERNAL ${CMAKE_CURRENT_LIST_DIR}/external)
+if(NOT CMAKE_ANDROID_ARCH_ABI)  # (libadrenotools lo exige; el toolchain antiguo del NDK solo pone ANDROID_ABI)
+  set(CMAKE_ANDROID_ARCH_ABI ${ANDROID_ABI})
+endif()
+add_subdirectory(${EXTERNAL}/libadrenotools adrenotools)
+target_sources(nnsdk PRIVATE ${EXTERNAL}/volk/volk.c)
+target_include_directories(nnsdk PRIVATE ${EXTERNAL}/volk)
+target_compile_definitions(nnsdk PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR)
+target_link_libraries(nnsdk PRIVATE adrenotools android mediandk aaudio z dl)
 # FFmpeg (LGPL, solo el demuxer MP4; tools/build_ffmpeg.sh): respaldo cuando AMediaExtractor no encuentra pistas en un
 # vídeo. Sin esa carpeta se compila igual, sin el respaldo.
 set(FFMPEG_DIR ${CMAKE_CURRENT_LIST_DIR}/../third_party/ffmpeg-android)

@@ -13,6 +13,8 @@ This project is licensed under GPL-3.0-or-later. It uses or includes the followi
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting library used by Eden's code | MIT |
 | [Boost](https://www.boost.org/) (headers) | Used by Eden's shader recompiler | BSL-1.0 |
 | Android NDK `native_app_glue` | NativeActivity glue | Apache-2.0 |
+| [libadrenotools](https://github.com/bylaws/libadrenotools) and liblinkernsbypass | Loading the user's own Adreno driver (`runtime/external/libadrenotools`, unmodified) | BSD-2-Clause, Copyright (c) 2021 Billy Laws (text in its `LICENSE`) |
+| [volk](https://github.com/zeux/volk) | Vulkan function loader, so the driver can be the system's or the user's (`runtime/external/volk`, unmodified) | MIT, Copyright (c) 2018-2026 Arseny Kapoulkine (text in its `LICENSE.md`) |
 
 Lossless Scaling and its `Lossless.dll` are not distributed here; the DLL must come from the user's own purchase.
 

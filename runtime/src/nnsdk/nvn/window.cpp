@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "nnsdk/nvn/commands.h"
+#include "nnsdk/nvn/driver.h"
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/hud.h"
 #include "nnsdk/nvn/lsfg/framegen.h"
@@ -739,6 +740,7 @@ void nvn::present(Window& w, int index) {
     executor_lock.unlock();
 
     w.presented++;
+    if (w.presented == 60) nvn::driver::works();  // (un driver del usuario que ya ha dibujado: se queda elegido)
     log_pace(w);
     // Rendimiento: frames por segundo cada ~5 s.
     static auto window_start = std::chrono::steady_clock::now();

@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 
+#include "nnsdk/nvn/driver.h"
 #include "nnsdk/nvn/nvn.h"
 
 namespace nvn {
@@ -90,7 +91,8 @@ void probe_limits(VkContext& c) {
     for (VkDeviceMemory m : mems) vkFreeMemory(c.device, m, nullptr);
 }
 
-bool create(VkContext& c) {
+bool create(VkContext& c, bool system_driver) {
+    if (!driver::load(system_driver)) return false;
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "MH Rise port";
     app.apiVersion = VK_API_VERSION_1_1;
@@ -103,6 +105,7 @@ bool create(VkContext& c) {
         NVN_LOG("vkCreateInstance: %s\n", vk_result_name(r));
         return false;
     }
+    driver::load_instance(c.instance);
 
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(c.instance, &count, nullptr);
@@ -315,6 +318,7 @@ bool create(VkContext& c) {
         return false;
     }
     vkGetDeviceQueue(c.device, c.queue_family, 0, &c.queue);
+    driver::check();
     c.shader_float16 = float16.shaderFloat16;
     if (draw_indirect_count) {
         c.draw_indexed_indirect_count = reinterpret_cast<PFN_vkCmdDrawIndexedIndirectCountKHR>(
@@ -331,7 +335,16 @@ VkContext* vk() {
     static VkContext context;
     static bool ok = false;
     static std::once_flag once;
-    std::call_once(once, [] { ok = create(context); });
+    std::call_once(once, [] {
+        ok = create(context, false);
+        if (!ok && driver::custom()) {  // con el driver del usuario no arrancó: el del sistema, en este mismo arranque
+            driver::give_up("no creó la instancia, la GPU o el dispositivo");
+            if (context.device) vkDestroyDevice(context.device, nullptr);
+            if (context.instance) vkDestroyInstance(context.instance, nullptr);
+            context = VkContext{};
+            ok = create(context, true);
+        }
+    });
     return ok ? &context : nullptr;
 }
 

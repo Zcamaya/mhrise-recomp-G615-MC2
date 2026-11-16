@@ -51,6 +51,11 @@ driver, so it should behave the same. Other Snapdragon 865 / Adreno 650 devices 
 - **GPUs without multi-viewport** get shaders that don't ask for it.
 - **Phones with less than 5 GB of RAM** keep smaller caches (spare staging and buffer mirrors at half).
 - Other Adreno generations (6xx, 7xx) use the same Qualcomm paths as the Adreno 650.
+- **A GPU driver of your own (Adreno only).** If the stock driver draws parts of the game black or refuses some of its
+  shaders (seen on an Adreno 730), *GPU driver* (in the in-game settings, under Graphics, or on the start screen) adds a
+  driver from a `.zip` in the usual AdrenoTools format (`meta.json` plus the `.so`, e.g. a Turnip build) and uses it from
+  the next start, through [libadrenotools](https://github.com/bylaws/libadrenotools). If the game can't draw with it, it
+  goes back to the system's driver by itself and the screen says why.
 
 None of this has been tested on such a device yet: the log (`log.txt` in the game folder) says what the port chose.
 

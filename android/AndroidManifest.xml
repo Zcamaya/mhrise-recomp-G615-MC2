@@ -26,6 +26,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- GPU driver: the system's or one of the user's for an Adreno (files/drivers/, read by the game at start). -->
+        <activity
+            android:name=".DriverActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
         <!-- The game: a NativeActivity (libnier.so) with the touch controls over it. Exported so tools/apk.sh can open it
              directly with am start. -->
         <activity

@@ -39,10 +39,18 @@ mkdir -p "$STAGE/lib/arm64-v8a" "$STAGE/classes"
 javac -Xlint:-options --release 11 -classpath "$JAR" -d "$STAGE/classes" $(find "$ROOT/android/java" -name '*.java')
 "$BT/d8" --release --min-api 30 --lib "$JAR" --output "$STAGE" $(find "$STAGE/classes" -name '*.class')
 cp "$BUILD/libnier.so" "$BUILD/libnnsdk.so" "$STAGE/lib/arm64-v8a/"
+# libadrenotools' hooks (a driver of the user's own, runtime/src/nnsdk/nvn/driver.h): they must be in nativeLibraryDir.
+cp $(find "$BUILD/adrenotools" -name 'lib*hook*.so') "$STAGE/lib/arm64-v8a/"
+# The third-party notices and licenses that go with the binaries (BSD-2 libadrenotools, MIT volk).
+mkdir -p "$STAGE/assets/licenses"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/assets/licenses/"
+cp "$ROOT/runtime/external/libadrenotools/LICENSE" "$STAGE/assets/licenses/libadrenotools.txt"
+cp "$ROOT/runtime/external/libadrenotools/lib/linkernsbypass/LICENSE" "$STAGE/assets/licenses/linkernsbypass.txt"
+cp "$ROOT/runtime/external/volk/LICENSE.md" "$STAGE/assets/licenses/volk.txt"
 "$BT/aapt2" compile --dir "$ROOT/android/res" -o "$STAGE/res.zip"
 "$BT/aapt2" link --manifest "$ROOT/android/AndroidManifest.xml" -I "$JAR" -R "$STAGE/res.zip" --auto-add-overlay \
   --debug-mode -o "$STAGE/base.apk"
-(cd "$STAGE" && zip -q -r base.apk lib classes.dex)
+(cd "$STAGE" && zip -q -r base.apk lib classes.dex assets)
 "$BT/zipalign" -f -p 4 "$STAGE/base.apk" "$STAGE/aligned.apk"
 
 if [ -n "${KEYSTORE:-}" ]; then

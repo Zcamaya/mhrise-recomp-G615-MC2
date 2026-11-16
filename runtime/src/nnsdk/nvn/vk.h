@@ -1,8 +1,8 @@
 #pragma once
 // Contexto Vulkan único detrás de NVN: instancia, GPU, dispositivo y cola gráfica.
 
-#define VK_USE_PLATFORM_ANDROID_KHR
-#include <vulkan/vulkan.h>
+// (VK_USE_PLATFORM_ANDROID_KHR y VK_NO_PROTOTYPES vienen de CMake: las vk* son los punteros de volk, que llena driver.cpp)
+#include <volk.h>
 
 namespace nvn {
 

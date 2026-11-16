@@ -20,8 +20,7 @@
 #include <span>
 #include <tuple>
 
-#define VK_USE_PLATFORM_ANDROID_KHR
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 namespace nvn::lsfg {
 
