@@ -272,6 +272,13 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         memcpy(&options.compute_code_offset, control + 0x708, 4);
         memcpy(options.workgroup, control + 0x748, 12);
         memcpy(&options.shared_memory, control + 0x754, 4);
+        // Más memoria compartida de la que admite la GPU (la Switch da 48 KB; las Mali, 32): recortada al máximo, como
+        // Eden en las Mali y las Adreno. Sin recortar, la pipeline no es válida.
+        if (nvn::VkContext* c = nvn::vk(); c && options.shared_memory > c->props.limits.maxComputeSharedMemorySize) {
+            NVN_LOG("compute: %u KB de memoria compartida, la GPU admite %u KB: se recorta\n", options.shared_memory / 1024,
+                    c->props.limits.maxComputeSharedMemorySize / 1024);
+            options.shared_memory = c->props.limits.maxComputeSharedMemorySize;
+        }
         for (uint32_t& w : options.workgroup) w = std::max(w, 1u);
         uint32_t stage = 0;
         memcpy(&stage, control + 0x714, 4);
@@ -304,6 +311,19 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         options.subgroup_size = c->subgroup.subgroupSize;
         options.subgroup_stages = c->subgroup.supportedStages;
         options.subgroup_operations = c->subgroup.supportedOperations;
+        // Subgrupos más pequeños que el warp de 32 de Maxwell (las Mali Valhall: 16): Eden solo sabe de iguales o mayores,
+        // y un voto o un ballot del juego vería medio warp (un bucle que espera a que todo el warp acabe puede no salir).
+        // Ahí, sin operaciones de subgrupo: Eden emula los votos como si cada invocación fuera su propio warp.
+        // <datos>/con_subgrupos_cortos al traducir: las del dispositivo, como antes.
+        if (options.subgroup_size < 32 && !NVN_FLAG("con_subgrupos_cortos")) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                NVN_LOG("subgrupos de %u (menos que el warp de 32): sin operaciones de subgrupo en los shaders\n",
+                        options.subgroup_size);
+            }
+            options.subgroup_operations = 0;
+        }
         // Como Eden con el driver propietario de Qualcomm (vendorID 0x5143): shuffle con índice dinámico emulado.
         // <datos>/sin_shuffle_qualcomm al traducir (al arrancar): el OpGroupNonUniformShuffle de siempre.
         options.broken_subgroup_shuffle = c->props.vendorID == 0x5143 && !NVN_FLAG("sin_shuffle_qualcomm");

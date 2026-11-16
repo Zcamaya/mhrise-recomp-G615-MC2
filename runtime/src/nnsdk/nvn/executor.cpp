@@ -1464,7 +1464,7 @@ private:
     void crumb_begin(char kind, const char* label);
     void crumb_end();
     void crumb_stage(const ProgramStage* s);
-    void crumb_report();
+    void crumb_report(const char* why = "GPU perdida");
     int64_t reserve_margin_ns();
     int64_t reserve_margin_ = 2000000;
     std::chrono::steady_clock::time_point reserve_next_{};
@@ -2505,6 +2505,11 @@ void Executor::wait_slot(InFlight& f) {
     if (!f.pending) return;
     auto t0 = std::chrono::steady_clock::now();
     if (vkWaitForFences(vk()->device, 1, &f.fence, VK_TRUE, UINT64_MAX) == VK_ERROR_DEVICE_LOST) crumb_report();
+    // Con migas: el último envío ya acabó y aun así una empezó y no acabó. El driver abortó ese trabajo sin perder el
+    // dispositivo (la Mali-G615 de un Dimensity 8300: cada envío 700 ms, el vigilante de la GPU matando un trabajo colgado,
+    // y la pantalla en negro). Mismo informe que con la GPU perdida, una vez.
+    else if (crumbs_on_ && crumb_map_ && f.submit == submitted_.load(std::memory_order_relaxed) && crumb_map_[0] != crumb_map_[1])
+        crumb_report("trabajo abortado por el driver");
     const auto waited_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     prof_gpu_wait_us_ += waited_ns / 1000;
     g_drop_stats.wait_ns.fetch_add(static_cast<uint64_t>(waited_ns), std::memory_order_relaxed);
@@ -2963,11 +2968,11 @@ void Executor::crumb_stage(const ProgramStage* s) {
     if (c.n_stages < 8) c.stages[c.n_stages++] = s;
 }
 
-void Executor::crumb_report() {
+void Executor::crumb_report(const char* why) {
     if (!crumbs_on_ || crumbs_reported_) return;
     crumbs_reported_ = true;
     const uint32_t started = crumb_map_[0], ended = crumb_map_[1];
-    NVN_LOG("migas: GPU perdida; la última que empezó es la %u y la última que acabó la %u (grabadas %u)\n", started,
+    NVN_LOG("migas: %s; la última que empezó es la %u y la última que acabó la %u (grabadas %u)\n", why, started,
             ended, crumb_id_);
     const uint32_t first = ended > 4 ? ended - 4 : 1, last = std::min(crumb_id_, started + 3);
     for (uint32_t id = first; id <= last && crumb_id_ - id < kCrumbs; id++) {
@@ -6008,6 +6013,23 @@ Layout& Executor::layout_for(const nvnshader::Translated* const* shaders, const 
 // Crea la pipeline gráfica de la clave con solo lo que hay en ella: la usan pipeline() y el hilo del precalentado, así
 // lo que este deja creado es lo mismo que habría creado el ejecutor. modules: el de cada etapa que entra (VK_NULL_HANDLE:
 // no entra; el geometry de la compactación saltado ya viene a nulo). vs_inputs: genéricos que lee el vertex shader.
+// DIAGNÓSTICO: los formatos de los atributos de una pipeline que el driver rechazó (" 0:RGBA8_UNORM 2:RG16_I2F…"), con
+// los escalados (USCALED / SSCALED: el formato "_UI2F" / "_I2F" de NVN) marcados: Eden los emula en el driver de Qualcomm
+// porque no los compila bien.
+std::string attrib_formats(const PipelineKey& key, uint64_t vs_inputs) {
+    std::string out;
+    bool scaled = false;
+    for (uint32_t k = 0; k < 16; k++) {
+        if (!(vs_inputs & (1ull << k))) continue;
+        const FormatInfo* f = format_info(key.attribs[k].format);
+        char b[48];
+        snprintf(b, sizeof b, " %u:%s", k, f && f->name ? f->name : "?");
+        out += b;
+        if (f && f->name && (strstr(f->name, "_UI2F") || strstr(f->name, "_I2F"))) scaled = true;
+    }
+    return " atributos" + out + (scaled ? " (con escalados)" : "");
+}
+
 VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* modules, uint64_t vs_inputs,
                                 VkPipelineLayout layout, VkRenderPass rp, VkPipelineCache cache, VkPipeline& p) {
     p = VK_NULL_HANDLE;
@@ -6099,7 +6121,10 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     pi.pDynamicState = &dy;
     pi.layout = layout;
     pi.renderPass = rp;
-    return vkCreateGraphicsPipelines(vk()->device, cache, 1, &pi, nullptr, &p);
+    // VK_INCOMPLETE con la pipeline hecha: fuera de la especificación, pero así contestan los drivers de las Adreno 5xx y
+    // algunas Mali (lo mismo hace Eden): vale.
+    const VkResult r = vkCreateGraphicsPipelines(vk()->device, cache, 1, &pi, nullptr, &p);
+    return r == VK_INCOMPLETE && p ? VK_SUCCESS : r;
 }
 
 VkResult make_compute_pipeline(VkShaderModule module, VkPipelineLayout layout, VkPipelineCache cache, VkPipeline& p) {
@@ -6342,8 +6367,9 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
                 snprintf(b, sizeof b, "%016llx_%s", (unsigned long long)ps.print, nvnshader::stage_name(static_cast<Stage>(k)));
                 dump_rejected_spirv(b, ps.shader.spirv);
             }
-        NVN_LOG("vkCreateGraphicsPipelines: %s (%d), primitiva %d, etapas:%s%s\n", vk_result_name(r), static_cast<int>(r),
-                d.primitive, stages.c_str(), key.skip_gs ? " (sin el geometry shader: se vuelve a usar)" : "");
+        NVN_LOG("vkCreateGraphicsPipelines: %s (%d), primitiva %d, etapas:%s;%s%s\n", vk_result_name(r), static_cast<int>(r),
+                d.primitive, stages.c_str(), attrib_formats(key, inputs).c_str(),
+                key.skip_gs ? " (sin el geometry shader: se vuelve a usar)" : "");
         if (key.skip_gs) const_cast<ProgramStage*>(gs)->compaction_gs = false;  // el siguiente draw, con él
     }
     if (p && recordable && !per_stage_keys_) {
@@ -9844,7 +9870,9 @@ void Executor::async_loop() {
             if (m) vkDestroyShaderModule(device, m, nullptr);
         if (ok && r != VK_SUCCESS) {
             static std::atomic<int> logged{0};
-            if (logged++ < 16) NVN_LOG("pipeline en segundo plano: vkCreateGraphicsPipelines %s (%d)\n", vk_result_name(r), static_cast<int>(r));
+            if (logged++ < 16)
+                NVN_LOG("pipeline en segundo plano: vkCreateGraphicsPipelines %s (%d);%s\n", vk_result_name(r), static_cast<int>(r),
+                        attrib_formats(job.rec.key, job.inputs).c_str());
             for (int s = 0; s < kStages; s++)
                 if (!translated[s].spirv.empty()) {
                     char name[64];  // (sin la huella del código aquí: la clave de la caché de SPIR-V)

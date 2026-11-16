@@ -135,6 +135,8 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | `sin_fps` | Hides the FPS counter (the same switch as in the settings panel). |
 | `botones_xbox`, `botones_retro` | Force the face buttons to be read by position (`botones_xbox`) or by name (`botones_retro`) if a controller comes out swapped. |
 | `bc_en_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
+| `con_subgrupos_cortos` | On GPUs whose subgroups are smaller than the Switch's 32-wide warps (Mali Valhall: 16), shaders are translated without subgroup operations, since a game vote or ballot there would only see half a warp. This brings the device's subgroup operations back. |
+| `migas` | Debugging: GPU breadcrumbs. If the GPU hangs, or the driver aborts a stuck job, the log names the render pass or dispatch and its shaders. Everything on the GPU runs in order: slow. |
 | `memoria_baja` | Smaller caches, as on a phone with less than 5 GB of RAM. |
 | `sin_af` | No anisotropic filtering: a little cheaper for a weak GPU, a little blurrier at a distance. |
 | `pipelines_un_hilo` | Builds every pipeline on the renderer's own thread, with no background threads or warm-up (on by itself on a PowerVR GPU, whose shader compiler crashes building several at once). `pipelines_en_paralelo` turns that off. |
