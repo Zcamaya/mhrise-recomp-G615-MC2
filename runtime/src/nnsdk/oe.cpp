@@ -7,6 +7,7 @@
 // y la imagen de copyright no tienen dónde ir.
 
 #include <sys/system_properties.h>
+#include <unistd.h>
 #include <time.h>
 
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <string>
 
+#include "nnsdk/runtime.h"
 #include "nnsdk/types.h"
 
 namespace nn {
@@ -113,15 +115,31 @@ void GetDisplayVersion(DisplayVersion* out) {
     strcpy(out->value, "16.0.1");
 }
 
-OperationMode GetOperationMode() { return OperationMode_Handheld; }
-PerformanceMode GetPerformanceMode() { return PerformanceMode_Normal; }
+}  // namespace nn::oe
+
+namespace nnsdk {
+bool docked() {
+    static const bool on = [] {
+        const char* data = getenv("NIER_DATA");
+        const bool d = access((std::string(data ? data : ".") + "/dock_mode").c_str(), F_OK) == 0;
+        printf("[oe] mode: %s\n", d ? "docked (dock_mode)" : "handheld");
+        return d;
+    }();
+    return on;
+}
+}  // namespace nnsdk
+
+namespace nn::oe {
+
+OperationMode GetOperationMode() { return nnsdk::docked() ? OperationMode_Console : OperationMode_Handheld; }
+PerformanceMode GetPerformanceMode() { return nnsdk::docked() ? PerformanceMode_Boost : PerformanceMode_Normal; }
 FocusState GetCurrentFocusState() { return FocusState_InFocus; }
 bool IsCpuOverclockEnabled() { return false; }
 
-// La resolución del modo portátil, como la consola en la mano.
+// The handheld's 720p, or the TV's 1080p when docked.
 void GetDefaultDisplayResolution(int* width, int* height) {
-    *width = 1280;
-    *height = 720;
+    *width = nnsdk::docked() ? 1920 : 1280;
+    *height = nnsdk::docked() ? 1080 : 720;
 }
 void GetDefaultDisplayResolutionChangeEvent(os::SystemEvent*) {}
 

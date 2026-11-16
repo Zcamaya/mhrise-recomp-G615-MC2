@@ -426,6 +426,11 @@ BaseResolution base_resolution() {
     if (NVN_FLAG("resolution_720")) return {1.33334f, 720};
     if (NVN_FLAG("resolution_648")) return {1.20001f, 648};
     if (NVN_FLAG("resolution_576")) return {1.06668f, 576};
+    // Lower than the game's: for weak GPUs (the dynamic resolution still steps down from there, never under 0.2,
+    // which the game uses while loading)
+    if (NVN_FLAG("resolution_480")) return {0.88890f, 480};
+    if (NVN_FLAG("resolution_432")) return {0.80001f, 432};
+    if (NVN_FLAG("resolution_360")) return {0.66668f, 360};
     return {1.0f, 540};
 }
 

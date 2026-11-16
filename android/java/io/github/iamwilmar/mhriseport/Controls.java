@@ -76,6 +76,8 @@ final class Controls {
     boolean slide = true;       // un dedo que pasa de un botón a otro suelta el primero y pulsa el segundo
     int touchDeadzone = 8;      // % del radio del stick táctil
     boolean stickPress = true;  // un toque corto en un stick es L3 / R3
+    boolean cameraSwipe = true; // dragging on the game (away from the controls) turns the camera
+    int swipeSpeed = 100;       // %: how far the camera turns for a drag
     final float[][] place = new float[Ctl.values().length][3];
     final boolean[] shown = new boolean[Ctl.values().length];
     // Los combos
@@ -109,6 +111,8 @@ final class Controls {
         slide = prefs.getBoolean("deslizar", slide);
         touchDeadzone = prefs.getInt("zona_tactil", touchDeadzone);
         stickPress = prefs.getBoolean("toque_stick", stickPress);
+        cameraSwipe = prefs.getBoolean("camera_swipe", cameraSwipe);
+        swipeSpeed = prefs.getInt("swipe_speed", swipeSpeed);
         padDeadzone = prefs.getInt("zona_mando", padDeadzone);
         trigger = prefs.getInt("gatillo", trigger);
         rightAxes = prefs.getInt("stick_derecho", rightAxes);
@@ -144,6 +148,7 @@ final class Controls {
         e.putBoolean("tactil", touchOn).putInt("opacidad", opacity).putInt("tamano", size).putInt("vibracion", vibration)
                 .putBoolean("deslizar", slide).putInt("zona_tactil", touchDeadzone).putBoolean("toque_stick", stickPress)
                 .putInt("zona_mando", padDeadzone).putInt("gatillo", trigger).putInt("stick_derecho", rightAxes)
+                .putBoolean("camera_swipe", cameraSwipe).putInt("swipe_speed", swipeSpeed)
                 .putString("disposicion", layout.toString());
         for (int i = 0; i < COMBOS; i++) e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]);
         e.apply();

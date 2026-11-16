@@ -166,17 +166,19 @@ final class SettingsMenu {
         header("Resolution");
         note("The game's 3D resolution. On the handheld console it's 960x540 inside a 720p picture, which is then scaled "
                         + "to the screen. Higher: sharper, and more work for the GPU.");
-        final String[] files = {null, "resolution_576", "resolution_648", "resolution_720"};
-        choice("Base resolution",
-                "540p is the game's own. 720p draws the whole scene at 1280x720, with no scaling inside the game. "
-                        + "Applies at once.",
-                new String[] {"540p (960x540)", "576p (1024x576)", "648p (1152x648)", "720p (1280x720)"}, () -> {
-                    for (int i = files.length - 1; i > 0; i--)
-                        if (has(files[i])) return i;
-                    return 0;
-                }, v -> {
-                    for (int i = 1; i < files.length; i++) put(files[i], i == v);
-                });
+        exclusive("Base resolution",
+                "540p is the game's own. Lower: blurrier, much less GPU work, for weak phones. 720p draws the whole scene "
+                        + "at 1280x720, with no scaling inside the game. In docked mode the same steps apply to the "
+                        + "game's docked resolution. Applies at once.",
+                new String[] {"540p (960x540)", "360p (640x360)", "432p (768x432)", "480p (854x480)", "576p (1024x576)",
+                        "648p (1152x648)", "720p (1280x720)"},
+                new String[] {null, "resolution_360", "resolution_432", "resolution_480", "resolution_576",
+                        "resolution_648", "resolution_720"});
+        flag("Docked mode",
+                "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
+                        + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "
+                        + "effect on the next start.",
+                "dock_mode", false);
         flag("Dynamic resolution",
                 "If the GPU can't finish a frame in time, it lowers the resolution in steps (down to 73 % of the base) "
                         + "and raises it again when there's room. Off: always the base.",
@@ -460,6 +462,12 @@ final class SettingsMenu {
         toggle("Slide between buttons",
                 "A finger moving from one button to another lets go of the first and presses the second, without lifting.",
                 () -> cfg.slide ? 1 : 0, v -> cfg.slide = v != 0);
+        toggle("Camera swipe",
+                "Dragging a finger on the game, away from the controls, turns the camera, as in a phone game. A tap still "
+                        + "goes to the game's touch screen.",
+                () -> cfg.cameraSwipe ? 1 : 0, v -> cfg.cameraSwipe = v != 0);
+        number("Swipe speed", "How far the camera turns for the same drag.", 25, 300, 25, " %", () -> cfg.swipeSpeed,
+                v -> cfg.swipeSpeed = v);
         number("Stick dead zone",
                 "How far a touch stick moves from its centre before it counts.", 0, 30, 1, " %",
                 () -> cfg.touchDeadzone, v -> cfg.touchDeadzone = v);

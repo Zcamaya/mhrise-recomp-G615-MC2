@@ -157,7 +157,12 @@ std::atomic<int64_t> g_sampling{0};
 
 bool handheld_connected() { return nnsdk::host().input != nullptr; }
 
-uint32_t style_of(NpadIdType id) { return id == kNpadHandheld && handheld_connected() ? kStyleHandheld : 0; }
+// Docked (nnsdk::docked): the same input as player 1's Pro Controller (No1, FullKey) instead of the handheld
+NpadIdType player_id() { return nnsdk::docked() ? 0 : kNpadHandheld; }
+uint32_t style_of(NpadIdType id) {
+    if (!handheld_connected() || id != player_id()) return 0;
+    return nnsdk::docked() ? kStyleFullKey : kStyleHandheld;
+}
 
 // El estado de un estilo solo trae datos si es el que tiene el mando: GetNpadState(NpadFullKeyState*, Handheld) da en
 // una Switch un mando desconectado, y así no se cuenta dos veces la misma pulsación si el juego lee varios estilos.
@@ -298,7 +303,7 @@ Result GetNpadControllerColor(NpadControllerColor* left, NpadControllerColor* ri
 Result ShowControllerSupport(ControllerSupportResultInfo* out, const ControllerSupportArg&) {
     if (out) {
         out->player_count = 1;
-        out->selected_id = kNpadHandheld;
+        out->selected_id = player_id();
     }
     return ResultSuccess;
 }
@@ -391,7 +396,7 @@ void GetSixAxisSensorState(SixAxisSensorState* out, const SixAxisSensorHandle& h
     memset(out, 0, sizeof *out);
     out->sampling_number = sample_clock();
     out->delta_time = 5'000'000;
-    if ((handle.storage >> 8 & 0xFF) != kNpadHandheld || !handheld_connected()) return;
+    if ((handle.storage >> 8 & 0xFF) != player_id() || !handheld_connected()) return;
     out->acceleration[2] = -1.0f;
     out->direction[0] = out->direction[4] = out->direction[8] = 1.0f;
     out->attributes = 1;

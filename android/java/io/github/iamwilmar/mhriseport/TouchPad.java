@@ -45,7 +45,17 @@ final class TouchPad extends View {
         long mask;        // los botones que pulsa ahora
         int dirs;         // la cruceta: los brazos
         float dx, dy;     // en edición: la distancia del dedo al centro del control
+        boolean camera;   // a swipe on the game: it moves the right stick
+        float lastX, lastY;
+        long lastT;
     }
+    // Camera swipe: a finger that drags on the game, away from the controls, turns the camera through the right stick, by
+    // how fast it moves (a phone game's swipe camera; the game only has a stick to turn it with). A tap still goes to the
+    // game's touch screen. The stick goes back to the middle when the finger stops.
+    private final Runnable cameraStop = () -> {
+        rx = ry = 0;
+        update();
+    };
     private final Finger[] fingers = new Finger[MAX_FINGERS];
     private long pulse;  // L3 / R3 de un toque corto en un stick, unos instantes
     private float lx, ly, rx, ry;
@@ -202,6 +212,16 @@ final class TouchPad extends View {
                             p[0] = clamp((f.x + f.dx) / getWidth(), 0.02f, 0.98f);
                             p[1] = clamp((f.y + f.dy) / getHeight(), 0.03f, 0.97f);
                         }
+                    } else if (f.camera) {
+                        swipe(f, e.getEventTime());
+                    } else if (f.ctl == null && cfg.cameraSwipe && f.moved) {
+                        // (from touch to camera: the game gets its touch cancelled)
+                        if (f.hud) host.touchPoint(MotionEvent.ACTION_CANCEL, f.x, f.y, timeNs, getWidth(), getHeight());
+                        f.hud = false;
+                        f.camera = true;
+                        f.lastX = f.x;
+                        f.lastY = f.y;
+                        f.lastT = e.getEventTime();
                     } else if (f.hud) {
                         host.touchPoint(MotionEvent.ACTION_MOVE, f.x, f.y, timeNs, getWidth(), getHeight());
                     } else if (f.ctl != null) {
@@ -223,6 +243,11 @@ final class TouchPad extends View {
                     } else if (!editing && f.ctl != null) {
                         release(f, !all);
                     }
+                    if (f.camera) {
+                        removeCallbacks(cameraStop);
+                        rx = ry = 0;
+                        f.camera = false;
+                    }
                     f.id = -1;
                     f.ctl = null;
                     f.hud = false;
@@ -237,6 +262,20 @@ final class TouchPad extends View {
     }
 
     private static float clamp(float v, float lo, float hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    // Full stick for a drag of about half the screen's height a second (at 100 %), smoothed over a few events
+    private void swipe(Finger f, long timeMs) {
+        float dt = Math.max(timeMs - f.lastT, 4) / 1000f;
+        float gain = 2.0f * cfg.swipeSpeed / 100f / getHeight();
+        float vx = clamp((f.x - f.lastX) / dt * gain, -1, 1), vy = clamp((f.y - f.lastY) / dt * gain, -1, 1);
+        rx = rx * 0.4f + vx * 0.6f;
+        ry = ry * 0.4f + vy * 0.6f;
+        f.lastX = f.x;
+        f.lastY = f.y;
+        f.lastT = timeMs;
+        removeCallbacks(cameraStop);
+        postDelayed(cameraStop, 70);
+    }
 
     private void press(Finger f, boolean first) {
         Ctl c = f.ctl;
@@ -364,6 +403,9 @@ final class TouchPad extends View {
             if (f.ctl == Ctl.LSTICK) on |= 1;
             if (f.ctl == Ctl.RSTICK) on |= 2;
         }
+        for (Finger f : fingers)
+            if (f.id >= 0 && f.camera && !editing) on |= 2;
+        if (on == 0 && (rx != 0 || ry != 0)) on |= 2;  // (the last swipe's stick going back to the middle)
         sticksOn = on;
         if (buttons != lastButtons || on != 0 || lastSticks != on) {
             host.send(buttons, on, lx, -ly, rx, -ry);  // (al juego, hacia arriba positivo)
@@ -381,8 +423,10 @@ final class TouchPad extends View {
             f.id = -1;
             f.ctl = null;
             f.hud = false;
+            f.camera = false;
             f.mask = 0;
         }
+        removeCallbacks(cameraStop);
         pulse = 0;
         lx = ly = rx = ry = 0;
         update();
