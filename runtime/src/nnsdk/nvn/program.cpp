@@ -58,7 +58,8 @@ thread_local bool t_prefetch = false;
 
 // Cambia si cambia lo que entra en la clave de la caché (translation_key) o cómo se usa lo traducido.
 // 2: Options::optimize_stages (spirv-opt).
-constexpr uint32_t kKeyVersion = 2;
+// 3: butterflies by 1..3 in pixel shaders become quad swaps (tools/patches/eden-quad-butterfly.patch).
+constexpr uint32_t kKeyVersion = 3;
 
 // <datos>/spirv.bin: se empieza a leer con el primer programa del juego, bastante antes de su primer draw.
 // <datos>/no_spirv_cache al arrancar: sin fichero (y, en vivo, sin buscar ni guardar: se traduce todo como antes).
@@ -924,53 +925,10 @@ static std::vector<uint32_t> without_dead_functions(const std::vector<uint32_t>&
     return out;
 }
 
-// The position a vertex stage outputs, made Invariant: the driver then computes it the same way in every shader with the
-// same math. MH Rise draws the depth of the scene first (GEQUAL, reversed Z) and then its colour with depth EQUAL, from
-// another program; if the two vertex shaders came out a hair apart, pixels on the triangles' shared edges failed EQUAL
-// and stayed black (dotted lines along the ground's triangles). The console's compiler gives the same result for both.
-// Only outputs (a plain variable, or a member of an output block); inputs (gl_in[]) can't take it.
-static std::vector<uint32_t> with_invariant_position(const std::vector<uint32_t>& w) {
-    if (w.size() < 5 || w[0] != 0x07230203u) return w;
-    std::unordered_map<uint32_t, uint32_t> pointer_class, pointee, var_class;
-    for (size_t i = 5; i < w.size();) {
-        const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
-        if (!n || i + n > w.size()) return w;
-        if (op == 32 && n >= 4) pointer_class[w[i + 1]] = w[i + 2], pointee[w[i + 1]] = w[i + 3];  // OpTypePointer
-        else if (op == 59 && n >= 4) var_class[w[i + 2]] = w[i + 3];                                   // OpVariable
-        i += n;
-    }
-    std::unordered_set<uint32_t> output_structs;
-    for (const auto& [ptr, cls] : pointer_class)
-        if (cls == 3) output_structs.insert(pointee[ptr]);  // (Output)
-    std::vector<uint32_t> out;
-    out.reserve(w.size() + 8);
-    out.insert(out.end(), w.begin(), w.begin() + 5);
-    bool changed = false;
-    for (size_t i = 5; i < w.size();) {
-        const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
-        out.insert(out.end(), w.begin() + i, w.begin() + i + n);
-        // OpDecorate %v BuiltIn Position / OpMemberDecorate %s m BuiltIn Position
-        if (op == 71 && n == 4 && w[i + 2] == 11 && w[i + 3] == 0) {
-            const auto v = var_class.find(w[i + 1]);
-            if (v != var_class.end() && v->second == 3) {
-                out.insert(out.end(), {(3u << 16) | 71u, w[i + 1], 18u});
-                changed = true;
-            }
-        } else if (op == 72 && n == 5 && w[i + 3] == 11 && w[i + 4] == 0 && output_structs.count(w[i + 1])) {
-            out.insert(out.end(), {(4u << 16) | 72u, w[i + 1], w[i + 2], 18u});
-            changed = true;
-        }
-        i += n;
-    }
-    return changed ? out : w;
-}
-
 VkResult nvn::create_shader_module(VkDevice device, const std::vector<uint32_t>& spirv, VkShaderModule* module) {
     static const bool keep = NVN_FLAG("keep_dead_functions");
-    static const bool variant_position = NVN_FLAG("no_invariant_position");
-    std::vector<uint32_t> tidy = keep ? spirv : without_dead_functions(spirv);
-    if (!variant_position) tidy = with_invariant_position(tidy);
-    const std::vector<uint32_t>& code = tidy;
+    const std::vector<uint32_t> tidy = keep ? std::vector<uint32_t>() : without_dead_functions(spirv);
+    const std::vector<uint32_t>& code = keep ? spirv : tidy;
     VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     info.codeSize = code.size() * sizeof(uint32_t);
     info.pCode = code.data();

@@ -26,6 +26,9 @@ final class TouchPad extends View {
         void tick();       // la vibración de un botón pulsado
         void openMenu();
         void editDone();
+        // A control was moved, resized, hidden or reset while editing: saved right away (leaving the editor any other
+        // way than Done, or the app being closed, would lose it otherwise)
+        void layoutChanged();
     }
 
     private final Controls cfg;
@@ -233,6 +236,7 @@ final class TouchPad extends View {
             case MotionEvent.ACTION_POINTER_UP:
             case MotionEvent.ACTION_CANCEL: {
                 boolean all = action == MotionEvent.ACTION_CANCEL;
+                if (editing) host.layoutChanged();
                 for (int i = 0; i < e.getPointerCount(); i++) {
                     if (!all && i != index) continue;
                     Finger f = finger(e.getPointerId(i));
@@ -476,6 +480,7 @@ final class TouchPad extends View {
                     host.editDone();
                     break;
             }
+            if (editing) host.layoutChanged();
             host.tick();
             return true;
         }

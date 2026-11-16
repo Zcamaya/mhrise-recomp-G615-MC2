@@ -68,6 +68,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     protected void onPause() {
         if (pad != null) pad.releaseAll();  // (un dedo que se queda en un botón al irse la app no lo deja pulsado)
+        if (controls != null) controls.saveNow();  // (the app may not come back: swiped away from recents, killed for memory)
         super.onPause();
     }
 
@@ -160,7 +161,12 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     @Override
     public void editDone() {
-        controls.save();
+        controls.saveNow();
         pad.invalidate();
+    }
+
+    @Override
+    public void layoutChanged() {
+        controls.save();
     }
 }

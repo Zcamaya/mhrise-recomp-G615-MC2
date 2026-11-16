@@ -162,6 +162,15 @@ final class Controls {
     }
 
     void save() {
+        edit().apply();
+    }
+
+    // Written before returning (the app is going to the background, or the editor closed)
+    void saveNow() {
+        edit().commit();
+    }
+
+    private SharedPreferences.Editor edit() {
         StringBuilder layout = new StringBuilder();
         for (Ctl c : Ctl.values()) {
             float[] p = place[c.ordinal()];
@@ -176,7 +185,7 @@ final class Controls {
                 .putString("disposicion", layout.toString()).putInt("layout_version", 2);
         for (int i = 0; i < COMBOS; i++) e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]);
         for (int i = 0; i < BUTTONS.length; i++) e.putInt("map_key" + i, mapKey[i]);
-        e.apply();
+        return e;
     }
 
     // Los combos del mando para el loader: pares (botones del mando, botones que pulsa), los de dos botones primero

@@ -183,6 +183,25 @@ final class SettingsMenu {
                         + "whole screen. Applies at once.",
                 new String[] {"Default (16:9)", "Force 4:3", "Force 21:9", "Force 16:10", "Stretch to screen"},
                 new String[] {null, "aspect_4_3", "aspect_21_9", "aspect_16_10", "aspect_stretch"});
+        toggle("Ultrawide (experimental)",
+                "The game is told its screen has your phone's shape (1600x720 on a 20:9 phone instead of 1280x720), "
+                        + "so it draws a wider view instead of a stretched picture. The aspect ratio above is ignored "
+                        + "while it's on. Some menus or effects may not expect it. Takes effect on the next start.",
+                () -> has("ultrawide") ? 1 : 0, v -> {
+                    File f = new File(folder, "ultrawide");
+                    if (v == 0) {
+                        f.delete();
+                        return;
+                    }
+                    DisplayMetrics m = new DisplayMetrics();
+                    activity.getWindowManager().getDefaultDisplay().getRealMetrics(m);
+                    float ratio = (float) Math.max(m.widthPixels, m.heightPixels) / Math.min(m.widthPixels, m.heightPixels);
+                    try {
+                        Files.write(f.toPath(), String.format(java.util.Locale.ROOT, "%.4f%n", ratio).getBytes());
+                    } catch (IOException ignored) {
+                        // (storage refused: stays off)
+                    }
+                });
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "

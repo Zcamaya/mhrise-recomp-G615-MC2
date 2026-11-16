@@ -136,10 +136,24 @@ PerformanceMode GetPerformanceMode() { return nnsdk::docked() ? PerformanceMode_
 FocusState GetCurrentFocusState() { return FocusState_InFocus; }
 bool IsCpuOverclockEnabled() { return false; }
 
-// The handheld's 720p, or the TV's 1080p when docked.
+// The handheld's 720p, or the TV's 1080p when docked. With <datos>/ultrawide (the phone's width / height, written by the
+// settings menu; read at start-up) the screen is as wide as the phone's: the game sizes its picture from this, so a
+// 20:9 phone gets 1600x720 instead of the 16:9 picture stretched.
 void GetDefaultDisplayResolution(int* width, int* height) {
-    *width = nnsdk::docked() ? 1920 : 1280;
     *height = nnsdk::docked() ? 1080 : 720;
+    *width = nnsdk::docked() ? 1920 : 1280;
+    static const float wide = [] {
+        const char* data = getenv("NIER_DATA");
+        float r = 0.0f;
+        if (FILE* f = fopen((std::string(data ? data : ".") + "/ultrawide").c_str(), "r")) {
+            if (fscanf(f, "%f", &r) != 1) r = 0.0f;
+            fclose(f);
+        }
+        if (r < 16.0f / 9.0f || r > 3.0f) r = 0.0f;  // (narrower than 16:9, or not a ratio: as the console)
+        if (r > 0.0f) printf("[oe] ultrawide: screen %.3f:1\n", r);
+        return r;
+    }();
+    if (wide > 0.0f) *width = (static_cast<int>(*height * wide) + 7) & ~7;
 }
 void GetDefaultDisplayResolutionChangeEvent(os::SystemEvent*) {}
 
