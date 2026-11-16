@@ -19,6 +19,9 @@ import android.widget.TextView;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.function.IntConsumer;
 import java.util.function.IntSupplier;
 
@@ -113,7 +116,7 @@ final class SettingsMenu {
     private String[] sectionNames() {
         return new String[] {"Display", "Graphics", "Performance",
                 "Touch controls", "Combos", "Controller",
-                "Debug"};
+                "Multiplayer", "Debug"};
     }
 
     private void build() {
@@ -144,6 +147,7 @@ final class SettingsMenu {
             case 3: buildTouch(); break;
             case 4: buildCombos(); break;
             case 5: buildController(); break;
+            case 6: buildMultiplayer(); break;
             default: buildDebug(); break;
         }
     }
@@ -272,6 +276,120 @@ final class SettingsMenu {
                 "No background threads or warm-up: more stutter, but some drivers crash building several at once "
                         + "(PowerVR is like that by itself). Takes effect on the next start.",
                 "single_thread_pipelines", false);
+    }
+
+    // Local Play over the internet (runtime/src/nnsdk/ldn.cpp): hubs created in the game's Local Play are listed on the
+    // hub servers (the ones MHGU for Android uses), and the game's hub search shows theirs. Saved as plain text files in
+    // the game folder: hub_servers (one per line, "off" for none), hub_key, hub_hosts and hub_port. Read when a hub is
+    // created or searched for, so changes apply without a restart.
+    private static final String[] DEFAULT_SERVERS = {"hunterhubid-gu-hub.duckdns.org",
+            "morerokk-mhgurecomp-ldnserver.duckdns.org"};
+
+    private List<String> lines(String name) {
+        List<String> out = new ArrayList<>();
+        if (folder == null) return out;
+        try {
+            for (String l : Files.readAllLines(new File(folder, name).toPath())) {
+                l = l.trim();
+                if (!l.isEmpty()) out.add(l);
+            }
+        } catch (IOException ignored) {
+            // (not there yet)
+        }
+        return out;
+    }
+
+    private void writeLines(String name, List<String> list) {
+        if (folder == null) return;
+        try {
+            Files.write(new File(folder, name).toPath(), (String.join("\n", list) + "\n").getBytes());
+        } catch (IOException ignored) {
+            // (storage refused: the row shows the old value)
+        }
+    }
+
+    private List<String> servers() {
+        List<String> l = lines("hub_servers");
+        if (l.isEmpty()) return new ArrayList<>(Arrays.asList(DEFAULT_SERVERS));
+        if (l.size() == 1 && l.get(0).equals("off")) return new ArrayList<>();
+        return l;
+    }
+
+    private void ask(String title, String guide, String initial, int max, java.util.function.Consumer<String> done) {
+        new TextPrompt(activity).show(title, guide, initial, "", 0, max, false, false, text -> {
+            if (text != null) done.accept(text.trim());
+            build();
+        });
+    }
+
+    private void buildMultiplayer() {
+        note("Local Play over the internet: hubs you create in the game's Local Play are listed on the hub servers below, "
+                + "and searching for hubs shows the ones there. Only MH Rise players are listed (not MHGU's). No port "
+                + "forwarding needed.");
+        header("Matchmaking");
+        List<String> key = lines("hub_key");
+        row("Matchmaking key", key.isEmpty() ? "None" : "••••",
+                "Players who enter the same key only see each other's hubs. Empty: public, seen by everyone without a key. "
+                        + "Only a hash of it is sent.",
+                v -> ask("Matchmaking key", "Empty for public hubs", key.isEmpty() ? "" : key.get(0), 64, text -> {
+                    if (text.isEmpty()) new File(folder, "hub_key").delete();
+                    else writeLines("hub_key", Arrays.asList(text));
+                }), false);
+
+        header("Hub servers");
+        List<String> list = servers();
+        if (list.isEmpty()) note("No hub servers: only the search hosts below.");
+        for (int i = 0; i < list.size(); i++) {
+            final int k = i;
+            row(list.get(i), "Remove", "Tap to remove this server.", v -> {
+                List<String> l = servers();
+                if (k < l.size()) l.remove(k);
+                writeLines("hub_servers", l.isEmpty() ? Arrays.asList("off") : l);
+                build();
+            }, false);
+        }
+        action("Add hub server", "A hub server's address: name or IP, and :port if it isn't 39510.",
+                () -> ask("Add hub server", "host or host:port", "", 128, text -> {
+                    if (text.isEmpty()) return;
+                    List<String> l = servers();
+                    if (!l.contains(text)) l.add(text);
+                    writeLines("hub_servers", l);
+                }));
+        action("Restore the default servers", "The two MHGU for Android hub servers.", () -> {
+            new File(folder, "hub_servers").delete();
+            build();
+        });
+
+        header("Direct connections");
+        List<String> hosts = lines("hub_hosts");
+        for (int i = 0; i < hosts.size(); i++) {
+            final int k = i;
+            row(hosts.get(i), "Remove", "Tap to remove this host.", v -> {
+                List<String> l = lines("hub_hosts");
+                if (k < l.size()) l.remove(k);
+                writeLines("hub_hosts", l);
+                build();
+            }, false);
+        }
+        action("Add search host", "Another phone's address (IP, or IP:port) to look for its hub directly, on the same "
+                + "Wi-Fi or with its port forwarded.", () -> ask("Add search host", "IP or IP:port", "", 128, text -> {
+                    if (text.isEmpty()) return;
+                    List<String> l = lines("hub_hosts");
+                    if (!l.contains(text)) l.add(text);
+                    writeLines("hub_hosts", l);
+                }));
+        List<String> port = lines("hub_port");
+        String portNow = port.isEmpty() ? "39510" : port.get(0);
+        row("Port", portNow.equals("0") ? "Off" : portNow,
+                "The TCP port a hub you create listens on for direct connections (0: off). Hub servers don't need it.",
+                v -> ask("Port", "1-65535, or 0 for off", portNow, 5, text -> {
+                    try {
+                        int p = Integer.parseInt(text);
+                        if (p >= 0 && p <= 65535) writeLines("hub_port", Arrays.asList(Integer.toString(p)));
+                    } catch (NumberFormatException ignored) {
+                        // (not a number: unchanged)
+                    }
+                }), false);
     }
 
     // Switches for testing drivers and collecting logs. Same files as always (see the options table in the README), just

@@ -34,6 +34,7 @@
 #include <cstring>
 #include <vector>
 
+#include "nnsdk/ldn_net.h"
 #include "nnsdk/watch.h"
 #include "nnsdk/types.h"
 
@@ -267,9 +268,57 @@ int do_socket(int family, int type, int protocol) {
     return own(fd);
 }
 
+// Local Play (ldn.cpp, ldn_net.h): while the game is in a network, its UDP to the network's addresses goes there, and
+// the datagrams other players send come from a loopback helper with a header that names the real sender.
+bool is_datagram(int fd) {
+    int type = 0;
+    socklen_t len = sizeof type;
+    return getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0 && type == SOCK_DGRAM;
+}
+
+bool to_network(const sockaddr_in& in) { return nnsdk::ldn_net::in_network(ntohl(in.sin_addr.s_addr)); }
+
+// The local port of a socket that sends into the network (bound to any address first if it isn't yet)
+uint16_t network_port(int fd) {
+    sockaddr_in in{};
+    socklen_t len = sizeof in;
+    if (getsockname(fd, reinterpret_cast<sockaddr*>(&in), &len) == 0 && in.sin_port) return ntohs(in.sin_port);
+    sockaddr_in any{};
+    any.sin_family = AF_INET;
+    ::bind(fd, reinterpret_cast<const sockaddr*>(&any), sizeof any);
+    len = sizeof in;
+    return getsockname(fd, reinterpret_cast<sockaddr*>(&in), &len) == 0 ? ntohs(in.sin_port) : 0;
+}
+
+ssize_t send_to_network(int fd, const void* buf, size_t n, const sockaddr_in& to) {
+    if (!is_datagram(fd)) return fail(ENETUNREACH);
+    nnsdk::ldn_net::send(network_port(fd), ntohl(to.sin_addr.s_addr), ntohs(to.sin_port), buf, n);
+    return static_cast<ssize_t>(n);
+}
+
+// A datagram from the helper: its header off (the data moves down) and its real sender in *ss. The received size.
+ssize_t from_network(void* buf, ssize_t r, sockaddr_storage* ss) {
+    const auto& from = reinterpret_cast<const sockaddr_in&>(*ss);
+    const uint16_t helper = nnsdk::ldn_net::helper_port();
+    if (!helper || r < static_cast<ssize_t>(nnsdk::ldn_net::kDeliverHeader) || ss->ss_family != AF_INET ||
+        from.sin_port != htons(helper) || from.sin_addr.s_addr != htonl(INADDR_LOOPBACK) ||
+        memcmp(buf, nnsdk::ldn_net::kDeliverMagic, 4) != 0)
+        return r;
+    auto* b = static_cast<uint8_t*>(buf);
+    sockaddr_in real{};
+    real.sin_family = AF_INET;
+    memcpy(&real.sin_addr.s_addr, b + 4, 4);
+    memcpy(&real.sin_port, b + 8, 2);
+    memcpy(ss, &real, sizeof real);
+    const ssize_t size = r - static_cast<ssize_t>(nnsdk::ldn_net::kDeliverHeader);
+    memmove(b, b + nnsdk::ldn_net::kDeliverHeader, static_cast<size_t>(size));
+    return size;
+}
+
 int do_bind(int fd, const void* addr, unsigned len) {
     sockaddr_in in;
     if (!to_host_addr(addr, len, &in)) return -1;
+    if (to_network(in)) in.sin_addr.s_addr = htonl(INADDR_ANY);  // (the network's address is this phone's)
     if (!is_local(in.sin_addr.s_addr)) return fail(EADDRNOTAVAIL);  // no hay más interfaz que lo
     return ::bind(fd, reinterpret_cast<const sockaddr*>(&in), sizeof in);
 }
@@ -278,7 +327,7 @@ int do_connect(int fd, const void* addr, unsigned len) {
     sockaddr_in in;
     if (!to_host_addr(addr, len, &in)) return -1;
     if (!is_local(in.sin_addr.s_addr)) {
-        log_offline("connect", in);
+        log_offline(to_network(in) ? "connect (Local Play: UDP only)" : "connect", in);
         return fail(ENETUNREACH);
     }
     return ::connect(fd, reinterpret_cast<const sockaddr*>(&in), sizeof in);
@@ -298,6 +347,10 @@ int do_sockname(int fd, void* addr, unsigned* len, bool peer) {
     socklen_t sl = sizeof ss;
     const int r = peer ? ::getpeername(fd, reinterpret_cast<sockaddr*>(&ss), &sl)
                        : ::getsockname(fd, reinterpret_cast<sockaddr*>(&ss), &sl);
+    if (r == 0 && !peer && ss.ss_family == AF_INET && nnsdk::ldn_net::active() && is_datagram(fd)) {
+        auto& in = reinterpret_cast<sockaddr_in&>(ss);
+        if (in.sin_addr.s_addr == htonl(INADDR_ANY)) in.sin_addr.s_addr = htonl(nnsdk::ldn_net::own_address());
+    }
     if (r == 0) from_host_addr(ss, addr, len);
     return r;
 }
@@ -307,6 +360,17 @@ ssize_t do_recvfrom(int fd, void* buf, size_t n, int flags, void* addr, unsigned
     sockaddr_storage ss{};
     socklen_t sl = sizeof ss;
     const bool want = addr && len;
+    if (nnsdk::ldn_net::helper_port() && is_datagram(fd)) {  // (Local Play: the sender tells the helper's apart)
+        thread_local std::vector<uint8_t> tmp;
+        tmp.resize(n + nnsdk::ldn_net::kDeliverHeader);
+        ssize_t r = ::recvfrom(fd, tmp.data(), tmp.size(), host_msg_flags(flags), reinterpret_cast<sockaddr*>(&ss), &sl);
+        if (r < 0) return r;
+        r = from_network(tmp.data(), r, &ss);
+        const size_t copied = std::min<size_t>(static_cast<size_t>(r), n);
+        memcpy(buf, tmp.data(), copied);
+        if (want) from_host_addr(ss, addr, len);
+        return static_cast<ssize_t>(copied);
+    }
     const ssize_t r = ::recvfrom(fd, buf, n, host_msg_flags(flags), want ? reinterpret_cast<sockaddr*>(&ss) : nullptr,
                                  want ? &sl : nullptr);
     if (r >= 0 && want) from_host_addr(ss, addr, len);
@@ -317,6 +381,7 @@ ssize_t do_sendto(int fd, const void* buf, size_t n, int flags, const void* addr
     if (!addr) return ::send(fd, buf, n, host_msg_flags(flags) | kSendFlags);
     sockaddr_in in;
     if (!to_host_addr(addr, len, &in)) return -1;
+    if (to_network(in)) return send_to_network(fd, buf, n, in);
     if (!is_local(in.sin_addr.s_addr)) {
         log_offline("sendto", in);
         return fail(ENETUNREACH);
@@ -332,6 +397,14 @@ ssize_t do_sendmsg(int fd, const MsgHdr* m, int flags) {
     msghdr h{};
     if (m->name) {
         if (!to_host_addr(m->name, m->namelen, &in)) return -1;
+        if (to_network(in)) {
+            std::vector<uint8_t> flat;
+            for (int k = 0; k < static_cast<int>(m->iovlen); k++) {
+                const auto* b = static_cast<const uint8_t*>(m->iov[k].iov_base);
+                flat.insert(flat.end(), b, b + m->iov[k].iov_len);
+            }
+            return send_to_network(fd, flat.data(), flat.size(), in);
+        }
         if (!is_local(in.sin_addr.s_addr)) {
             log_offline("sendmsg", in);
             return fail(ENETUNREACH);
@@ -351,6 +424,26 @@ ssize_t do_recvmsg(int fd, MsgHdr* m, int flags) {
     if (m->name) {
         h.msg_name = &ss;
         h.msg_namelen = sizeof ss;
+    }
+    if (nnsdk::ldn_net::helper_port() && is_datagram(fd)) {  // (Local Play: as do_recvfrom, then over the iovecs)
+        size_t total = 0;
+        for (int k = 0; k < static_cast<int>(m->iovlen); k++) total += m->iov[k].iov_len;
+        thread_local std::vector<uint8_t> tmp;
+        tmp.resize(total + nnsdk::ldn_net::kDeliverHeader);
+        socklen_t sl = sizeof ss;
+        ssize_t r = ::recvfrom(fd, tmp.data(), tmp.size(), host_msg_flags(flags), reinterpret_cast<sockaddr*>(&ss), &sl);
+        if (r < 0) return r;
+        r = from_network(tmp.data(), r, &ss);
+        size_t left = std::min<size_t>(static_cast<size_t>(r), total), at = 0;
+        for (int k = 0; k < static_cast<int>(m->iovlen) && left; k++) {
+            const size_t c = std::min(left, static_cast<size_t>(m->iov[k].iov_len));
+            memcpy(m->iov[k].iov_base, tmp.data() + at, c);
+            at += c, left -= c;
+        }
+        if (m->name) from_host_addr(ss, m->name, &m->namelen);
+        m->controllen = 0;
+        m->flags = 0;
+        return static_cast<ssize_t>(at);
     }
     h.msg_iov = m->iov;
     h.msg_iovlen = m->iovlen;

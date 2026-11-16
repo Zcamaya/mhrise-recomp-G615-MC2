@@ -151,6 +151,26 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | `single_thread_pipelines` | Builds every pipeline on the renderer's own thread, with no background threads or warm-up (on by itself on a PowerVR GPU, whose shader compiler crashes building several at once). `parallel_pipelines` turns that off. |
 | `verbose_log` | Verbose log (line by line) plus a watchdog that prints the game's stack if it hangs. Slower: for debugging. |
 
+## Multiplayer (Local Play over the internet)
+
+The game's **Local Play** works over the internet through the same hub servers MHGU for Android uses
+(`hunterhubid-gu-hub.duckdns.org` and `morerokk-mhgurecomp-ldnserver.duckdns.org` by default, port 39510). Create a hub
+in Local Play and it's listed there; search for hubs and the ones listed show up. Nobody needs to forward a port: the
+server connects the players and passes their traffic. Only MH Rise hubs are listed for MH Rise (the server keeps each
+game's hubs apart), so this isn't crossplay with MHGU.
+
+Settings, under **Multiplayer** in the settings panel (saved as text files in the game folder):
+
+| Setting | File | |
+|---|---|---|
+| Matchmaking key | `hub_key` | Players with the same key only see each other's hubs; empty, public. Only its SHA-256 is sent. |
+| Hub servers | `hub_servers` | One `host[:port]` per line. Missing: the two defaults. `off`: none. |
+| Search hosts | `hub_hosts` | Other phones' `IP[:port]`, asked directly for their hub (same Wi-Fi, or a forwarded port). |
+| Port | `hub_port` | The TCP port a created hub listens on for direct joins (default 39510, 0 off). |
+
+The hub servers' protocol is the one documented in MHGU for Android's `server/`; the client here is this port's own
+code (`runtime/src/nnsdk/ldn.cpp`), with its own link protocol between the players.
+
 ## How it works
 
 ```
