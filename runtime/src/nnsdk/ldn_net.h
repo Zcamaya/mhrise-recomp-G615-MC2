@@ -24,4 +24,11 @@ uint16_t helper_port();
 // A datagram from one of the game's sockets (its local port) to an address in the network
 void send(uint16_t src_port, uint32_t dst_address, uint16_t dst_port, const void* data, size_t size);
 
+// Two copies of the game on one phone (a second install under another package name, its own data folder) both bind
+// the game's UDP port; the second one gets another real port (socket.cpp), and these tell the two apart. Ports the
+// game sees ("game") and the ones it really has ("real"); with no mapping they're the same.
+void map_port(uint16_t game, uint16_t real);  // real 0: drop the mapping
+uint16_t real_port(uint16_t game);
+uint16_t game_port(uint16_t real);
+
 }  // namespace nnsdk::ldn_net

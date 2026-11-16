@@ -585,16 +585,7 @@ final class TouchPad extends View {
     }
 
     private String label(Ctl c) {
-        switch (c) {
-            case LSTICK: return "left stick";
-            case RSTICK: return "right stick";
-            case DPAD: return "D-pad";
-            case MENU: return "menu";
-            case MINUS: return "−";
-            case PLUS: return "+";
-            default:
-                if (c.combo()) return "combo " + (c.comboIndex() + 1);
-                return c.name();
-        }
+        String name = Controls.label(c);
+        return c.combo() || name.length() <= 2 ? name : name.toLowerCase(java.util.Locale.ROOT);
     }
 }

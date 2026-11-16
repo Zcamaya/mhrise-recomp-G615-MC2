@@ -96,10 +96,28 @@ final class Controls {
         load();
     }
 
+    // Everything shows except the right stick: camera swipe turns the camera instead (Show / hide brings it back)
+    static boolean shownByDefault(Ctl c) { return c != Ctl.RSTICK; }
+
     void resetLayout() {
         for (Ctl c : Ctl.values()) {
             place[c.ordinal()] = HOME[c.ordinal()].clone();
-            shown[c.ordinal()] = true;
+            shown[c.ordinal()] = shownByDefault(c);
+        }
+    }
+
+    // A control's name in the menus
+    static String label(Ctl c) {
+        switch (c) {
+            case LSTICK: return "Left stick";
+            case RSTICK: return "Right stick";
+            case DPAD: return "D-pad";
+            case MENU: return "Menu";
+            case MINUS: return "−";
+            case PLUS: return "+";
+            default:
+                if (c.combo()) return "Combo " + (c.comboIndex() + 1);
+                return c.name();
         }
     }
 
@@ -135,6 +153,8 @@ final class Controls {
                 // (un control que ya no existe, o un número roto: queda el de siempre)
             }
         }
+        // Layouts saved before camera swipe had the right stick on: hide it once, like a new install
+        if (prefs.getInt("layout_version", 1) < 2) shown[Ctl.RSTICK.ordinal()] = false;
     }
 
     void save() {
@@ -149,7 +169,7 @@ final class Controls {
                 .putBoolean("deslizar", slide).putInt("zona_tactil", touchDeadzone).putBoolean("toque_stick", stickPress)
                 .putInt("zona_mando", padDeadzone).putInt("gatillo", trigger).putInt("stick_derecho", rightAxes)
                 .putBoolean("camera_swipe", cameraSwipe).putInt("swipe_speed", swipeSpeed)
-                .putString("disposicion", layout.toString());
+                .putString("disposicion", layout.toString()).putInt("layout_version", 2);
         for (int i = 0; i < COMBOS; i++) e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]);
         e.apply();
     }

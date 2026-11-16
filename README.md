@@ -82,11 +82,26 @@ about the app itself are always welcome in the issues; just please don't share o
 2. Copy your extracted game folders to the device, anywhere you like (for example one folder `MHRise` with the ExeFS
    and RomFS folders inside).
 3. Open the app, grant *All files access*, browse to that folder with the touch screen or the d-pad and choose
-   **Use this folder**. The app checks that the files are this game, the right version and not encrypted.
-4. Press **Start game**. From then on the app starts the game directly; to choose another folder, switch on
-   *Change folder* in the settings panel (see below) or open the app twice in a row (within ten seconds).
+   **Use this folder**. The app checks that the files are this game, the right version and not encrypted. It only reads
+   that folder.
+4. Choose a **data folder**: where the port keeps your saves, the shader cache, `log.txt` and its settings. It can be any
+   folder (*New folder here* makes one), or the game folder itself if you'd rather keep everything together.
+5. Press **Start game**. From then on the app starts the game directly; to change either folder, switch on
+   *Change folder* in the settings panel (see below) or open the app twice in a row (within ten seconds). Changing the
+   data folder copies your saves and settings to the new one (the old copy stays until you delete it).
 
-Saves, the shader cache and `log.txt` are written into that same folder. The first time you visit each place the game
+**Two copies on one phone.** A clone of the app (or the AnTuTu / Ludashi build next to the normal one) can play Local Play
+with the other copy, as long as each has **its own data folder**: same game folder, different data folders. Each data
+folder is its own console user (`user_id.txt`) with its own saves, and the second copy gets its own UDP port.
+
+**Benchmark package builds.** Each release also has `mhriseport-vX.Y.Z-antutu.apk` (package `com.antutu.ABenchMark`) and
+`mhriseport-vX.Y.Z-ludashi.apk` (`com.ludashi.benchmark`). They're the same app under a benchmark's package name: some
+phones (many MediaTek and Chinese-brand ones) recognise it and keep the CPU and GPU at full clock. They install next to
+the normal one, each with its own settings and drivers, so choose the game folder again in each. Uninstall the real
+benchmark first if you have it (same package name). Build one yourself with
+`PACKAGE=com.antutu.ABenchMark tools/build_apk.sh`.
+
+Saves, the shader cache and `log.txt` are written into the data folder. The first time you visit each place the game
 may stutter while its shaders are translated and compiled; they are cached for the next time.
 
 ## Controls and the settings panel
@@ -101,10 +116,12 @@ may stutter while its shaders are translated and compiled; they are cached for t
   or a few seconds without touching it hide it again.
 - **Touch controls.** A full controller on the screen, laid out like a traditional one: both sticks, the D-pad, A B X Y,
   L R ZL ZR, − and +, and L3 / R3 (also a short tap on a stick, without moving it). A finger can slide from one button to
-  the next. Touches that land on no control still reach the settings panel above.
+  the next. The right stick is hidden by default: dragging on the game (camera swipe) turns the camera instead. A tap that
+  lands on no control still reaches the game's touch screen.
 - **Controls menu.** The gear between − and + opens it:
   - *Touch:* on or off, opacity, size, vibration (off, light, medium, strong), sliding between buttons, the sticks' dead
-    zone, and the tap for L3 / R3.
+    zone, the tap for L3 / R3, camera swipe and its speed, and *Show / hide buttons*: a switch per control (turn the
+    right stick on there, and camera swipe off, to turn the camera with a stick).
   - *Edit layout:* drag each control where you want it, change its size or hide it from the bar at the top, or put the
     traditional layout back.
   - *Combos:* up to four. Each presses several buttons at once (A+X, say), from its own button on the screen and, if you

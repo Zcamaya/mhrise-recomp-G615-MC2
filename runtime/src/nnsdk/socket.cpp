@@ -290,9 +290,12 @@ uint16_t network_port(int fd) {
     return getsockname(fd, reinterpret_cast<sockaddr*>(&in), &len) == 0 ? ntohs(in.sin_port) : 0;
 }
 
+// The port the game thinks a socket has (another one if a second copy of the game on this phone took it first)
+uint16_t network_game_port(int fd) { return nnsdk::ldn_net::game_port(network_port(fd)); }
+
 ssize_t send_to_network(int fd, const void* buf, size_t n, const sockaddr_in& to) {
     if (!is_datagram(fd)) return fail(ENETUNREACH);
-    nnsdk::ldn_net::send(network_port(fd), ntohl(to.sin_addr.s_addr), ntohs(to.sin_port), buf, n);
+    nnsdk::ldn_net::send(network_game_port(fd), ntohl(to.sin_addr.s_addr), ntohs(to.sin_port), buf, n);
     return static_cast<ssize_t>(n);
 }
 
@@ -320,7 +323,30 @@ int do_bind(int fd, const void* addr, unsigned len) {
     if (!to_host_addr(addr, len, &in)) return -1;
     if (to_network(in)) in.sin_addr.s_addr = htonl(INADDR_ANY);  // (the network's address is this phone's)
     if (!is_local(in.sin_addr.s_addr)) return fail(EADDRNOTAVAIL);  // no hay más interfaz que lo
-    return ::bind(fd, reinterpret_cast<const sockaddr*>(&in), sizeof in);
+    const uint16_t wanted = ntohs(in.sin_port);
+    int r = ::bind(fd, reinterpret_cast<const sockaddr*>(&in), sizeof in);
+    if (wanted && is_datagram(fd)) {
+        if (r == 0) {
+            nnsdk::ldn_net::map_port(wanted, 0);
+            printf("[socket] UDP port %u\n", wanted);
+        } else if (errno == EADDRINUSE) {
+            // (another copy of the game on this phone has it: this one gets a free port and still sees its own)
+            in.sin_port = 0;
+            r = ::bind(fd, reinterpret_cast<const sockaddr*>(&in), sizeof in);
+            sockaddr_in got{};
+            socklen_t gl = sizeof got;
+            if (r == 0 && getsockname(fd, reinterpret_cast<sockaddr*>(&got), &gl) == 0) {
+                nnsdk::ldn_net::map_port(wanted, ntohs(got.sin_port));
+                printf("[socket] UDP port %u is taken (another copy of the game?): using %u for it\n", wanted,
+                       ntohs(got.sin_port));
+            } else {
+                printf("[socket] UDP port %u: %s\n", wanted, strerror(errno));
+            }
+        } else {
+            printf("[socket] UDP port %u: %s\n", wanted, strerror(errno));
+        }
+    }
+    return r;
 }
 
 int do_connect(int fd, const void* addr, unsigned len) {
@@ -347,9 +373,11 @@ int do_sockname(int fd, void* addr, unsigned* len, bool peer) {
     socklen_t sl = sizeof ss;
     const int r = peer ? ::getpeername(fd, reinterpret_cast<sockaddr*>(&ss), &sl)
                        : ::getsockname(fd, reinterpret_cast<sockaddr*>(&ss), &sl);
-    if (r == 0 && !peer && ss.ss_family == AF_INET && nnsdk::ldn_net::active() && is_datagram(fd)) {
+    if (r == 0 && !peer && ss.ss_family == AF_INET && is_datagram(fd)) {
         auto& in = reinterpret_cast<sockaddr_in&>(ss);
-        if (in.sin_addr.s_addr == htonl(INADDR_ANY)) in.sin_addr.s_addr = htonl(nnsdk::ldn_net::own_address());
+        in.sin_port = htons(nnsdk::ldn_net::game_port(ntohs(in.sin_port)));
+        if (nnsdk::ldn_net::active() && in.sin_addr.s_addr == htonl(INADDR_ANY))
+            in.sin_addr.s_addr = htonl(nnsdk::ldn_net::own_address());
     }
     if (r == 0) from_host_addr(ss, addr, len);
     return r;

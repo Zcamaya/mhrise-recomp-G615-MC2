@@ -4,13 +4,20 @@
 // sigue sin las funciones en línea.
 //
 // El apodo del usuario sale de <datos>/nombre.txt (la primera línea), o "Hunter".
+//
+// The user's ID is the data folder's own (<data>/user_id.txt, 32 hex digits): two copies of the game with their own
+// data folders are two different consoles' users to each other in Local Play. A data folder that already has saves
+// and no user_id.txt keeps the fixed ID older versions used.
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <random>
 #include <string>
+
+#include <sys/stat.h>
 
 #include "nnsdk/os.h"
 #include "nnsdk/types.h"
@@ -37,7 +44,50 @@ struct UserSelectionSettings;
 
 namespace {
 
-constexpr Uid kUser{{0x0123456789abcdefULL, 0xfedcba9876543210ULL}};
+constexpr Uid kOldUser{{0x0123456789abcdefULL, 0xfedcba9876543210ULL}};
+
+Uid load_user() {
+    const char* env = getenv("NIER_DATA");
+    const std::string data = env ? env : "/sdcard/NieR";
+    const std::string path = data + "/user_id.txt";
+    Uid uid{};
+    if (FILE* f = fopen(path.c_str(), "r")) {
+        char line[64] = {};
+        const bool got = fgets(line, sizeof line, f) && strlen(line) >= 32;
+        fclose(f);
+        if (got) {
+            char half[17] = {};
+            memcpy(half, line, 16);
+            uid.data[0] = strtoull(half, nullptr, 16);
+            memcpy(half, line + 16, 16);
+            uid.data[1] = strtoull(half, nullptr, 16);
+            if (uid.data[0] || uid.data[1]) return uid;
+        }
+    }
+    struct stat st;
+    if (stat((data + "/save").c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+        uid = kOldUser;
+    } else {
+        std::random_device rd;
+        uid.data[0] = (static_cast<uint64_t>(rd()) << 32) | rd();
+        uid.data[1] = (static_cast<uint64_t>(rd()) << 32) | rd();
+        if (!uid.data[0] && !uid.data[1]) uid = kOldUser;
+    }
+    if (FILE* f = fopen(path.c_str(), "w")) {
+        fprintf(f, "%016llx%016llx\n", static_cast<unsigned long long>(uid.data[0]),
+                static_cast<unsigned long long>(uid.data[1]));
+        fclose(f);
+    }
+    printf("[account] user %016llx%016llx\n", static_cast<unsigned long long>(uid.data[0]),
+           static_cast<unsigned long long>(uid.data[1]));
+    return uid;
+}
+
+// (on first use: NIER_DATA is set by then)
+const Uid& user() {
+    static const Uid uid = load_user();
+    return uid;
+}
 // Resultado de "no hay cuenta de red" (módulo account, 124): cualquier error sirve, el juego
 // solo distingue éxito de fallo.
 constexpr Result kResultNoNetworkAccount{124 | (280 << 9)};
@@ -82,20 +132,20 @@ private:
 void Initialize() {}
 
 bool TryOpenPreselectedUser(UserHandle* out) {
-    out->data[0] = kUser.data[0];
-    out->data[1] = kUser.data[1];
+    out->data[0] = user().data[0];
+    out->data[1] = user().data[1];
     out->data[2] = 1;
     return true;
 }
 
 Result OpenUser(UserHandle* out, const Uid& uid) {
-    if (!same(uid, kUser)) printf("[account] OpenUser de un Uid desconocido: se abre el único usuario\n");
+    if (!same(uid, user())) printf("[account] OpenUser de un Uid desconocido: se abre el único usuario\n");
     return TryOpenPreselectedUser(out) ? ResultSuccess : kResultCancelledByUser;
 }
 void CloseUser(const UserHandle&) {}
 
 Result GetUserId(Uid* out, const UserHandle&) {
-    *out = kUser;
+    *out = user();
     return ResultSuccess;
 }
 
@@ -105,17 +155,17 @@ Result GetUserCount(int* out) {
 }
 Result ListAllUsers(int* count, Uid* out, int max) {
     *count = max > 0 ? 1 : 0;
-    if (max > 0) out[0] = kUser;
+    if (max > 0) out[0] = user();
     return ResultSuccess;
 }
 Result GetUserExistence(bool* out, const Uid& uid) {
-    *out = same(uid, kUser);
+    *out = same(uid, user());
     return ResultSuccess;
 }
 
 // El selector de usuario con un único usuario: lo elige directamente.
 Result ShowUserSelector(Uid* out, const UserSelectionSettings&) {
-    *out = kUser;
+    *out = user();
     return ResultSuccess;
 }
 

@@ -458,7 +458,7 @@ void deliver(uint32_t from, uint16_t from_port, uint16_t to_port, const uint8_t*
     sockaddr_in to{};
     to.sin_family = AF_INET;
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    to.sin_port = htons(to_port);
+    to.sin_port = htons(nnsdk::ldn_net::real_port(to_port));
     ::sendto(g_helper, d.data(), d.size(), MSG_NOSIGNAL, reinterpret_cast<sockaddr*>(&to), sizeof to);
 }
 
@@ -1202,6 +1202,32 @@ bool in_network(uint32_t address) {
 }
 
 uint16_t helper_port() { return g_helper_port.load(); }
+
+namespace {
+std::mutex g_ports_m;
+std::vector<std::pair<uint16_t, uint16_t>> g_ports;  // (game, real)
+}  // namespace
+
+void map_port(uint16_t game, uint16_t real) {
+    std::lock_guard lock(g_ports_m);
+    g_ports.erase(std::remove_if(g_ports.begin(), g_ports.end(), [&](const auto& p) { return p.first == game; }),
+                  g_ports.end());
+    if (real && real != game) g_ports.emplace_back(game, real);
+}
+
+uint16_t real_port(uint16_t game) {
+    std::lock_guard lock(g_ports_m);
+    for (const auto& p : g_ports)
+        if (p.first == game) return p.second;
+    return game;
+}
+
+uint16_t game_port(uint16_t real) {
+    std::lock_guard lock(g_ports_m);
+    for (const auto& p : g_ports)
+        if (p.second == real) return p.first;
+    return real;
+}
 
 void send(uint16_t src_port, uint32_t dst, uint16_t dst_port, const void* data, size_t size) {
     if (!active() || size > kMaxLinkFrame - 64) return;

@@ -8,6 +8,10 @@
 # RELEASE=1: the build for players (the release workflow): -O3 without debug info, unused code and duplicate functions
 # dropped, symbols stripped, and an APK that isn't debuggable (ART runs a debuggable app's Java slower). Without it,
 # RelWithDebInfo and a debuggable APK, for testing.
+# PACKAGE=<name>: the same app under another package name (with LABEL=<name on the home screen>). Some phones give a
+# benchmark's package the most CPU and GPU clock (com.antutu.ABenchMark, com.ludashi.benchmark), so the release has
+# those too. The Java classes keep their own package, only what Android sees changes; each one installs next to the
+# others with its own settings and drivers.
 # Compila la APK. Firma con la clave de depuración de Android salvo que se pase KEYSTORE.
 set -euo pipefail
 
@@ -23,7 +27,8 @@ else
   BUILD_TYPE=RelWithDebInfo BUILD="$ROOT/build/android" DEBUG_FLAG="--debug-mode"
 fi
 STAGE="$ROOT/build/apk"
-APK="$ROOT/build/mhriseport.apk"
+APK="${APK_OUT:-$ROOT/build/mhriseport.apk}"
+PACKAGE="${PACKAGE:-}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 4)}"
 
 for need in "$NDK/build/cmake/android.toolchain.cmake" "$BT/aapt2" "$JAR"; do
@@ -56,8 +61,15 @@ cp "$ROOT/runtime/external/libadrenotools/LICENSE" "$STAGE/assets/licenses/libad
 cp "$ROOT/runtime/external/libadrenotools/lib/linkernsbypass/LICENSE" "$STAGE/assets/licenses/linkernsbypass.txt"
 cp "$ROOT/runtime/external/volk/LICENSE.md" "$STAGE/assets/licenses/volk.txt"
 "$BT/aapt2" compile --dir "$ROOT/android/res" -o "$STAGE/res.zip"
-"$BT/aapt2" link --manifest "$ROOT/android/AndroidManifest.xml" -I "$JAR" -R "$STAGE/res.zip" --auto-add-overlay \
-  $DEBUG_FLAG -o "$STAGE/base.apk"
+MANIFEST="$ROOT/android/AndroidManifest.xml" RENAME=()
+if [ -n "$PACKAGE" ]; then
+  MANIFEST="$STAGE/AndroidManifest.xml"
+  sed "s|android:label=\"MH Rise port\"|android:label=\"${LABEL:-MH Rise port ($PACKAGE)}\"|" \
+    "$ROOT/android/AndroidManifest.xml" > "$MANIFEST"
+  RENAME=(--rename-manifest-package "$PACKAGE")
+fi
+"$BT/aapt2" link --manifest "$MANIFEST" -I "$JAR" -R "$STAGE/res.zip" --auto-add-overlay \
+  "${RENAME[@]}" $DEBUG_FLAG -o "$STAGE/base.apk"
 (cd "$STAGE" && zip -q -r base.apk lib classes.dex assets)
 "$BT/zipalign" -f -p 4 "$STAGE/base.apk" "$STAGE/aligned.apk"
 

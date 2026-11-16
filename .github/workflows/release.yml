@@ -2,7 +2,8 @@ name: release
 
 # Pushing a tag vX.Y.Z builds the optimized APK (tools/build_apk.sh RELEASE=1), signs it with the project's release key
 # (repository secrets RELEASE_KEYSTORE_B64 and RELEASE_KS_PASS, key alias recomp) and attaches it to the GitHub release
-# of that tag (created if missing).
+# of that tag (created if missing). Two more APKs go with it, the same app under a benchmark's package name (AnTuTu,
+# Ludashi), for phones that run benchmarks at full clock (tools/build_apk.sh: PACKAGE).
 on:
   push:
     tags: ['v*']
@@ -43,9 +44,13 @@ jobs:
             echo "::error::Missing the RELEASE_KEYSTORE_B64 / RELEASE_KS_PASS repository secrets" >&2
             exit 1
           fi
-          RELEASE=1 KEYSTORE="$RUNNER_TEMP/release.jks" KEY_ALIAS=recomp bash tools/build_apk.sh
+          export RELEASE=1 KEYSTORE="$RUNNER_TEMP/release.jks" KEY_ALIAS=recomp
+          APK_OUT="build/mhriseport-${GITHUB_REF_NAME}.apk" bash tools/build_apk.sh
+          APK_OUT="build/mhriseport-${GITHUB_REF_NAME}-antutu.apk" PACKAGE=com.antutu.ABenchMark \
+            LABEL="MH Rise port (AnTuTu)" bash tools/build_apk.sh
+          APK_OUT="build/mhriseport-${GITHUB_REF_NAME}-ludashi.apk" PACKAGE=com.ludashi.benchmark \
+            LABEL="MH Rise port (Ludashi)" bash tools/build_apk.sh
           rm -f "$RUNNER_TEMP/release.jks"
-          cp build/mhriseport.apk "build/mhriseport-${GITHUB_REF_NAME}.apk"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,4 +58,4 @@ jobs:
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "MH Rise port $GITHUB_REF_NAME" \
               --notes "Install the APK, then follow the README: you need your own extracted game files."
-          gh release upload "$GITHUB_REF_NAME" "build/mhriseport-${GITHUB_REF_NAME}.apk" --clobber
+          gh release upload "$GITHUB_REF_NAME" build/mhriseport-"${GITHUB_REF_NAME}"*.apk --clobber

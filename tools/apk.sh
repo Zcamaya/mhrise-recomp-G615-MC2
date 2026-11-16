@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APK="$("$ROOT/tools/build_apk.sh")"
 
-PKG=io.github.iamwilmar.mhriseport
+PKG=${PACKAGE:-io.github.iamwilmar.mhriseport}
 adb shell am force-stop "$PKG" 2> /dev/null || true
 adb install -r "$APK" > /dev/null
 echo "installed: $(adb shell dumpsys package "$PKG" | grep -m1 lastUpdateTime | tr -d ' ')"
