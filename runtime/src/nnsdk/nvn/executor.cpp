@@ -6398,6 +6398,50 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
             }
         }
     }
+    // DIAGNÓSTICO (las primeras 6 que no salen ni así): la misma pipeline cambiando una parte del estado cada vez, para
+    // saber qué es lo que el driver no quiere (en la Adreno 730 con el 512.863 no era ningún shader: los mismos pasaban en
+    // otras pipelines). Las de prueba se destruyen; solo es el log.
+    if (created != VK_SUCCESS) {
+        static std::atomic<int> probed{0};
+        if (probed++ < 6) {
+            struct Probe {
+                const char* what;
+                void (*change)(PipelineKey&);
+            };
+            static const Probe probes[] = {
+                {"sin mezcla", [](PipelineKey& k) { k.color.blend_enable = 0; }},
+                {"sin profundidad ni stencil", [](PipelineKey& k) { memset(&k.depth_stencil, 0, sizeof k.depth_stencil); }},
+                {"sin alpha to coverage", [](PipelineKey& k) { k.alpha_to_coverage = 0; }},
+                {"rasterizado por defecto", [](PipelineKey& k) { memset(&k.polygon, 0, sizeof k.polygon); }},
+                {"sin primitive restart", [](PipelineKey& k) { k.primitive_restart = 0; }},
+                {"todo lo anterior", [](PipelineKey& k) {
+                     k.color.blend_enable = 0, k.alpha_to_coverage = 0, k.primitive_restart = 0;
+                     memset(&k.depth_stencil, 0, sizeof k.depth_stencil);
+                     memset(&k.polygon, 0, sizeof k.polygon);
+                 }},
+            };
+            std::string passes;
+            for (const Probe& pr : probes) {
+                PipelineKey changed = key;
+                pr.change(changed);
+                VkPipeline test = VK_NULL_HANDLE;
+                if (make_graphics_pipeline(changed, modules, inputs, l.pipeline, rp, VK_NULL_HANDLE, test) == VK_SUCCESS) {
+                    passes += std::string(passes.empty() ? "" : ", ") + pr.what;
+                    vkDestroyPipeline(vk()->device, test, nullptr);
+                }
+            }
+            char formats[160] = "";
+            for (uint32_t k = 0; k < key.color_count && k < 8; k++) {
+                const size_t at = strlen(formats);
+                snprintf(formats + at, sizeof formats - at, "%s%u", k ? "/" : "", key.pass_colors[k]);
+            }
+            NVN_LOG("pipeline rechazada, estado: %u colores (formatos %s, profundidad %u), mezcla 0x%x, %u muestras, "
+                    "profundidad %d/%d, stencil %d; sale %s\n", key.color_count, formats, key.pass_depth,
+                    static_cast<unsigned>(key.color.blend_enable), key.samples, key.depth_stencil.depth_test,
+                    key.depth_stencil.depth_write, key.depth_stencil.stencil_test,
+                    passes.empty() ? "con ninguno de los cambios (no es el estado: los shaders o su enlace)" : passes.c_str());
+        }
+    }
     if (VkResult r = created; r != VK_SUCCESS)
     {
         std::string stages;

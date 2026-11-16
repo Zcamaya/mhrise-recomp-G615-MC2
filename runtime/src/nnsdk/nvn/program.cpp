@@ -436,6 +436,36 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         }
         if (ok) note_spirv_opt(print, out.shader);
     }
+    // Un BRX (switch) en un shader gráfico, también por spirv-opt: el flujo con banderas que deja Eden al deshacerlo es el
+    // que el driver de Qualcomm compilaba mal en el skinning de la cara (ver spirv_opt_stages), y en la Mali-G615 de un
+    // Dimensity 8300 el pase que el driver abortaba cada frame (pantalla negra) era el de un pixel shader con BRX
+    // (9ba7ca38dd1316de). Se sabe después de traducir (has_brx va en la caché): con su propia clave. <datos>/sin_spirv_opt_brx
+    // al arrancar: como antes.
+    const uint32_t stage_bit = 1u << static_cast<uint32_t>(out.shader.stage);
+    if (ok && out.shader.has_brx && out.shader.stage != nvnshader::Stage::Compute && !(options.optimize_stages & stage_bit) &&
+        !NVN_FLAG("sin_spirv_opt_brx")) {
+        nvnshader::Options opt = options;
+        opt.optimize_stages |= stage_bit;
+        nvn::spirv_cache::Key opt_key;
+        const bool opt_cacheable = cacheable && translation_key(out, bound, opt, barriers_kept && keep, opt_key);
+        nvnshader::Translated optimized;
+        bool got = opt_cacheable && nvn::spirv_cache::global().find(opt_key, optimized);
+        if (!got) {
+            got = nvnshader::translate(reinterpret_cast<const uint8_t*>(out.code), bound, opt, optimized);
+            if (got) {
+                note_spirv_opt(print, optimized);
+                if (opt_cacheable) nvn::spirv_cache::global().insert(opt_key, optimized);
+            }
+        }
+        if (got && optimized.resources.size() == out.shader.resources.size()) {
+            out.shader = std::move(optimized);
+            out.cache_key = opt_cacheable ? opt_key : nvn::spirv_cache::Key{};
+            static std::atomic<int> logged{0};
+            if (logged++ < 16)
+                NVN_LOG("shader %016llx (%s) con BRX: pasado por spirv-opt\n", static_cast<unsigned long long>(print),
+                        nvnshader::stage_name(out.shader.stage));
+        }
+    }
     // Reemplazo: <datos>/spirv_reemplazo/<huella>.spv, el mismo SPIR-V (mismos recursos y bindings) pasado por spirv-opt
     // fuera. El driver de Qualcomm compila mal el flujo con banderas que deja Eden al deshacer un BRX en el skinning de la
     // cara del cazador (793657b4): toma el caso que pone los pesos a cero (1/0 → NaN y la cabeza no se dibuja); con el
