@@ -206,6 +206,21 @@ final class SettingsMenu {
                 "Those of the hunters, monsters and scenery. Off, the shadow maps aren't drawn: less work for a weak "
                         + "GPU. Applies at once.",
                 "no_shadows", true);
+        exclusive("Shadow quality",
+                "The size of the shadow maps, as a share of the game's own. Lower: blurrier shadow edges and a lot less "
+                        + "GPU work in one of the heaviest passes. Applies at once.",
+                new String[] {"Game's", "Half", "Quarter"}, new String[] {null, "shadow_half", "shadow_quarter"});
+        header("Detail");
+        exclusive("Model detail",
+                "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
+                        + "less work for the GPU, simpler models a little closer. Applies at once.",
+                new String[] {"Game's", "Low", "Lowest", "High"},
+                new String[] {null, "model_detail_low", "model_detail_lowest", "model_detail_high"});
+        exclusive("Texture streaming",
+                "How many of the largest texture sizes the game skips loading. Fewer: blurrier textures up close, less "
+                        + "memory and bandwidth. Applies as textures load.",
+                new String[] {"Game's", "One size smaller", "Two sizes smaller"},
+                new String[] {null, "texture_bias_1", "texture_bias_2"});
         header("Textures");
         {
             final String[] files = {null, "bindless_arrays", "no_bindless_arrays"};
@@ -682,6 +697,17 @@ final class SettingsMenu {
     // An on / off row backed by a switch file. inverted: the file turns it off (the sin_* ones).
     private void flag(String title, String help, String file, boolean inverted) {
         toggle(title, help, () -> has(file) != inverted ? 1 : 0, v -> put(file, (v != 0) != inverted));
+    }
+
+    // A choice where each option (but the first, the default) is its own switch file
+    private void exclusive(String title, String help, String[] options, String[] files) {
+        choice(title, help, options, () -> {
+            for (int i = files.length - 1; i > 0; i--)
+                if (has(files[i])) return i;
+            return 0;
+        }, v -> {
+            for (int i = 1; i < files.length; i++) put(files[i], i == v);
+        });
     }
 
     private void action(String title, String help, Runnable run) {

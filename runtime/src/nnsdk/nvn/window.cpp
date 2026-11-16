@@ -678,6 +678,7 @@ void nvn::present(Window& w, int index) {
         const int64_t period_ns = fps > 0.0f ? static_cast<int64_t>(1e9 / fps) : 16'666'667LL * std::max(w.present_interval, 1);
         g_frame_period_ns.store(period_ns, std::memory_order_relaxed);
         dynamic_resolution(period_ns);
+        game_tweaks();
         if (period_ns != logged_period) {
             NVN_LOG("ritmo de presentación: %.1f ms por frame (%.0f fps)%s\n", period_ns / 1e6, 1e9 / period_ns,
                     cap ? " (límite del menú)" : "");

@@ -294,6 +294,8 @@ std::vector<pid_t> critical_threads();
 int64_t frame_period_ns();
 // Pistas de rendimiento de Android (perf_hint.cpp): una vez por frame del juego, desde el hilo que presenta.
 void perf_hint_frame(int64_t period_ns);
+// Shadow, model and texture detail settings inside the game (game_tweaks.cpp), once per present
+void game_tweaks();
 // Copia la textura de la ventana a la imagen del swapchain (la llama window.cpp al presentar).
 // Con FSR 1 (fsr.cpp) si el formato lo permite; si no, un blit lineal.
 bool blit_to_swapchain(Texture& texture, const VkRect2D& crop, VkImage swapchain_image, VkFormat format, VkExtent2D extent,

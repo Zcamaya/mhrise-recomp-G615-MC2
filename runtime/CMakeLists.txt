@@ -31,6 +31,7 @@ add_library(nnsdk SHARED
   src/nnsdk/nvn/bcn.cpp
   src/nnsdk/nvn/driver.cpp
   src/nnsdk/nvn/perf_hint.cpp
+  src/nnsdk/nvn/game_tweaks.cpp
   src/nnsdk/nvn/buffer.cpp
   src/nnsdk/nvn/device.cpp
   src/nnsdk/nvn/cmdbuf.cpp

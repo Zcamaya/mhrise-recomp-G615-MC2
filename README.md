@@ -131,6 +131,9 @@ folder, which the game checks once a second; the ones only read at start-up say 
 | `no_affinity` | Doesn't pin the frame's three threads to the fast cores (they're only pinned when the phone has at least three fast cores). Live. |
 | `fps_20`, `fps_25`, `fps_40`, `fps_45` | FPS limit other than the game's 30 (`60fps` for 60). The game measures each frame's length, so it keeps its normal speed: a lower limit saves GPU, heat and battery without slow motion. Loading screens still run at 60. Live. |
 | `no_shadows` | Shadows off: the shadow maps aren't drawn and every shadow lookup reads as lit. Live. |
+| `shadow_half`, `shadow_quarter` | Shadow maps at half or a quarter of the game's own size (never below 256), through the game's own shadow setting (the PC version's shadow quality). Blurrier edges, much less GPU work. Live. MH Rise 16.0.1 only. |
+| `model_detail_low`, `model_detail_lowest`, `model_detail_high` | Scales the game's mesh LOD rate (the PC version's mesh quality) by 0.75, 0.5 or 1.5. Live. MH Rise 16.0.1 only. |
+| `texture_bias_1`, `texture_bias_2` | The texture streamer skips one or two more of the largest mip levels (the game's TextureLoadLevelBias). Live. MH Rise 16.0.1 only. |
 | `60fps` | Unlocks 60 fps mode (the Flip 2 GPU reaches ~45 in the village, less in hunts). |
 | `no_fps` | Hides the FPS counter (the same switch as in the settings panel). |
 | `xbox_buttons`, `retro_buttons` | Force the face buttons to be read by position (`xbox_buttons`) or by name (`retro_buttons`) if a controller comes out swapped. |
