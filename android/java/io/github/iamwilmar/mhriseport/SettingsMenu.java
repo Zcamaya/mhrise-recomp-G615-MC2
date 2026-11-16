@@ -424,10 +424,11 @@ final class SettingsMenu {
                 "Integer vertex data (bone indices…) reaches the shader as integers, as on the console. Without "
                         + "it, characters stretch into spikes on Mali GPUs." + next,
                 "no_int_attribs", true);
-        flag("Pin subgroup size",
-                "Makes the driver run shaders with the number of lanes they were translated for. Turnip may otherwise "
-                        + "run some with twice as many, which shows as blocks of the picture flashing black." + next,
-                "no_subgroup_pin", true);
+        flag("Subgroups in compute shaders",
+                "Votes and shuffles across a subgroup in compute shaders. Off: each invocation works alone, as Eden does "
+                        + "without them. Try it if blocks of the picture flash black (Rise's tiled lighting is a compute "
+                        + "shader). The shaders are translated again, so the first start stutters." + next,
+                "no_subgroup_compute", true);
         flag("spirv-opt on switch shaders",
                 "Runs shaders that contain a switch (BRX) through the optimizer; some drivers miscompile them." + next,
                 "no_spirv_opt_brx", true);
@@ -450,6 +451,76 @@ final class SettingsMenu {
         flag("Mali: return after a switch",
                 "The same on Mali GPUs (ARM's driver and PanVK)." + next,
                 "no_return_mali", true);
+
+        header("Driver environment");
+        note("Settings for the GPU driver itself, as NAME=value, set before it starts (on the next start). Mesa's drivers "
+                + "read them: Turnip (TU_DEBUG, FD_DEV_FEATURES) and PanVK (PANVK_DEBUG). The phone's own drivers "
+                + "ignore them.");
+        envToken("Turnip: no LRZ", "TU_DEBUG=nolrz. Turns off Turnip's low-resolution depth test, which culls whole "
+                + "blocks of the screen. Try it if blocks of the picture flash black.", "TU_DEBUG", "nolrz");
+        envToken("Turnip: system memory rendering", "TU_DEBUG=sysmem. Draws straight to memory instead of in the "
+                + "GPU's on-chip tiles. Slower; for flicker or flashing on new Adreno GPUs.", "TU_DEBUG", "sysmem");
+        envToken("Turnip: no UBWC", "TU_DEBUG=noubwc. No compression on any image.", "TU_DEBUG", "noubwc");
+        envToken("Turnip: UBWC flag hint", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1. Reported to stop screen "
+                + "flicker with some Adreno 8xx Turnip builds.", "FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1");
+        List<String> env = lines("driver_env.txt");
+        for (int i = 0; i < env.size(); i++) {
+            final int k = i;
+            row(env.get(i), "Remove", "Tap to remove this variable.", v -> {
+                List<String> l = lines("driver_env.txt");
+                if (k < l.size()) l.remove(k);
+                writeEnv(l);
+                build();
+            }, false);
+        }
+        action("Add variable", "Any driver variable, as NAME=value.",
+                () -> ask("Add variable", "NAME=value", "", 256, text -> {
+                    int eq = text.indexOf('=');
+                    if (eq <= 0) return;
+                    setEnv(text.substring(0, eq).trim(), text.substring(eq + 1).trim());
+                }));
+    }
+
+    // ---- driver environment (driver_env.txt, read by vk.cpp at start-up) -----------------------------------------------
+
+    private String envValue(String name) {
+        for (String l : lines("driver_env.txt"))
+            if (l.startsWith(name + "=")) return l.substring(name.length() + 1);
+        return null;
+    }
+
+    private void setEnv(String name, String value) {
+        List<String> l = lines("driver_env.txt");
+        l.removeIf(x -> x.startsWith(name + "="));
+        if (value != null && !value.isEmpty()) l.add(name + "=" + value);
+        writeEnv(l);
+    }
+
+    private void writeEnv(List<String> l) {
+        if (folder == null) return;
+        if (l.isEmpty()) new File(folder, "driver_env.txt").delete();
+        else writeLines("driver_env.txt", l);
+    }
+
+    // One option of a comma-separated variable (TU_DEBUG=nolrz,sysmem), or a whole NAME=value, as a toggle
+    private void envToken(String title, String help, String name, String token) {
+        final boolean list = !token.contains("=");
+        toggle(title, help, () -> {
+            String v = envValue(name);
+            if (v == null) return 0;
+            return (list ? Arrays.asList(v.split(",")).contains(token) : v.equals(token)) ? 1 : 0;
+        }, on -> {
+            String v = envValue(name);
+            if (!list) {
+                setEnv(name, on != 0 ? token : null);
+            } else {
+                List<String> parts = new ArrayList<>();
+                if (v != null) for (String p : v.split(",")) if (!p.isEmpty() && !p.equals(token)) parts.add(p);
+                if (on != 0) parts.add(token);
+                setEnv(name, String.join(",", parts));
+            }
+            build();
+        });
     }
 
     private void buildTouch() {

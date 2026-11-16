@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <mutex>
@@ -92,7 +93,29 @@ void probe_limits(VkContext& c) {
     for (VkDeviceMemory m : mems) vkFreeMemory(c.device, m, nullptr);
 }
 
+// Driver environment: <datos>/driver_env.txt, one NAME=value per line (# starts a comment), set before the driver
+// is loaded. Mesa's drivers read their debug settings from the environment when the Vulkan instance is created:
+// TU_DEBUG=sysmem,nolrz,noubwc and FD_DEV_FEATURES=… for Turnip (still being brought up on the Adreno 8xx),
+// PAN_DEBUG / PANVK_DEBUG for PanVK. The settings menu writes it (Debug → Driver environment). Read at start-up.
+void driver_environment() {
+    const char* data = getenv("NIER_DATA");
+    FILE* f = fopen((std::string(data ? data : ".") + "/driver_env.txt").c_str(), "r");
+    if (!f) return;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        std::string l(line);
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r' || l.back() == ' ')) l.pop_back();
+        const size_t eq = l.find('=');
+        if (l.empty() || l[0] == '#' || eq == std::string::npos || eq == 0) continue;
+        const std::string name = l.substr(0, eq), value = l.substr(eq + 1);
+        setenv(name.c_str(), value.c_str(), 1);
+        NVN_LOG("driver environment: %s=%s\n", name.c_str(), value.c_str());
+    }
+    fclose(f);
+}
+
 bool create(VkContext& c, bool system_driver) {
+    driver_environment();
     if (!driver::load(system_driver)) return false;
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "MH Rise port";

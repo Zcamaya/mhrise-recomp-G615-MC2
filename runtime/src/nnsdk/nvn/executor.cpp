@@ -9068,8 +9068,9 @@ void Executor::dispatch(const cmd::Dispatch& v) {
                 char b[24];
                 const auto* f = reinterpret_cast<const float*>(u.address);
                 for (uint64_t i = 0; i < std::min<uint64_t>(u.size / 4, 16); i++) snprintf(b, sizeof b, " %.6g", f[i]), vals += b;
-                NVN_LOG("[estado] frame %llu: compute %p (%u %u %u) c%d (%llu bytes):%s\n", (unsigned long long)frame_,
-                        static_cast<const void*>(cs), x, y, z, k + static_cast<int>(kUniformBankBase),
+                NVN_LOG("[estado] frame %llu: compute %p shader %016llx (%u %u %u) c%d (%llu bytes):%s\n",
+                        (unsigned long long)frame_, static_cast<const void*>(cs),
+                        static_cast<unsigned long long>(cs->print), x, y, z, k + static_cast<int>(kUniformBankBase),
                         (unsigned long long)u.size, vals.c_str());
             }
         }

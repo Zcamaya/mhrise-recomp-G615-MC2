@@ -337,6 +337,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // walls black; Eden leaves the stage out on Turnip too). <datos>/subgroup_gs at translation: as the driver says.
         if (c->driver_id == VK_DRIVER_ID_MESA_TURNIP && !NVN_FLAG("subgroup_gs"))
             options.subgroup_stages &= ~static_cast<uint32_t>(VK_SHADER_STAGE_GEOMETRY_BIT);
+        // <datos>/no_subgroup_compute at translation: compute shaders without subgroup operations (each invocation its
+        // own warp, as Eden does without them), the other stages unchanged. A test for whole workgroups of a compute
+        // shader going wrong (the Adreno 830 on Turnip: tiles of Rise's light culling flashing black).
+        if (NVN_FLAG("no_subgroup_compute"))
+            options.subgroup_stages &= ~static_cast<uint32_t>(VK_SHADER_STAGE_COMPUTE_BIT);
         // Subgrupos más pequeños que el warp de 32 de Maxwell (las Mali Valhall: 16): Eden solo sabe de iguales o mayores,
         // y un voto o un ballot del juego vería medio warp (un bucle que espera a que todo el warp acabe puede no salir).
         // Ahí, sin operaciones de subgrupo: Eden emula los votos como si cada invocación fuera su propio warp.
