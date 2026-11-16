@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "nnsdk/nvn/driver.h"
+#include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/nvn.h"
 
 namespace nvn {
@@ -118,9 +119,13 @@ bool create(VkContext& c, bool system_driver) {
     c.gpu = gpus[0];
     vkGetPhysicalDeviceProperties(c.gpu, &c.props);
     {
+        VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         p2.pNext = &c.subgroup;
+        c.subgroup.pNext = &driver;
         vkGetPhysicalDeviceProperties2(c.gpu, &p2);
+        c.subgroup.pNext = nullptr;
+        c.driver_id = static_cast<uint32_t>(driver.driverID);
         NVN_LOG("subgrupos: tamaño %u, etapas 0x%x, operaciones 0x%x\n", c.subgroup.subgroupSize,
                 c.subgroup.supportedStages, c.subgroup.supportedOperations);
     }
@@ -310,6 +315,38 @@ bool create(VkContext& c, bool system_driver) {
         device_ext.push_back(VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME);
         c.filter_minmax = true;
     }
+    // Subgroup size control. A driver that may run a shader with more lanes than it reports (Turnip: 64 or 128, its
+    // choice per shader) breaks the translated shaders' votes and shuffles, which are built for subgroupSize lanes:
+    // pipelines ask for exactly that many in every stage the driver lets them (Banana Native does the same). Seen on
+    // the Adreno 830 with Turnip as blocks of the lit picture flashing black in Rise's tiled lighting.
+    // <datos>/no_subgroup_pin at start-up: the driver picks, as before.
+    VkPhysicalDeviceSubgroupSizeControlFeaturesEXT size_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT};
+    if (has_ext(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)) {
+        VkPhysicalDeviceSubgroupSizeControlPropertiesEXT size_props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &size_props;
+        vkGetPhysicalDeviceProperties2(c.gpu, &p2);
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        f2.pNext = &size_control;
+        vkGetPhysicalDeviceFeatures2(c.gpu, &f2);
+        c.subgroup_min = size_props.minSubgroupSize;
+        c.subgroup_max = size_props.maxSubgroupSize;
+        const uint32_t want = c.subgroup.subgroupSize;
+        const bool varies = c.subgroup_min != c.subgroup_max;
+        const bool pin = varies && size_control.subgroupSizeControl && want >= c.subgroup_min &&
+                         want <= c.subgroup_max && size_props.requiredSubgroupSizeStages && !NVN_FLAG("no_subgroup_pin");
+        NVN_LOG("subgroup sizes %u-%u, pinnable in stages %#x: %s\n", c.subgroup_min, c.subgroup_max,
+                size_props.requiredSubgroupSizeStages,
+                pin ? "pinned to the reported size" : !varies ? "fixed, nothing to pin" : "left to the driver");
+        if (pin) {
+            size_control.computeFullSubgroups = VK_FALSE;
+            size_control.pNext = const_cast<void*>(dci.pNext);
+            dci.pNext = &size_control;
+            device_ext.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+            c.subgroup_pin = want;
+            c.subgroup_pin_stages = size_props.requiredSubgroupSizeStages;
+        }
+    }
     NVN_LOG("shaderFloat16: %s\n", float16.shaderFloat16 ? "sí" : "no");
     dci.enabledExtensionCount = static_cast<uint32_t>(device_ext.size());
     dci.ppEnabledExtensionNames = device_ext.data();
@@ -318,6 +355,7 @@ bool create(VkContext& c, bool system_driver) {
         NVN_LOG("vkCreateDevice con extensiones opcionales: %s; sin ellas\n", vk_result_name(r));
         c.store_op_none = c.display_timing = c.push_descriptor = false;
         c.nonuniform_sampled = c.custom_border_color = c.filter_minmax = false;
+        c.subgroup_pin = c.subgroup_pin_stages = 0;
         float16.shaderFloat16 = VK_FALSE;
         draw_indirect_count = false;
         dci.pNext = nullptr;

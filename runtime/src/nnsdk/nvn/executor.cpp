@@ -6055,6 +6055,13 @@ std::string attrib_formats(const PipelineKey& key, uint64_t vs_inputs) {
     return " atributos" + out + (scaled ? " (con escalados)" : "");
 }
 
+// Ties a stage to the subgroup size its shader was translated for, where the driver would pick one itself (vk.cpp)
+static void pin_subgroup(VkPipelineShaderStageCreateInfo& si) {
+    static const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT pin{
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT, nullptr, vk()->subgroup_pin};
+    if (vk()->subgroup_pin && (vk()->subgroup_pin_stages & si.stage)) si.pNext = &pin;
+}
+
 VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* modules, uint64_t vs_inputs,
                                 VkPipelineLayout layout, VkRenderPass rp, VkPipelineCache cache, VkPipeline& p) {
     p = VK_NULL_HANDLE;
@@ -6065,6 +6072,7 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
         si.stage = vk_stage(static_cast<Stage>(s));
         si.module = modules[s];
         si.pName = "main";
+        pin_subgroup(si);
         stages.push_back(si);
     }
 
@@ -6159,6 +6167,7 @@ VkResult make_compute_pipeline(VkShaderModule module, VkPipelineLayout layout, V
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = module;
     ci.stage.pName = "main";
+    pin_subgroup(ci.stage);
     ci.layout = layout;
     return vkCreateComputePipelines(vk()->device, cache, 1, &ci, nullptr, &p);
 }
