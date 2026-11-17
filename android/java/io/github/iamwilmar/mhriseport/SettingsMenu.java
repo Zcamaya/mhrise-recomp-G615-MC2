@@ -265,6 +265,11 @@ final class SettingsMenu {
                         + "they don't turn into solid cards. Applies at once.",
                 "fast_depth", false);
         header("Detail");
+        flag("Occlusion results",
+                "Lets the game see which small things its GPU test found visible, so endemic life, wirebugs and some "
+                        + "lights get drawn. Off: they stay invisible (you can still gather them). Costs almost nothing. "
+                        + "Applies at once.",
+                "no_readback_copies", true);
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
@@ -1132,7 +1137,7 @@ final class SettingsMenu {
         "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
-        "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur",
+        "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_readback_copies",
         "no_return_mali", "no_return_qualcomm", "no_safe_translation", "no_shadows", "no_short_subgroups",
         "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_ubwc", "no_warmup", "perf_stats", "resolution_360",
         "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
