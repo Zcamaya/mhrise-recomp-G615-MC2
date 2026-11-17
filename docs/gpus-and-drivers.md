@@ -78,10 +78,18 @@ Turnip was still being brought up on the A8xx while this was written, and builds
   - **With ARM's driver,** subgroup operations are off. Eden emulates votes as if each invocation were its own warp.
     With them on, ARM's driver stalls the GPU: tested again after the warp barriers fix on a Dimensity 720 (r32p1), a
     bloom pass took seconds per frame. They stay off there.
-  - **The world missing, only the sky drawn** (Dimensity 720, Mali-G57, ARM's r32p1; fine on PanVK on the same
-    phone). The shadow maps held the whole village, so the game was submitting meshes; the main view had no depth
-    pre-pass and no meshes at all, but its GPU occlusion culling isn't why: with it off the main view was just as empty. Dynamic shadows
-    and subgroups were ruled out too. Still open; see [fixes.md](fixes.md).
+
+## Old drivers (Vulkan 1.1)
+
+ARM's r32 driver on a Dimensity 720 (Mali-G57) lacks `VK_KHR_draw_indirect_count`, `extended_dynamic_state`,
+`depth_clip_enable`, `vertex_attribute_divisor`, `sampler_filter_minmax`, `dynamic_rendering` and vertex-stage
+stores. The one that mattered: without draw-indirect-count, MH Rise's multi-draws (almost the whole main view) were
+skipped and only the sky showed. The count is now taken on the CPU (`no_count_fallback`), and without the
+`multiDrawIndirect` feature each draw gets its own call. Check the log for "multi-draw no soportado" or "sin dibujar"
+numbers in the millions on any new old driver.
+
+That driver also has no `multiDrawIndirect` (each multi-draw becomes one indirect call per draw) and no
+`fillModeNonSolid` (point and line polygon modes are drawn filled, since they would make an invalid pipeline).
   - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off). With subgroups off, Eden's fallback for
     `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
     were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so

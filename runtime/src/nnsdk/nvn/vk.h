@@ -33,6 +33,8 @@ struct VkContext {
     // VK_KHR_draw_indirect_count: los multi-draw de NVN con el número de draws en la GPU (nulos sin la extensión).
     PFN_vkCmdDrawIndexedIndirectCountKHR draw_indexed_indirect_count = nullptr;
     PFN_vkCmdDrawIndirectCountKHR draw_indirect_count = nullptr;
+    bool multi_draw_indirect = false;  // the multiDrawIndirect feature: more than one draw per indirect call
+    bool fill_non_solid = true;        // the fillModeNonSolid feature: point and line polygon modes
 };
 
 // Se crea en la primera llamada; nullptr si Vulkan no arranca.

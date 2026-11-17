@@ -35,6 +35,14 @@ for a frame. Overlapping overlays are now split (`no_split_overlays`).
 The game's depth bias (`nvnCommandBufferSetPolygonOffsetClamp`) was ignored. It now reaches Vulkan as dynamic depth
 bias, with the clamp when the device supports `depthBiasClamp` (`no_depth_bias`).
 
+**The world missing, only the sky drawn** (Dimensity 720, Mali-G57 with ARM's r32 driver, Vulkan 1.1; fine with
+PanVK on the same phone). MH Rise draws almost all of its main view with multi-draws whose count a compute shader
+writes on the GPU. That needs `VK_KHR_draw_indirect_count`, which this driver doesn't have, so the port skipped them
+(4.6 million draws in one session; "multi-draw no soportado" in the log). The shadow maps still had the village
+because the shadow passes draw differently. Now the count is read on the CPU: the last value the GPU wrote, or every
+draw when there's none (`no_count_fallback`). Found by comparing a PanVK and a stock-driver log from the same phone,
+after dynamic shadows, subgroups, GPU occlusion culling and the read-back buffers had been ruled out.
+
 **Grass drawn as solid polygon cards.** Caused by the old `depth_gequal` debug switch, which made the colour pass test
 GEQUAL instead of EQUAL. Cut-out meshes rely on EQUAL to skip the pixels their pre-pass discarded. Replaced by
 `fast_depth`, which only changes meshes drawn in the pre-pass without a pixel shader.
@@ -125,10 +133,6 @@ Kept here so nobody tries them again without a new reason:
 
 ## Still open
 
-- **The world missing on a Dimensity 720 with ARM's driver** (only the sky; fine on PanVK). The shadow maps have
-  the village, so meshes are submitted; the main view has no depth pre-pass and no meshes. Ruled out: dynamic shadows
-  off, subgroups on (they stall that driver), the game's GPU occlusion culling. The log now prints what each
-  read-back buffer brings to the CPU (`readback …` lines), to compare PanVK and ARM's driver on the same phone.
 
 - **Speckles or magenta and red blocks on the first loading screen** after choosing a save. Probably texture streaming.
 - **Blocky one-frame flicker on an Adreno 8xx** with `Turnip_Gen8_V39` while turning the camera. Probably LRZ or GMEM in

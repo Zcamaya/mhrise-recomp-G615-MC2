@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "nnsdk/nvn/nvn.h"
+#include "nnsdk/nvn/vk.h"
 
 namespace nvn {
 
@@ -79,6 +80,8 @@ VkCullModeFlags vk_cull_mode(int face) {
 }
 
 VkPolygonMode vk_polygon_mode(int m) {
+    // Without fillModeNonSolid (ARM's driver on a Dimensity 720) only FILL makes a valid pipeline.
+    if (const nvn::VkContext* c = nvn::vk(); c && !c->fill_non_solid) return VK_POLYGON_MODE_FILL;
     return m == 0 ? VK_POLYGON_MODE_POINT : m == 1 ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
 }
 

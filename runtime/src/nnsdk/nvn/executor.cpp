@@ -3231,20 +3231,6 @@ void Executor::deliver_write_backs(uint64_t up_to) {
             auto& pd = prof_delivered_[w.address];
             pd.first = w.size, pd.second += w.size;
             delivered_hash_[w.address] = range_hash(game, w.size);
-            // DEBUG: what the CPU gets back, to compare drivers (the world vanished on a Mali with ARM's driver only).
-            // Every 300 deliveries of each buffer, and in a traced frame.
-            if (pd.second / w.size % 300 == 1 || frame_ == trace_frame_) {
-                size_t nonzero = 0;
-                for (size_t i = 0; i < w.size; i++) nonzero += game[i] != 0;
-                char head[160];
-                int at = 0;
-                for (size_t i = 0; i + 4 <= w.size && i < 48 && at < (int)sizeof(head) - 12; i += 4) {
-                    uint32_t v;
-                    memcpy(&v, game + i, 4);
-                    at += snprintf(head + at, sizeof(head) - at, " %x", v);
-                }
-                NVN_LOG("readback %#llx+%zu: %zu bytes not zero;%s\n", (unsigned long long)w.address, w.size, nonzero, head);
-            }
             continue;
         }
         bool opened = false, cpu_rewrote = false;
@@ -6872,8 +6858,12 @@ void Executor::draw(const cmd::Draw& in) {
     uint32_t multi_draws = 0;  // con el número en la CPU
     const uint64_t one_args = d.index_type >= 0 ? 20 : 16;
     const uint64_t args_size = multi ? uint64_t(d.stride) * uint64_t(d.max_draws - 1) + one_args : one_args;
-    if (multi && (!vk()->draw_indexed_indirect_count || d.stride < static_cast<int>(one_args) || d.stride % 4 ||
-                  d.indirect % 4 || d.draw_count % 4)) {
+    // Without VK_KHR_draw_indirect_count (ARM's Vulkan 1.1 drivers, such as r32 on a Dimensity 720) the count can't be
+    // read on the GPU. MH Rise draws almost its whole main view this way, so skipping them left only the sky: the count
+    // is taken on the CPU instead (see below). <data>/no_count_fallback: skipped, as before.
+    const bool count_fallback = multi && !vk()->draw_indexed_indirect_count && !NVN_FLAG("no_count_fallback");
+    if (multi && ((!vk()->draw_indexed_indirect_count && !count_fallback) || d.stride < static_cast<int>(one_args) ||
+                  d.stride % 4 || d.indirect % 4 || d.draw_count % 4)) {
         static int logged = 0;
         if (logged++ < 4)
             NVN_LOG("multi-draw no soportado (stride %d, args %#llx, número %#llx)\n", d.stride,
@@ -6896,7 +6886,20 @@ void Executor::draw(const cmd::Draw& in) {
             if (o->data) count_host = o->data + (count_offset - o->offset);
         } else if (gather_overlays(d.draw_count, 4, &count_buf, &count_offset, &count_host))
             st_.rt_dirty = true;
-        if (!count_buf) {
+        if (count_fallback && count_buf) {
+            // The count is on the GPU and can't be used there: the last value the CPU can see (the previous run of the
+            // culling, which is usually the same), or every draw if there's none. Draws past the real count can show
+            // something hidden for a frame; that beats an empty world.
+            const uint32_t seen = count_host ? *reinterpret_cast<const volatile uint32_t*>(count_host) : ~0u;
+            multi_draws = std::min<uint32_t>(seen, static_cast<uint32_t>(d.max_draws));
+            count_buf = VK_NULL_HANDLE;
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                NVN_LOG("multi-draw with the count on the GPU and no VK_KHR_draw_indirect_count: count taken on the CPU\n");
+            }
+            if (!multi_draws) return;
+        } else if (!count_buf) {
             multi_draws = std::min<uint32_t>(*reinterpret_cast<const uint32_t*>(d.draw_count), static_cast<uint32_t>(d.max_draws));
             if (!multi_draws) return;
         }
@@ -7137,7 +7140,7 @@ void Executor::draw(const cmd::Draw& in) {
     prepare_draw_overlays();
     // Espejos de los SSBO grandes que solo se leen: se revisan (y suben) antes de empezar el pase. Con un multi-draw,
     // también la ventana de sus índices y sus streams de vértices (enteros: no se sabe qué vértices leen).
-    if (in.draw_count && vk()->draw_indexed_indirect_count) {
+    if (in.draw_count && (vk()->draw_indexed_indirect_count || !NVN_FLAG("no_count_fallback"))) {
         VkDeviceSize off = 0;
         uint64_t base = 0, size = 0;
         if (in.index_type >= 1 && in.index_address && index_window(in.index_address, &base, &size)) mirror(base, size, &off);
@@ -7795,10 +7798,16 @@ void Executor::draw(const cmd::Draw& in) {
                                               static_cast<uint32_t>(d.max_draws), stride);
         else if (multi && count_buf)
             vk()->draw_indirect_count(cmd_, gpu_args, gpu_args_offset, count_buf, count_offset, static_cast<uint32_t>(d.max_draws), stride);
-        else if (multi && indices)
-            vkCmdDrawIndexedIndirect(cmd_, gpu_args, gpu_args_offset, multi_draws, stride);
-        else if (multi)
-            vkCmdDrawIndirect(cmd_, gpu_args, gpu_args_offset, multi_draws, stride);
+        else if (multi && (vk()->multi_draw_indirect || multi_draws == 1)) {
+            if (indices) vkCmdDrawIndexedIndirect(cmd_, gpu_args, gpu_args_offset, multi_draws, stride);
+            else vkCmdDrawIndirect(cmd_, gpu_args, gpu_args_offset, multi_draws, stride);
+        } else if (multi) {  // without the multiDrawIndirect feature: one call per draw
+            for (uint32_t k = 0; k < multi_draws; k++) {
+                const VkDeviceSize at = gpu_args_offset + VkDeviceSize{k} * stride;
+                if (indices) vkCmdDrawIndexedIndirect(cmd_, gpu_args, at, 1, 0);
+                else vkCmdDrawIndirect(cmd_, gpu_args, at, 1, 0);
+            }
+        }
         else if (gpu_args && indices)
             vkCmdDrawIndexedIndirect(cmd_, gpu_args, gpu_args_offset, 1, 20);
         else if (gpu_args)
