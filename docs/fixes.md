@@ -127,6 +127,10 @@ mixed each time. It's now one continuous queue (`audio_cola.h`).
 
 ## Tried, didn't help, removed
 
+- **Skipping empty full barriers by default on Mali** (`tight_barriers`, a full barrier with nothing recorded since the
+  previous one): the Dimensity 720 recorded 122 of them a frame, but the build that skipped them also lost patches of
+  the ground. Suspected, not proven; back to opt-in.
+
 Kept here so nobody tries them again without a new reason:
 
 - **Pinning the subgroup size** (`VK_EXT_subgroup_size_control`), subgroups in Turnip geometry shaders, and a toggle

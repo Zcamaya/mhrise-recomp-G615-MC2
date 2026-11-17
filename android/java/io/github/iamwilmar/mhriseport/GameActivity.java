@@ -27,6 +27,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     static native void nativeTouchPoint(int action, float x, float y, long timeNs, int viewWidth, int viewHeight);
     static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos, long[] mapping);
     static native void nativeTextAnswer(int serial, String text);
+    static native void nativeTurbo(boolean on);
 
     private Controls controls;
     private TouchPad pad;
@@ -71,8 +72,25 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         }
     }
 
+    // GPU boost (Performance): on while the game is in front, if the switch is on and the GPU is an Adreno
+    private void applyTurbo(boolean front) {
+        File folder = SettingsMenu.gameFolder(this);
+        boolean on = front && folder != null && new Ini(folder).on("adreno_turbo") && GpuInfo.read(folder).adreno();
+        try {
+            nativeTurbo(on);
+        } catch (UnsatisfiedLinkError ignored) {
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        applyTurbo(true);
+    }
+
     @Override
     protected void onPause() {
+        applyTurbo(false);
         if (pad != null) pad.releaseAll();  // (un dedo que se queda en un botón al irse la app no lo deja pulsado)
         if (controls != null) controls.saveNow();  // (the app may not come back: swiped away from recents, killed for memory)
         super.onPause();
@@ -165,6 +183,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         applyPad();
         pad.invalidate();
         showCapture();
+        applyTurbo(true);
     }
 
     void startEditing() {

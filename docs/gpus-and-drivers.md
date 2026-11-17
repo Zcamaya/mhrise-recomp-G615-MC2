@@ -81,10 +81,12 @@ Turnip was still being brought up on the A8xx while this was written, and builds
   upload (`shaders/bc_decode.comp`, the same integer math as `bcn.cpp`): only the compressed blocks are uploaded and
   the CPU does no decoding (`no_gpu_bc` goes back to the CPU). BC4–BC7 are still decompressed on the CPU (`bcn.cpp`,
   written from the format specification). `bc_on_cpu` tests these paths on an Adreno.
+  Unsigned BC6H (skies, lighting) is stored as B10G11R11, half the size of RGBA16F.
   With `bc_astc` (Graphics → Textures as ASTC), BC1/BC2/BC3/BC7 are stored as ASTC 4x4 instead, which Mali reads
   natively: RGBA8 is 4 times the size of BC3/BC7 and 8 times BC1, ASTC 4x4 the same as BC3/BC7. The encode uses ARM's
-  astcenc (fastest preset, 4 threads) the first time a level loads, and the result goes to `<data>/astc_cache/`, keyed
-  by the BC blocks. The idea came from the mesa-wrapper that transcodes BC to ASTC for Winlator; the code is the port's
+  astcenc (fastest preset, 4 threads) the first time a level loads, and the result goes to the app's own files folder (`astc_cache`,
+  keyed by the BC blocks): shared storage goes through FUSE, which costs time on every file opened. Levels that are
+  still all zeros (not streamed in yet) become one-colour ASTC blocks, with nothing encoded or cached. The idea came from the mesa-wrapper that transcodes BC to ASTC for Winlator; the code is the port's
   own plus astcenc. The idea came from the bionic
   Vulkan wrapper, which decodes BC on the GPU for Winlator; the shader here is the port's own.
 - **Subgroups of 16,** half a Maxwell warp:
@@ -115,8 +117,6 @@ That driver also has no `multiDrawIndirect` (each multi-draw becomes one indirec
     Dimensity 8300 (Mali-G615).
 - **Integer vertex attributes** (bone indices) declared as float get converted by Mali (5 → 5.0), which stretched
   skinned characters into spikes. They're declared as integers (`no_int_attribs`).
-- **Redundant barriers skipped** (`no_tight_barriers` keeps them): a full barrier with nothing recorded since the one
-  before orders nothing. The Dimensity 720 recorded 256 a frame, 122 of them like that.
 - **Shared memory** is 32 KB, against the Switch's 48 KB, so it's clamped to the device's limit.
 - **`OpUnreachable` after a switch** becomes `OpReturn` here too, in the skinning shaders (`no_return_mali`).
 - **A Mali-G615 hung on every frame** on the BRX control flow Eden builds for switches. Graphics shaders with a BRX now

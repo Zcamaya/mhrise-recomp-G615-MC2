@@ -84,6 +84,7 @@ final class SettingsMenu {
 
         folder = gameFolder(activity);
         ini = new Ini(folder);
+        gpu = GpuInfo.read(folder);
         LinearLayout body = new LinearLayout(activity);
         sections = new LinearLayout(activity);
         sections.setOrientation(LinearLayout.VERTICAL);
@@ -270,12 +271,21 @@ final class SettingsMenu {
                         + "lights get drawn. Off: they stay invisible (you can still gather them). Costs almost nothing. "
                         + "Applies at once.",
                 "no_readback_copies", true);
-        flag("Textures as ASTC (Mali)",
-                "On GPUs that can't read the game's BC textures (Mali), keeps them compressed as ASTC instead of 4-8 "
-                        + "times bigger: less memory traffic every frame. The first time a texture loads it's encoded on the "
-                        + "CPU (slower loading and some stutter), then it comes from a cache in the data folder. Restart the "
-                        + "game to apply.",
-                "bc_astc", false);
+        if (gpu.noBc()) {
+            flag("Textures as ASTC (Mali)",
+                    "On GPUs that can't read the game's BC textures (Mali), keeps them compressed as ASTC instead of 4-8 "
+                            + "times bigger: less memory traffic every frame. The first time a texture loads it's encoded on the "
+                            + "CPU (slower loading and some stutter), then it comes from a cache in the app's storage. Restart the "
+                            + "game to apply.",
+                    "bc_astc", false);
+            action("Clear the ASTC cache",
+                    "Deletes the encoded textures (" + astcCacheSize() + ") from the app's storage. They're encoded again as "
+                            + "they load. Uninstalling the app deletes them too.",
+                    () -> {
+                        clearAstcCache();
+                        build();
+                    });
+        }
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
@@ -314,6 +324,14 @@ final class SettingsMenu {
     }
 
     private void buildPerformance() {
+        if (gpu.adreno()) {
+            header("GPU");
+            flag("GPU boost (Adreno)",
+                    "Keeps the Adreno at its top clock while the game is open (libadrenotools' turbo, no root needed), "
+                            + "so it doesn't slow down between frames. Hotter and more battery; the phone still throttles "
+                            + "when it gets too hot. Turned off when you leave the game. Applies at once.",
+                    "adreno_turbo", false);
+        }
         header("CPU");
         flag("Performance hints",
                 "Tells Android how long each frame should take and how much work it took, so it raises the clocks in "
@@ -507,23 +525,27 @@ final class SettingsMenu {
         flag("Retry rejected pipelines",
                 "When the driver rejects a pipeline, its shaders are translated again with safer options.",
                 "no_safe_translation", true);
-        exclusive("Subgroups under 32",
-                "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
-                        + "scene is missing pieces without them; off with ARM's own driver, where they stalled the GPU "
-                        + "for seconds even after the warp barriers fix. Quad swaps for the game's derivatives stay on "
-                        + "either way." + next,
-                new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
+        if (gpu.mali())
+            exclusive("Subgroups under 32",
+                    "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
+                            + "scene is missing pieces without them; off with ARM's own driver, where they stalled the GPU "
+                            + "for seconds even after the warp barriers fix. Quad swaps for the game's derivatives stay on "
+                            + "either way." + next,
+                    new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
         header("Driver workarounds");
-        flag("Qualcomm: return after a switch",
-                "On Qualcomm's driver, a return on a switch's impossible path instead of \"unreachable\" (without "
-                        + "it the hunter's face wasn't drawn)." + next,
-                "no_return_qualcomm", true);
-        flag("Qualcomm: emulated shuffle",
-                "On Qualcomm's driver, shuffle with a dynamic index is emulated, as in Eden." + next,
-                "no_shuffle_qualcomm", true);
-        flag("Mali: return after a switch",
-                "The same on Mali GPUs (ARM's driver and PanVK)." + next,
-                "no_return_mali", true);
+        if (gpu.adreno()) {
+            flag("Qualcomm: return after a switch",
+                    "On Qualcomm's driver, a return on a switch's impossible path instead of \"unreachable\" (without "
+                            + "it the hunter's face wasn't drawn)." + next,
+                    "no_return_qualcomm", true);
+            flag("Qualcomm: emulated shuffle",
+                    "On Qualcomm's driver, shuffle with a dynamic index is emulated, as in Eden." + next,
+                    "no_shuffle_qualcomm", true);
+        }
+        if (gpu.mali())
+            flag("Mali: return after a switch",
+                    "The same on Mali GPUs (ARM's driver and PanVK)." + next,
+                    "no_return_mali", true);
 
         header("Driver environment");
         note("Settings for the GPU driver itself, as NAME=value, set before it starts (on the next start). Mesa's drivers "
@@ -1097,11 +1119,35 @@ final class SettingsMenu {
         }));
     }
 
+    // The ASTC cache (runtime: nvn/astc.cpp): in the app's files folder, or the data folder with astc_cache_in_data_folder
+    private File[] astcCacheDirs() {
+        return new File[] {new File(activity.getFilesDir(), "astc_cache"), folder != null ? new File(folder, "astc_cache") : null};
+    }
+
+    private String astcCacheSize() {
+        long bytes = 0;
+        for (File dir : astcCacheDirs()) {
+            File[] files = dir != null ? dir.listFiles() : null;
+            if (files != null)
+                for (File f : files) bytes += f.length();
+        }
+        return String.format(java.util.Locale.ROOT, "%.0f MB", bytes / 1048576.0);
+    }
+
+    private void clearAstcCache() {
+        for (File dir : astcCacheDirs()) {
+            File[] files = dir != null ? dir.listFiles() : null;
+            if (files != null)
+                for (File f : files) f.delete();
+        }
+    }
+
+    private GpuInfo gpu;  // the options that apply to this GPU only (all of them before the game's first start)
     private boolean resetArmed;  // Restore default settings asks for a second tap
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
+        "60fps", "adreno_turbo", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
         "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",

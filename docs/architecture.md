@@ -145,7 +145,8 @@ resolution (see [mh-rise.md](mh-rise.md)).
   (saves, logs, cache, settings). Two copies of the app with different data folders can play Local Play together.
   `DumpScanner` checks the files: the build ID of `main`, the update's RomFS, and DLC IDs from the folder names.
 - `SettingsMenu`: the in-game menu, with Display, Graphics, Performance, Touch, Combos, Controller, Multiplayer and
-  Debug. Display → Restore default settings deletes `mhr.ini` and the old switch files. The touch layout, combos and
+  Debug. It shows only the options for the GPU the game last ran on (`<data>/gpu.txt`, written by `vk.cpp`;
+  `GpuInfo.java`); before the first start it shows them all. Display → Restore default settings deletes `mhr.ini` and the old switch files. The touch layout, combos and
   button mapping are kept in SharedPreferences and survive that.
 - `TouchPad`, `Controls`: the on-screen controller, layout editing, show/hide per button and camera swipe.
 - `DriverActivity`: adding a custom Vulkan driver (AdrenoTools zips, loaded with libadrenotools) and `Lossless.dll`.

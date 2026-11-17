@@ -27,6 +27,7 @@
 #include <map>
 #include <string>
 
+#include "adrenotools/driver.h"
 #include "loader/crash.h"
 #include "loader/run.h"
 #include "nnsdk/host.h"
@@ -867,6 +868,17 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivi
     const jchar* chars = env->GetStringChars(text, nullptr);
     answer_text(static_cast<uint32_t>(serial), 1, chars, chars ? n : 0);
     if (chars) env->ReleaseStringChars(text, chars);
+}
+
+// GPU boost (Performance → GPU boost, Adreno only): libadrenotools' turbo, a KGSL property any app may set, which keeps
+// the GPU at its top clock (thermal limits still apply). GameActivity turns it on while the game is in front and off when
+// it goes to the background, so it doesn't drain the battery after.
+extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivity_nativeTurbo(JNIEnv*, jclass, jboolean on) {
+    static int state = -1;
+    if (state == (on ? 1 : 0)) return;
+    state = on ? 1 : 0;
+    adrenotools_set_turbo(on);
+    printf("[gpu] boost %s\n", on ? "on (top GPU clock)" : "off");
 }
 
 void android_main(android_app* app) {

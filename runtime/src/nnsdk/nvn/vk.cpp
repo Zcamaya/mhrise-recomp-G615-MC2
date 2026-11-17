@@ -234,6 +234,12 @@ bool create(VkContext& c, bool system_driver) {
             features.textureCompressionASTC_LDR, features.textureCompressionBC, features.textureCompressionETC2,
             features.geometryShader, features.tessellationShader, features.samplerAnisotropy,
             features.vertexPipelineStoresAndAtomics, features.fragmentStoresAndAtomics);
+    // For the settings menu (SettingsMenu: GpuInfo), which shows the options of this GPU only
+    if (FILE* g = fopen((nnsdk::ini::data_dir() + "/gpu.txt").c_str(), "w")) {
+        fprintf(g, "vendor 0x%x\nbc %d\nastc %d\nname %s\n", c.props.vendorID, features.textureCompressionBC ? 1 : 0,
+                features.textureCompressionASTC_LDR ? 1 : 0, c.props.deviceName);
+        fclose(g);
+    }
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;

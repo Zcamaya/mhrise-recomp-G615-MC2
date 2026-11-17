@@ -1203,7 +1203,7 @@ private:
                     std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
     bool bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
                        uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
-    uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
+    uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0, prof_astc_empty_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
     VkDescriptorSetLayout bc_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout bc_layout_ = VK_NULL_HANDLE;
     VkPipeline bc_pipeline_ = VK_NULL_HANDLE;
@@ -3514,11 +3514,7 @@ void Executor::read_flags() {
     low_table_ = !NVN_FLAG("no_low_table");
     separate_tables_ = !NVN_FLAG("no_split_tables");
     scan_per_pass_ = NVN_FLAG("inspect_per_pass");
-    // On by default on Mali (vendor 0x13B5): the Dimensity 720 recorded 256 full barriers a frame and 122 of them had
-    // nothing recorded since the one before (they order nothing, and a full barrier stalls the whole GPU there).
-    // <data>/no_tight_barriers: every one, as before.
-    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers") ||
-                               (vk()->props.vendorID == 0x13B5 && !NVN_FLAG("no_tight_barriers"));
+    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
     recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
     keep_gpu_overlays_ = !NVN_FLAG("no_keep_overlays");
@@ -4109,6 +4105,21 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
         key *= 0x9E3779B97F4A7C15ull;
         Staging::Alloc a = staging_->alloc(slice_astc, 16);
         if (!a.data) return false;
+        // A level the game hasn't streamed in yet is all zeros (it creates its textures with every mip and fills the big
+        // ones later). That decodes to one colour: ASTC has a block for that (void extent), so nothing to encode or cache.
+        if (std::all_of(slice, slice + slice_bc, [](uint8_t b) { return b == 0; })) {
+            uint8_t texel[16 * 4];
+            bcn::decode(kind, slice, 1, 1, texel, 16, 4, 4);  // (a zero block: the colour every texel gets)
+            uint8_t block[16];
+            const uint64_t mode = 0xFFFFFFFFFFFFFDFCull;  // void extent, LDR, no extent coordinates
+            memcpy(block, &mode, 8);
+            for (int c = 0; c < 4; c++) {
+                const uint16_t v = static_cast<uint16_t>(texel[c] * 257);
+                memcpy(block + 8 + 2 * c, &v, 2);
+            }
+            for (size_t b = 0; b < slice_astc; b += 16) memcpy(a.data + b, block, 16);
+            prof_astc_empty_++;
+        } else {
         bool cached;
         {
             LoadTimer timer(*this, kLdDeswizzle, slice_astc);
@@ -4125,6 +4136,7 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
             prof_astc_encoded_++;
         } else {
             prof_astc_cached_++;
+        }
         }
         VkBufferImageCopy r{};
         r.bufferOffset = a.offset;
@@ -10852,10 +10864,11 @@ void Executor::profile_frame() {
             prof_forced_levels_ / double(period), (unsigned long long)prof_forced_unseen_,
             prof_full_hash_bytes_ / double(period) / 1048576.0, (unsigned long long)prof_watched_textures_);
     prof_forced_levels_ = prof_forced_unseen_ = prof_full_hash_bytes_ = 0;
-    if (prof_astc_encoded_ || prof_astc_cached_)
-        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache\n", (unsigned long long)prof_astc_encoded_,
-                (unsigned long long)prof_astc_cached_);
-    prof_astc_encoded_ = prof_astc_cached_ = 0;
+    if (prof_astc_encoded_ || prof_astc_cached_ || prof_astc_empty_)
+        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache, %llu empty (not streamed in yet)\n",
+                (unsigned long long)prof_astc_encoded_, (unsigned long long)prof_astc_cached_,
+                (unsigned long long)prof_astc_empty_);
+    prof_astc_encoded_ = prof_astc_cached_ = prof_astc_empty_ = 0;
     NVN_LOG("perfil fsr: %llu de %d frames con el blit por la guarda (frame del juego > %.1f ms)\n",
             static_cast<unsigned long long>(prof_fsr_guard_frames_), period, (frame_period_ns() < 20'000'000 ? kFsrOffNs60 : kFsrOffNs) / 1e6);
     prof_fsr_guard_frames_ = 0;

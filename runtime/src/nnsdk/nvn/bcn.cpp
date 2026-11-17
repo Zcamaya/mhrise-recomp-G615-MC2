@@ -36,7 +36,10 @@ VkFormat decoded_format(VkFormat f) {
         case kBC4S: return VK_FORMAT_R8_SNORM;
         case kBC5U: return VK_FORMAT_R8G8_UNORM;
         case kBC5S: return VK_FORMAT_R8G8_SNORM;
-        case kBC6HU: case kBC6HS: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        // Unsigned BC6H in the packed 11/11/10 float format: half the size of RGBA16F, the same 5-bit exponent, and the
+        // mantissa cut to 6 and 5 bits (invisible on skies and lighting). The signed one needs a sign: RGBA16F.
+        case kBC6HU: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        case kBC6HS: return VK_FORMAT_R16G16B16A16_SFLOAT;
         default: return VK_FORMAT_UNDEFINED;
     }
 }
@@ -45,7 +48,8 @@ uint32_t texel_bytes(Kind k) {
     switch (k) {
         case kBC4U: case kBC4S: return 1;
         case kBC5U: case kBC5S: return 2;
-        case kBC6HU: case kBC6HS: return 8;
+        case kBC6HU: return 4;
+        case kBC6HS: return 8;
         case kNone: return 0;
         default: return 4;
     }
@@ -396,7 +400,17 @@ void decode(Kind kind, const uint8_t* blocks, uint32_t wb, uint32_t hb, uint8_t*
                     switch (kind) {
                         case kBC4U: case kBC4S: t[0] = ch[0][i]; break;
                         case kBC5U: case kBC5S: t[0] = ch[0][i], t[1] = ch[1][i]; break;
-                        case kBC6HU: case kBC6HS: memcpy(t, half[i], 8); break;
+                        case kBC6HU: {  // R in bits 0-10, G 11-21, B 22-31; a half's exponent fits as it is
+                            auto small = [](uint16_t h, int bits) -> uint32_t {
+                                if (h & 0x8000) return 0;  // (no sign in these formats; unsigned BC6H has none anyway)
+                                const uint32_t e = h >> 10 & 31, m = h & 1023;
+                                return e << bits | m >> (10 - bits);
+                            };
+                            const uint32_t v = small(half[i][0], 6) | small(half[i][1], 6) << 11 | small(half[i][2], 5) << 22;
+                            memcpy(t, &v, 4);
+                            break;
+                        }
+                        case kBC6HS: memcpy(t, half[i], 8); break;
                         default: memcpy(t, rgba[i], 4); break;
                     }
                 }

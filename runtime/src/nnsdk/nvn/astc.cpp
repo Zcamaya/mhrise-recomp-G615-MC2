@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -49,9 +50,14 @@ astcenc_context* context(Encoder& e, bool srgb) {
     return e.ctx;
 }
 
+// In the app's own files folder by default (/data/data/<app>/files, NIER_INTERNO): no FUSE layer like the shared storage
+// the data folder lives in, which costs time on every file opened, and a level is a file. <data>/astc_cache_in_data_folder
+// (at start-up): in the data folder, as before (it survives reinstalling and can be copied to another phone).
 std::string cache_dir() {
     static const std::string dir = [] {
-        std::string d = nnsdk::ini::data_dir() + "/astc_cache";
+        const char* app = getenv("NIER_INTERNO");
+        const bool own = app && *app && !NVN_FLAG("astc_cache_in_data_folder");
+        std::string d = (own ? std::string(app) : nnsdk::ini::data_dir()) + "/astc_cache";
         mkdir(d.c_str(), 0755);
         return d;
     }();

@@ -1,8 +1,9 @@
 #pragma once
 // Texturas BCn en las GPU que no las leen: las Mali (todos los MediaTek y muchos Exynos), las PowerVR y alguna otra no
 // tienen BC1-BC7, que es lo que usa casi todo el juego. Ahí la imagen se crea en un formato sin comprimir (RGBA8, R8 / RG8
-// para BC4 / BC5, RGBA16F para BC6H) y cada nivel se descomprime en la CPU al subirlo (executor.cpp, upload). En las GPU
-// que sí las tienen (Adreno, y las de escritorio) no cambia nada: se suben comprimidas, como siempre.
+// para BC4 / BC5, B10G11R11 para BC6H sin signo y RGBA16F con signo) y cada nivel se descomprime en la CPU al subirlo
+// (executor.cpp, upload). En las GPU que sí las tienen (Adreno, y las de escritorio) no cambia nada: se suben comprimidas,
+// como siempre.
 
 #include <cstddef>
 #include <cstdint>
