@@ -75,8 +75,6 @@ struct NnsdkHost {
     // El teclado (NnsdkText); nullptr en la terminal: nombre.txt o "Flip", como antes.
     NnsdkText* text_input;
     void (*ask_text)(NnsdkText*);
-    // The game's via.render.RenderConfig once one of its getters has run (0 until then; loader/render_config.cpp).
-    const volatile uint64_t* render_config;
 };
 
 extern "C" void nnsdk_attach(const NnsdkHost* host);

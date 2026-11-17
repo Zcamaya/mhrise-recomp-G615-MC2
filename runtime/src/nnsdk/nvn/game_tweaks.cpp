@@ -10,24 +10,20 @@
 // Renderer switches (via.render.Renderer's own get_/set_ list; its setters store straight into the Renderer):
 //   Foliage sway     SwingEnable +0x1a59 and SwingOnShadowEnable +0x1a56 (the PC's "Foliage Sway")
 //   Dynamic shadows  set_DynamicShadowEnable (main+0x7930a18), +0x1a55, tells the shadow system too (the PC's option)
-//   FXAA             FXAAEnable +0x1a5b
-//   Shadow cache     ShadowCacheEnable +0x1a53 (static shadows drawn once and reused)
-//   Small objects    SmallObjectCullingEnable +0x1a1e (skips tiny far-away meshes; the ratio is +0x1a30)
-//   Effect SSR       EffectSSREnable +0x1a64 (screen-space reflections on effects)
-// RenderConfig (the PC options menu's object; caught by loader/render_config.cpp once the game reads one of its bools):
-//   motion blur +0xb2, depth of field +0xb3, god rays +0xb4, bloom +0xb5, lens flare +0xb6, chromatic aberration +0xb7,
-//   film grain +0xb8. AO (+0x4c), SSR (+0x54), lens distortion (+0x58) and VRS (+0x5c) are only logged for now.
-// And logged only, until we know what their numbers mean: ReducedTransparentBuffer +0x1a68, GeometryAOQuality +0x1a8c,
-// SmallObjectCullingRatio +0x1a30, DefaultShadowLodBias +0x1a44.
+// Not offered, because the Switch game already has them the cheap way: FXAAEnable +0x1a5b (off), ShadowCacheEnable
+// +0x1a53 (on), SmallObjectCullingEnable +0x1a1e (on), EffectSSREnable +0x1a64 (off). The PC menu's RenderConfig
+// (motion blur, depth of field, bloom…) is never read by the Switch game: its getters were never called.
+//   Effects buffer   ReducedTransparentBuffer +0x1a68: how much smaller the buffer for particles and other transparent
+//                    effects is (the Switch game uses 2; the PC's quality table goes 1, 1, 2, 3, 4)
+//   Ambient occlusion GeometryAOQuality +0x1a8c (the Switch game uses 1)
+// And logged only, until we know what their numbers mean: SmallObjectCullingRatio +0x1a30, DefaultShadowLodBias +0x1a44.
 // Each one is read once from the game as its default, changed while its switch is on and put back when it's off.
 // Called from the thread that presents, once per frame: the game calls these setters from its own threads too, and
 // the shadow setter only stores the new size and lets the engine rebuild the maps.
 // Before touching anything the instructions at those addresses are checked, so another build of main is left alone.
 // What's in effect goes to <datos>/game_settings.txt (one line per setting) whenever it changes, for the settings menu.
 // Switches (live): shadow_half, shadow_quarter / model_detail_low, model_detail_lowest, model_detail_high /
-// texture_bias_1, texture_bias_2 / no_foliage_sway, no_dynamic_shadows, no_fxaa, shadow_cache, small_object_culling,
-// no_effect_ssr / no_motion_blur, no_depth_of_field, no_god_rays, no_bloom, no_lens_flare, no_chromatic_aberration,
-// no_film_grain.
+// texture_bias_1, texture_bias_2 / no_foliage_sway, no_dynamic_shadows / effects_lower, effects_lowest / no_ao.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -69,10 +65,6 @@ constexpr Check kChecks[] = {
     {0x78a10ec, 0xB91A4909},  // str w9, [x8, #6728]
     {0x5a750, 0x52834B2A},    // mov w10, #0x1a59         (set_SwingEnable)
     {0x5a778, 0x52834ACA},    // mov w10, #0x1a56         (set_SwingOnShadowEnable)
-    {0x5a224, 0x52834B6A},    // mov w10, #0x1a5b         (set_FXAAEnable)
-    {0x5a688, 0x52834A6A},    // mov w10, #0x1a53         (set_ShadowCacheEnable)
-    {0x5a6b0, 0x528343CA},    // mov w10, #0x1a1e         (set_SmallObjectCullingEnable)
-    {0x5a1fc, 0x52834C8A},    // mov w10, #0x1a64         (set_EffectSSREnable)
     {0x7930a18, 0x52834AA8},  // mov w8, #0x1a55          (set_DynamicShadowEnable)
     {0x5a5d0, 0xB91A6928},    // str w8, [x9, #0x1a68]    (set_ReducedTransparentBuffer)
     {0x5a2b8, 0xB91A8D28},    // str w8, [x9, #0x1a8c]    (set_GeometryAOQuality)
@@ -240,12 +232,34 @@ void byte_switch(uint8_t* renderer, ByteSwitch& b, bool on) {
     b.ours = on;
 }
 
+// The same for a 32-bit value; want(game) gives ours from the game's.
+struct IntSwitch {
+    const char* name;
+    size_t offset;
+    uint32_t game = 0, last = 0;
+    bool seen = false, ours = false;
+};
+
+template <typename Want>
+void int_switch(uint8_t* renderer, IntSwitch& s, bool on, Want want) {
+    volatile uint32_t* v = reinterpret_cast<volatile uint32_t*>(renderer + s.offset);
+    if (!s.seen || !s.ours || *v != s.last) s.game = *v;  // the game set it: that's the new default
+    if (!s.seen) NVN_LOG("game settings: %s is %u in the game\n", s.name, s.game);
+    s.seen = true;
+    const uint32_t target = on ? want(s.game) : s.game;
+    if (*v != target) {
+        *v = target;
+        NVN_LOG("game settings: %s %u (game's %u)\n", s.name, target, s.game);
+    }
+    s.last = target;
+    s.ours = on;
+}
+
+IntSwitch g_effects{"effects buffer", 0x1a68};
+IntSwitch g_ao{"ambient occlusion", 0x1a8c};
+
 ByteSwitch g_sway{"foliage sway", 0x1a59, 0};
 ByteSwitch g_sway_shadow{"foliage sway in shadows", 0x1a56, 0};
-ByteSwitch g_fxaa{"FXAA", 0x1a5b, 0};
-ByteSwitch g_shadow_cache{"shadow cache", 0x1a53, 1};
-ByteSwitch g_small_objects{"small object culling", 0x1a1e, 1};
-ByteSwitch g_effect_ssr{"effect SSR", 0x1a64, 0};
 
 void renderer_switches(const uint8_t* base) {
     uint8_t* renderer = object_at<uint8_t>(base, kRendererPointer);
@@ -253,10 +267,6 @@ void renderer_switches(const uint8_t* base) {
     const bool no_sway = NVN_FLAG("no_foliage_sway");
     byte_switch(renderer, g_sway, no_sway);
     byte_switch(renderer, g_sway_shadow, no_sway);
-    byte_switch(renderer, g_fxaa, NVN_FLAG("no_fxaa"));
-    byte_switch(renderer, g_shadow_cache, NVN_FLAG("shadow_cache"));
-    byte_switch(renderer, g_small_objects, NVN_FLAG("small_object_culling"));
-    byte_switch(renderer, g_effect_ssr, NVN_FLAG("no_effect_ssr"));
 
     // Dynamic shadows go through the game's setter, which also tells the shadow system.
     volatile uint8_t* dynamic = renderer + 0x1a55;
@@ -274,6 +284,13 @@ void renderer_switches(const uint8_t* base) {
     }
     ours = off;
 
+    // Effects buffer: one or two steps smaller than the game's. Ambient occlusion: 0.
+    {
+        const uint32_t steps = NVN_FLAG("effects_lowest") ? 2 : NVN_FLAG("effects_lower") ? 1 : 0;
+        int_switch(renderer, g_effects, steps != 0, [&](uint32_t game) { return std::min<uint32_t>(game + steps, 4); });
+        int_switch(renderer, g_ao, NVN_FLAG("no_ao"), [](uint32_t) { return 0u; });
+    }
+
     // The numbers we don't change yet: logged when the game sets them, to learn what it uses.
     struct Logged {
         const char* name;
@@ -282,9 +299,7 @@ void renderer_switches(const uint8_t* base) {
         uint32_t last;
         bool seen;
     };
-    static Logged logged[] = {{"ReducedTransparentBuffer", 0x1a68, false, 0, false},
-                              {"GeometryAOQuality", 0x1a8c, false, 0, false},
-                              {"SmallObjectCullingRatio", 0x1a30, true, 0, false},
+    static Logged logged[] = {{"SmallObjectCullingRatio", 0x1a30, true, 0, false},
                               {"DefaultShadowLodBias", 0x1a44, true, 0, false}};
     for (Logged& l : logged) {
         uint32_t v;
@@ -298,35 +313,6 @@ void renderer_switches(const uint8_t* base) {
     }
 }
 
-ByteSwitch g_motion_blur{"motion blur", 0xb2, 0};
-ByteSwitch g_dof{"depth of field", 0xb3, 0};
-ByteSwitch g_god_rays{"god rays", 0xb4, 0};
-ByteSwitch g_bloom{"bloom", 0xb5, 0};
-ByteSwitch g_lens_flare{"lens flare", 0xb6, 0};
-ByteSwitch g_aberration{"chromatic aberration", 0xb7, 0};
-ByteSwitch g_film_grain{"film grain", 0xb8, 0};
-
-void render_config_switches() {
-    const volatile uint64_t* slot = nnsdk::host().render_config;
-    uint8_t* rc = slot && *slot ? reinterpret_cast<uint8_t*>(*slot) : nullptr;
-    static bool found = false;
-    if (!rc) return;
-    if (!found) {
-        found = true;
-        uint32_t ao, ssr, distortion, vrs;
-        memcpy(&ao, rc + 0x4c, 4), memcpy(&ssr, rc + 0x54, 4), memcpy(&distortion, rc + 0x58, 4), memcpy(&vrs, rc + 0x5c, 4);
-        NVN_LOG("game settings: RenderConfig at %p (AO %u, SSR %u, lens distortion %u, VRS %u)\n", static_cast<void*>(rc), ao,
-                ssr, distortion, vrs);
-    }
-    byte_switch(rc, g_motion_blur, NVN_FLAG("no_motion_blur"));
-    byte_switch(rc, g_dof, NVN_FLAG("no_depth_of_field"));
-    byte_switch(rc, g_god_rays, NVN_FLAG("no_god_rays"));
-    byte_switch(rc, g_bloom, NVN_FLAG("no_bloom"));
-    byte_switch(rc, g_lens_flare, NVN_FLAG("no_lens_flare"));
-    byte_switch(rc, g_aberration, NVN_FLAG("no_chromatic_aberration"));
-    byte_switch(rc, g_film_grain, NVN_FLAG("no_film_grain"));
-}
-
 }  // namespace
 
 void game_tweaks() {
@@ -336,7 +322,6 @@ void game_tweaks() {
     model_detail(base);
     texture_detail(base);
     renderer_switches(base);
-    render_config_switches();
     write_status();
 }
 

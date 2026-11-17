@@ -17,7 +17,6 @@
 #include "loader/imports.h"
 #include "loader/nso.h"
 #include "loader/probe.h"
-#include "loader/render_config.h"
 #include "loader/tls.h"
 #include "nnsdk/host.h"
 
@@ -123,8 +122,8 @@ int nier_run(const RunConfig& cfg) {
            g_main.symbols.size(), g_main.relocs.size());
 
     auto resolve = [&](const ElfSym& s) { return resolve_import(s, have_sdk ? &g_sdk : nullptr); };
-    if (!relocate(g_main, resolve, err) || !probe::install(g_main, err) || !render_config::install(g_main, err) ||
-        !tls::patch(g_main, err) || !protect(g_main, err))
+    if (!relocate(g_main, resolve, err) || !probe::install(g_main, err) || !tls::patch(g_main, err) ||
+        !protect(g_main, err))
         die(err);
     report_imports(cfg.list_stubs);
 
@@ -144,7 +143,6 @@ int nier_run(const RunConfig& cfg) {
     host.ask_text = cfg.ask_text;
     host.main_base = g_main.base;
     host.main_size = g_main.size;
-    host.render_config = render_config::slot();
     if (!host.game_malloc || !host.game_free || !host.game_new || !host.game_delete)
         die("main no exporta malloc/free/new/delete");
     reinterpret_cast<void (*)(const NnsdkHost*)>(nnsdk_symbol("nnsdk_attach"))(&host);

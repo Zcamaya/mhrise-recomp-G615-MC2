@@ -128,7 +128,6 @@ add_library(loader_core OBJECT
   src/loader/tls_slow.S
   src/loader/probe.cpp
   src/loader/probe_slow.S
-  src/loader/render_config.cpp
 )
 target_include_directories(loader_core PUBLIC src)
 set_target_properties(loader_core PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -157,12 +157,9 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_shadows` | Shadows off: the shadow maps aren't drawn and every shadow lookup reads as lit. Live. |
 | `fast_depth` | The colour pass draws with GEQUAL instead of EQUAL against the depth pre-pass (MH Rise uses reversed Z), which keeps Adreno's LRZ early rejection on. Meshes the pre-pass drew with a pixel shader (cut-outs: grass, leaves) keep EQUAL, or they would show as whole cards. Graphics → Fast depth test. Live. |
 | `no_dynamic_shadows` | No shadows from things that move (the Renderer's DynamicShadowEnable, set through the game's own setter): the PC's Dynamic Shadows off. Graphics → Dynamic shadows. Live. |
-| `shadow_cache` | The Renderer's ShadowCacheEnable on: scenery shadows kept between frames. Graphics → Shadow cache. Live. |
 | `no_foliage_sway` | Grass and leaves stop swaying (SwingEnable and SwingOnShadowEnable off): the PC's Foliage Sway off. Graphics → Foliage sway. Live. |
-| `no_fxaa` | The game's FXAA off (FXAAEnable). Graphics → FXAA. Live. |
-| `no_effect_ssr` | Screen-space reflections on effects off (EffectSSREnable). Graphics → Effect reflections. Live. |
-| `small_object_culling` | The engine's small object culling on (SmallObjectCullingEnable, with the game's ratio). Graphics → Skip tiny far-away objects. Live. |
-| `no_motion_blur`, `no_depth_of_field`, `no_bloom`, `no_god_rays`, `no_lens_flare`, `no_chromatic_aberration`, `no_film_grain` | Experimental. The PC options menu's effect switches, set in the game's own via.render.RenderConfig (caught when the game first reads one of them; the log says "RenderConfig at …"). The game applies them when it reads its settings again. Graphics → Post effects. Live. |
+| `effects_lower`, `effects_lowest` | Experimental. The Renderer's ReducedTransparentBuffer one or two steps above the game's 2 (up to 4): particles and other see-through effects drawn into a smaller buffer. Graphics → Effects resolution. Live. |
+| `no_ao` | Experimental. The Renderer's GeometryAOQuality at 0 (the game uses 1). Graphics → Ambient occlusion. Live. |
 | `shadow_half`, `shadow_quarter` | Shadow maps at half or a quarter of the game's own size (never below 256), through the game's own shadow setting (the PC version's shadow quality). Blurrier edges, much less GPU work. Live. MH Rise 16.0.1 only. |
 | `model_detail_low`, `model_detail_lowest`, `model_detail_high` | Scales the game's mesh LOD rate (the PC version's mesh quality) by 0.75, 0.5 or 1.5. Live. MH Rise 16.0.1 only. |
 | `texture_bias_1`, `texture_bias_2` | The texture streamer skips one or two more of the largest mip levels (the game's TextureLoadLevelBias). Live. MH Rise 16.0.1 only. |

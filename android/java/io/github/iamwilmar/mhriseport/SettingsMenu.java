@@ -232,46 +232,31 @@ final class SettingsMenu {
                 "Shadows of things that move (hunters, monsters, swaying plants), like the PC's option. Off: only the "
                         + "scenery's shadows, a lot less shadow work. Applies at once.",
                 "no_dynamic_shadows", true);
-        flag("Shadow cache",
-                "The game keeps the scenery's shadows from frame to frame and only redraws what moves. Usually less "
-                        + "GPU work; off is the game's own choice. Applies at once.",
-                "shadow_cache", false);
         flag("Foliage sway",
                 "Grass and leaves moving in the wind, like the PC's option. Off: they stand still, a bit less vertex "
                         + "work. Applies at once.",
                 "no_foliage_sway", true);
-        flag("FXAA",
-                "The game's edge smoothing. Off: sharper but more jagged edges, a little less work. Applies at once.",
-                "no_fxaa", true);
-        flag("Effect reflections",
-                "Screen-space reflections on effects (water, wet surfaces in effects). Off: less GPU work. Applies at "
-                        + "once.",
-                "no_effect_ssr", true);
+        exclusive("Effects resolution (experimental)",
+                "The size of the buffer the game draws particles, smoke and other see-through effects into, as steps "
+                        + "below the game's own (which is already reduced). Lower: blurrier effects, less GPU work in "
+                        + "big fights. Applies at once.",
+                new String[] {"Game's", "One step lower", "Two steps lower"},
+                new String[] {null, "effects_lower", "effects_lowest"});
+        flag("Ambient occlusion (experimental)",
+                "The soft darkening where things meet (the game's geometry AO). Off: flatter look, less GPU work. "
+                        + "Applies at once.",
+                "no_ao", true);
         flag("Fast depth test",
                 "The colour pass skips hidden pixels earlier (it uses the depth test the GPU can reject fast with), "
                         + "which can give a few more FPS, mostly on Adreno. Grass and leaves keep the game's own test so "
                         + "they don't turn into solid cards. Applies at once.",
                 "fast_depth", false);
-        header("Post effects");
-        note("The PC version's effect options, set in the game's own settings object. Experimental: the Switch game may "
-                + "ignore some of them, and they apply the next time the game reads its settings (a new area, or a hunt).");
-        flag("Motion blur", "Blur when the camera or things move fast.", "no_motion_blur", true);
-        flag("Depth of field", "Blurred background in close-ups and cutscenes.", "no_depth_of_field", true);
-        flag("Bloom", "Glow around bright lights and the sky.", "no_bloom", true);
-        flag("God rays", "Beams of light through trees and fog.", "no_god_rays", true);
-        flag("Lens flare", "Flares when looking at the sun.", "no_lens_flare", true);
-        flag("Chromatic aberration", "Coloured fringes at the edges of the picture.", "no_chromatic_aberration", true);
-        flag("Film grain", "A light noise over the picture.", "no_film_grain", true);
         header("Detail");
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
                 new String[] {"Game's", "Low", "Lowest", "High"},
                 new String[] {null, "model_detail_low", "model_detail_lowest", "model_detail_high"});
-        flag("Skip tiny far-away objects",
-                "The engine's small object culling: meshes that would cover only a few pixels aren't drawn. Off is the "
-                        + "game's own choice. Applies at once.",
-                "small_object_culling", false);
         exclusive("Texture streaming",
                 "How many of the largest texture sizes the game skips loading. Fewer: blurrier textures up close, less "
                         + "memory and bandwidth. Applies as textures load.",
