@@ -28,6 +28,11 @@ In the game: Debug → Bug report → **Capture this frame**, then **Save the re
 `Download/mhrise-report.zip` with `log.txt`, `mhr.ini`, `game_settings.txt`, `rutas.txt` and the captured frame. By
 hand, it's a file `<data>/trazar` containing `completa`: the runtime deletes it and captures the next frame.
 
+**Capture button** (`capture_button`, same menu) puts a small draggable button over the game, in a window of its own
+the size of the button (`CaptureButton.java`), so the rest of the screen still goes to the touch controls. Tap captures
+and waits for `trazar` to disappear (green when done, grey if the game hasn't taken it within 15 seconds); hold saves the
+report. Both paths share `BugReport.java`.
+
 The frame goes to `/storage/emulated/0/NieR-volcados/`:
 
 | File | What |

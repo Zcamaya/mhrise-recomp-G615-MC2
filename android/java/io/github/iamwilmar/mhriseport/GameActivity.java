@@ -5,9 +5,12 @@ import android.content.Context;
 import android.graphics.PixelFormat;
 import android.os.Bundle;
 import android.os.VibrationEffect;
+import android.view.Gravity;
 import android.os.Vibrator;
 import android.view.View;
 import android.view.WindowManager;
+
+import java.io.File;
 
 // El juego: la NativeActivity de siempre (libnier.so, android_main.cpp), con los controles táctiles encima.
 // La NativeActivity se queda con la superficie de su ventana y con su entrada, así que una vista suya no se vería: los
@@ -29,6 +32,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     private TouchPad pad;
     private boolean shown;
     private Vibrator vibrator;
+    private CaptureButton capture;  // the floating capture button, while Debug → Capture button is on
+    private WindowManager.LayoutParams captureLp;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -59,6 +64,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         try {
             getWindowManager().addView(pad, lp);
             shown = true;
+            showCapture();
         } catch (RuntimeException e) {
             // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
             System.err.println("[controles] no se pudo poner la ventana de los controles: " + e);
@@ -72,8 +78,68 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         super.onPause();
     }
 
+    // The capture button goes in its own small window above the controls' one, only as big as the button, so touches
+    // anywhere else go on to the controls and the game. It follows the switch: on and off from the menu, live.
+    private void showCapture() {
+        if (!shown) return;
+        File folder = SettingsMenu.gameFolder(this);
+        boolean want = folder != null && new Ini(folder).on(CaptureButton.SWITCH);
+        if (want == (capture != null)) return;
+        if (!want) {
+            try {
+                getWindowManager().removeViewImmediate(capture);
+            } catch (RuntimeException ignored) {
+            }
+            capture = null;
+            return;
+        }
+        CaptureButton b = new CaptureButton(this, new CaptureButton.Host() {
+            @Override public File folder() { return SettingsMenu.gameFolder(GameActivity.this); }
+            @Override public void moved(int x, int y) { placeCapture(x, y); }
+            @Override public void tick() { GameActivity.this.tick(); }
+        });
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(b.size(), b.size(),
+                WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                PixelFormat.TRANSLUCENT);
+        lp.token = getWindow().getDecorView().getWindowToken();
+        lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        lp.gravity = Gravity.TOP | Gravity.LEFT;
+        lp.setTitle("capture");
+        try {
+            getWindowManager().addView(b, lp);
+            capture = b;
+            captureLp = lp;
+            placeCapture(b.x, b.y);
+        } catch (RuntimeException e) {
+            System.err.println("[controles] couldn't add the capture button: " + e);
+        }
+    }
+
+    // Kept on the screen, even if it was left near an edge on a bigger screen or in the other orientation.
+    private void placeCapture(int x, int y) {
+        if (capture == null) return;
+        View decor = getWindow().getDecorView();
+        int size = capture.size();
+        captureLp.x = capture.x = Math.max(0, Math.min(x, decor.getWidth() - size));
+        captureLp.y = capture.y = Math.max(0, Math.min(y, decor.getHeight() - size));
+        try {
+            getWindowManager().updateViewLayout(capture, captureLp);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
     @Override
     protected void onDestroy() {
+        if (capture != null) {
+            try {
+                getWindowManager().removeViewImmediate(capture);
+            } catch (RuntimeException ignored) {
+            }
+            capture = null;
+        }
         if (shown) {
             try {
                 getWindowManager().removeViewImmediate(pad);
@@ -98,6 +164,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         controls.save();
         applyPad();
         pad.invalidate();
+        showCapture();
     }
 
     void startEditing() {

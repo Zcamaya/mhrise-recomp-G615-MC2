@@ -177,6 +177,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_split_overlays` | When the game writes a GPU range that only partly overlaps one the GPU wrote before (it carves the same memory differently from frame to frame), the old one is split: the overlapping part goes into the new one and the parts outside stay as they were. Before, the old one was thrown away and its outside parts came back from the game's stale memory, and whatever was drawn from there blew up for a frame (big black triangles flashing on the Adreno 830). This goes back to throwing them away. Live. |
 | `no_warp_barriers` | On GPUs with subgroups smaller than the Switch's warp of 32 (Mali: 16), the compute shaders of a single warp get a workgroup barrier after their shared memory writes, since they count on the warp running in lockstep (without it a Mali hung while mining or attacking). This switch leaves them as before. Read when shaders are translated (start-up). |
 | `no_readback_copies` | Without `use_return`, the port still returns to the game's memory the buffers the game fills with a GPU copy out of GPU-written data, which is how it reads results back on the CPU. MH Rise's occlusion test works that way: without it the CPU saw zeros and never drew endemic life or wirebugs (they could still be gathered). This switch turns that off. Graphics → Occlusion results. Live. |
+| `capture_button` | A floating button over the game: tap to capture a frame, hold to save the report, drag to move it. Debug → Capture button. Live. |
 | `perf_stats` | The profile lines ("perfil …": where the port's CPU time goes) every 10 seconds, without the rest of `verbose_log`. Debug → Performance stats. Live. |
 | `no_return_mali` | On Mali GPUs (ARM's driver and PanVK), the impossible branch Eden leaves after a switch is written as a plain return instead of an "unreachable", as on Qualcomm's driver, so the compiler can't make assumptions from it in the skinning shaders. This puts the "unreachable" back. Read at start-up. |
 | `no_safe_translation` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
@@ -254,6 +255,10 @@ No terminal needed. In the game, open the settings menu (the gear) → Debug →
    picture of that frame (render targets, depth and shadow maps) and a trace of its draws.
 2. Wait a few seconds, open the menu again and tap **Save the report**.
 3. Send `Download/mhrise-report.zip`, with your phone model and which GPU driver you use.
+
+If the problem is hard to catch with the menu open, turn on **Capture button** in the same place. A small round button
+then sits over the game: tap it to capture the frame you're looking at (it turns green when the frame is saved), hold
+it to save the report, and drag it wherever it's out of the way.
 
 ## Support
 

@@ -475,14 +475,17 @@ final class SettingsMenu {
                 "Saves the next frame's pictures (every render target, depth and shadow maps) and a trace of its draws "
                         + "to the log. The game stutters for a moment. Old captures are cleared first.",
                 () -> {
-                    clearDir(new File(DUMPS));
-                    trigger("trazar", "completa");
+                    BugReport.capture(folder);
                     reportStatus = "Frame captured. Wait a few seconds before saving the report.";
                     dialog.dismiss();
                 });
         action("Save the report",
                 "Puts log.txt, your settings and the captured frame into Download/mhrise-report.zip, to send.",
                 this::saveReport);
+        flag("Capture button",
+                "A small round button over the game, so a frame can be captured right where the problem shows without "
+                        + "opening this menu. Tap it to capture, hold it to save the report, drag it out of the way.",
+                CaptureButton.SWITCH, false);
         header("Shaders");
         flag("Remove unused shader functions",
                 "Strips shader code that's never called before the driver sees it. Qualcomm's driver (512.863) "
@@ -1061,7 +1064,7 @@ final class SettingsMenu {
 
     // ---- game switches --------------------------------------------------------------------------------------------------
 
-    private static File gameFolder(GameActivity a) {
+    static File gameFolder(GameActivity a) {
         try {
             String path = new String(Files.readAllBytes(new File(a.getFilesDir(), "carpeta.txt").toPath())).trim();
             return path.isEmpty() ? null : new File(path);
@@ -1072,59 +1075,19 @@ final class SettingsMenu {
 
     // ---- bug report -------------------------------------------------------------------------------------------------
 
-    private static final String DUMPS = "/storage/emulated/0/NieR-volcados";  // where the runtime saves captured frames
     private static String reportStatus;
 
-    // One-shot requests the runtime picks up and deletes (a capture, a GPU profile): plain files, not settings.
     private void trigger(String name, String content) {
-        if (folder == null) return;
-        try {
-            Files.write(new File(folder, name).toPath(), content.getBytes());
-        } catch (IOException ignored) {
-            // (storage refused: nothing happens)
-        }
-    }
-
-    private static void clearDir(File dir) {
-        File[] files = dir.listFiles();
-        if (files == null) return;
-        for (File f : files) {
-            if (f.isDirectory()) clearDir(f);
-            f.delete();
-        }
+        BugReport.trigger(folder, name, content);
     }
 
     private void saveReport() {
         reportStatus = "Saving the report…";
         build();
-        new Thread(() -> {
-            File out = new File("/storage/emulated/0/Download/mhrise-report.zip");
-            String result;
-            try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(out))) {
-                for (String name : new String[] {"log.txt", Ini.NAME, "game_settings.txt", "rutas.txt"})
-                    if (folder != null) addToZip(zip, new File(folder, name), name);
-                File[] dumps = new File(DUMPS).listFiles();
-                if (dumps != null)
-                    for (File f : dumps)
-                        if (f.isFile()) addToZip(zip, f, "frame/" + f.getName());
-                result = String.format(java.util.Locale.ROOT, "Report saved: Download/mhrise-report.zip (%.1f MB).",
-                        out.length() / 1048576.0);
-            } catch (IOException e) {
-                result = "Couldn't save the report: " + e.getMessage();
-            }
-            final String done = result;
-            activity.runOnUiThread(() -> {
-                reportStatus = done;
-                build();
-            });
-        }, "Report").start();
-    }
-
-    private static void addToZip(java.util.zip.ZipOutputStream zip, File f, String name) throws IOException {
-        if (!f.isFile()) return;
-        zip.putNextEntry(new java.util.zip.ZipEntry(name));
-        Files.copy(f.toPath(), zip);
-        zip.closeEntry();
+        BugReport.save(folder, done -> activity.runOnUiThread(() -> {
+            reportStatus = done;
+            build();
+        }));
     }
 
     private boolean resetArmed;  // Restore default settings asks for a second tap
@@ -1132,7 +1095,7 @@ final class SettingsMenu {
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
         "60fps", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
-        "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
+        "capture_button", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
         "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
