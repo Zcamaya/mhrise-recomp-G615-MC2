@@ -1102,6 +1102,7 @@ public:
         const uint8_t* data;
         uint64_t generation;  // la del overlay al grabar la copia
         uint8_t writers;
+        bool whole = false;  // Overlay::cpu_reads: the GPU copy is all of it, so all of it goes back (no three-way mix)
     };
     std::mutex wb_mutex_;
     std::vector<PendingWriteBack> pending_wb_;
@@ -3218,6 +3219,20 @@ void Executor::deliver_write_backs(uint64_t up_to) {
         if (st->second.generation != w.generation) continue;  // de antes de que la CPU lo reescribiera
         WriteBackState& ws = st->second;
         auto* game = reinterpret_cast<uint8_t*>(w.address);
+        // A buffer the game fills with a GPU copy to read back: the copy is what it wants, whatever the CPU did to it
+        // since (MH Rise rewrites its occlusion results on the CPU after reading them; mixing kept most of the GPU's
+        // out, and endemic life flickered).
+        if (w.whole) {
+            nnsdk::watch::before_kernel_write(game, w.size);
+            memcpy(game, w.data, w.size);
+            memcpy(ws.base.data(), w.data, w.size);
+            if (ws.watched) nnsdk::watch::collect(w.address, w.size, ws.keys, nullptr);
+            prof_written_back_ += w.size;
+            auto& pd = prof_delivered_[w.address];
+            pd.first = w.size, pd.second += w.size;
+            delivered_hash_[w.address] = range_hash(game, w.size);
+            continue;
+        }
         bool opened = false, cpu_rewrote = false;
         std::vector<std::pair<size_t, size_t>> cpu_runs;  // tramos de páginas que escribió la CPU desde base
         if (ws.watched) nnsdk::watch::collect(w.address, w.size, ws.keys, &cpu_runs);
@@ -3352,7 +3367,8 @@ bool Executor::record_overlay_readbacks() {
         busy_readbacks_[o.readback_data] = o.readback_arena;
         readback_busy_[o.readback_arena]++;
         const auto st = wb_state_.find(address);
-        pending_wb_.push_back({current, address, o.size, o.readback_data, st != wb_state_.end() ? st->second.generation : 0, o.writers});
+        pending_wb_.push_back({current, address, o.size, o.readback_data, st != wb_state_.end() ? st->second.generation : 0, o.writers,
+                               o.cpu_reads && !write_back_on_});
     }
     return barrier_done;
 }
