@@ -1274,11 +1274,14 @@ private:
     std::vector<TracedGpuDraw> traced_gpu_draws_;
     // DEPURACIÓN: con <datos>/profundidad_lequal, los draws con depth EQUAL usan LEQUAL (prueba en caliente).
     bool depth_lequal_ = false;
-    // DEPURACIÓN: con <datos>/depth_gequal, EQUAL pasa a GEQUAL. MH Rise usa Z invertida (el pre-pase escribe con
-    // GEQUAL, f7, y el pase de color dibuja con EQUAL, f3, sin escribir): LEQUAL dejaría pasar lo de detrás. Si una
-    // malla sale con el pase de color pero sin ella no (la cara del cazador: el agujero se ve del color de fondo), el
-    // vertex shader del pre-pase y el del color no dan la misma profundidad.
-    bool depth_gequal_ = false;
+    // Fast depth test (<datos>/fast_depth, Graphics menu). MH Rise uses reversed Z: the pre-pass writes depth with GEQUAL
+    // and the colour pass draws again with EQUAL. On Adreno, EQUAL turns off LRZ (the early depth rejection), so the
+    // colour pass shades much more; GEQUAL gives the same picture for solid meshes and keeps LRZ. Not for cut-out ones
+    // (grass, leaves): their pre-pass discards the see-through pixels and the colour pass relies on EQUAL to skip them,
+    // so with GEQUAL the whole card shows. Those are the meshes drawn in the pre-pass with a pixel shader (solid ones
+    // have none); cutout_meshes_ remembers them by vertex and index buffer, and they keep EQUAL.
+    bool fast_depth_ = false;
+    std::unordered_set<uint64_t> cutout_meshes_;
     static constexpr uint32_t kDepthEqual = 3, kDepthLequal = 4, kDepthGequal = 7;  // NVNdepthFunc  // DEPURACIÓN: al acabar el frame trazado, quién lee el primer contador condicional
     std::vector<std::pair<Texture*, uint32_t>> tex_dumps_;  // DEPURACIÓN: texturas por volcar (NIER_VOLCAR_TEX)
     // DEPURACIÓN (<datos>/verbose_log): estado pequeño (≤ 64 bytes) que escriben los compute (la exposición automática de MH
@@ -3369,7 +3372,7 @@ void Executor::run(const std::vector<const CommandList*>& lists) {
     gpu_stamps_ = !NVN_FLAG("ts_cpu");
     skip_compaction_gs_ = !NVN_FLAG("no_gs_skip");
     log_state_ = NVN_FLAG("verbose_log");
-    depth_gequal_ = NVN_FLAG("depth_gequal");
+    fast_depth_ = NVN_FLAG("fast_depth");
     prof_gpu_report();
     run_stamps_ = 0;
     // A la resolución dinámica se le dice que el frame cuesta lo suyo más LSFG más 2 ms de margen (con todo justo a 32 ms
@@ -7174,7 +7177,17 @@ void Executor::draw(const cmd::Draw& in) {
     if (frame_ == trace_frame_ && traced_in_list("NIER_SIN_BLEND")) st_.color.blend_enable = 0;
     if (frame_ == trace_frame_ && traced_in_list("NIER_SIN_DEPTH")) st_.depth_stencil.depth_test = false;
     if (depth_lequal_ && st_.depth_stencil.depth_func == kDepthEqual) st_.depth_stencil.depth_func = kDepthLequal;
-    if (depth_gequal_ && st_.depth_stencil.depth_func == kDepthEqual) st_.depth_stencil.depth_func = kDepthGequal;
+    if (fast_depth_ && st_.depth_stencil.depth_test) {
+        const uint64_t mesh = st_.vertex_buffers[0].address * 0x9E3779B97F4A7C15ull ^ d.index_address;
+        if (rp_color_count_ == 0 && st_.depth_stencil.depth_write) {
+            if (st_.stages[static_cast<int>(Stage::Fragment)]) {
+                if (cutout_meshes_.size() > 65536) cutout_meshes_.clear();
+                cutout_meshes_.insert(mesh);
+            }
+        } else if (st_.depth_stencil.depth_func == kDepthEqual && !cutout_meshes_.count(mesh)) {
+            st_.depth_stencil.depth_func = kDepthGequal;
+        }
+    }
     VkPipeline p = pipeline(d, rp_, l, rp_color_count_, rp_samples_);
     st_.color.blend_enable = saved_blend;
     st_.depth_stencil = saved_depth;

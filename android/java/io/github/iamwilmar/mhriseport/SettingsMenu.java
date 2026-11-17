@@ -245,6 +245,11 @@ final class SettingsMenu {
                 "The size of the shadow maps, as a share of the game's own. Lower: blurrier shadow edges and a lot less "
                         + "GPU work in one of the heaviest passes. Applies at once.",
                 new String[] {"Game's", "Half", "Quarter"}, new String[] {null, "shadow_half", "shadow_quarter"});
+        flag("Fast depth test",
+                "The colour pass skips hidden pixels earlier (it uses the depth test the GPU can reject fast with), "
+                        + "which can give a few more FPS, mostly on Adreno. Grass and leaves keep the game's own test so "
+                        + "they don't turn into solid cards. Applies at once.",
+                "fast_depth", false);
         header("Detail");
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
