@@ -15,18 +15,39 @@ GLSLC="${GLSLC:-$(command -v glslc || true)}"
 DIR="$ROOT/runtime/src/nnsdk/nvn/shaders"
 FSR="$ROOT/third_party/eden/externals/FidelityFX-FSR/ffx-fsr"
 OUT="$DIR/spirv.h"
+# A shader that doesn't compile here (the FSR ones need Eden's externals/FidelityFX-FSR, which tools/setup.sh doesn't
+# fetch) keeps the array it already has in spirv.h; only a shader with no array yet has to compile.
+TMP="$(mktemp)"
+trap 'rm -f "$TMP" "$DIR"/*.spv "$DIR"/*.err' EXIT
 {
   echo "#pragma once"
   echo "// Generado por tools/shaders.sh: no editar."
   echo "#include <cstdint>"
   for src in "$DIR"/*.comp; do
     name=$(basename "$src" .comp)
-    "$GLSLC" -O --target-env=vulkan1.1 -I "$FSR" "$src" -o "$DIR/$name.spv"
     echo "#define HAVE_${name}_SPV 1"
-    echo "inline constexpr uint32_t k_${name}_spv[] = {"
-    python3 -c "import struct,sys; d=open('$DIR/$name.spv','rb').read(); w=struct.unpack('<%dI'%(len(d)//4),d); print(','.join('0x%08x'%x for x in w))"
-    echo "};"
-    rm "$DIR/$name.spv"
+    if "$GLSLC" -O --target-env=vulkan1.1 -I "$FSR" "$src" -o "$DIR/$name.spv" 2> "$DIR/$name.err"; then
+      echo "inline constexpr uint32_t k_${name}_spv[] = {"
+      python3 -c "import struct,sys; d=open('$DIR/$name.spv','rb').read(); w=struct.unpack('<%dI'%(len(d)//4),d); print(','.join('0x%08x'%x for x in w))"
+      echo "};"
+      rm "$DIR/$name.spv"
+    elif python3 - "$OUT" "$name" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r"inline constexpr uint32_t k_%s_spv\[\] = \{\n.*?\n\};" % re.escape(sys.argv[2]), text, re.S)
+if not m:
+    sys.exit(1)
+print(m.group(0))
+PY
+    then
+      echo "$name: didn't compile here, kept its SPIR-V from spirv.h" >&2
+    else
+      cat "$DIR/$name.err" >&2
+      exit 1
+    fi
+    rm -f "$DIR/$name.err"
   done
-} > "$OUT"
+} > "$TMP"
+mv "$TMP" "$OUT"
+trap - EXIT
 echo "$OUT"
