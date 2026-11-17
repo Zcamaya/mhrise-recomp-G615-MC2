@@ -183,12 +183,12 @@ final class SettingsMenu {
                         + "whole screen. Applies at once.",
                 new String[] {"Default (16:9)", "Force 4:3", "Force 21:9", "Force 16:10", "Stretch to screen"},
                 new String[] {null, "aspect_4_3", "aspect_21_9", "aspect_16_10", "aspect_stretch"});
-        toggle("Ultrawide (experimental)",
-                "The game is told its screen has your phone's shape (1600x720 on a 20:9 phone instead of 1280x720), "
-                        + "so it draws a wider view instead of a stretched picture. The aspect ratio above is ignored "
-                        + "while it's on. Some menus or effects may not expect it. Takes effect on the next start.",
-                () -> has("ultrawide") ? 1 : 0, v -> {
-                    File f = new File(folder, "ultrawide");
+        toggle("Wide view (experimental)",
+                "The camera sees as much as your phone's screen shape instead of 16:9, so you see more at the sides "
+                        + "and nothing is stretched out of shape. The HUD is stretched to the screen, and the aspect "
+                        + "ratio above is ignored while it's on. Takes effect on the next start.",
+                () -> has("wide_view") ? 1 : 0, v -> {
+                    File f = new File(folder, "wide_view");
                     if (v == 0) {
                         f.delete();
                         return;

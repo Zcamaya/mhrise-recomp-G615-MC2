@@ -10926,7 +10926,7 @@ void wait_idle() {
 // the screen, centred, black around it. 16:9 is the game's own; stretch fills the screen as before.
 void picture_rect(VkExtent2D screen, VkExtent2D* out, VkOffset2D* at) {
     float aspect = 16.0f / 9.0f;
-    if (NVN_FLAG("ultrawide")) aspect = 0.0f;  // (the game draws at the screen's own shape: oe.cpp)
+    if (NVN_FLAG("wide_view")) aspect = 0.0f;  // (the camera already sees the screen's shape: loader/wide_view.cpp)
     else if (NVN_FLAG("aspect_4_3")) aspect = 4.0f / 3.0f;
     else if (NVN_FLAG("aspect_16_10")) aspect = 16.0f / 10.0f;
     else if (NVN_FLAG("aspect_21_9")) aspect = 21.0f / 9.0f;
