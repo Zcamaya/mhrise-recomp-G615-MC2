@@ -102,7 +102,9 @@ god rays `+0xb4`, bloom `+0xb5`, lens flare `+0xb6`, chromatic aberration `+0xb7
 SSR `+0x54`, lens distortion `+0x58`, VRS `+0x5c`), exists in the Switch code. The Switch game never calls its
 getters, though. Hooking them caught nothing in the village or on hunts, so changing it does nothing.
 
-GPU culling: `UseGpuOcclusionCulling` is byte `+0x1d` of the object behind GOT entry `main+0x12674d08`.
+GPU culling: `UseGpuOcclusionCulling` is byte `+0x1d` of the object behind GOT entry `main+0x12674d08` (the slot
+holds the address of a global, and the global points at the object; getter `main+0x72874`, setter thunk around
+`main+0x72e84`). `no_gpu_occlusion` writes it.
 `EnableGpuInstanceCulling` has getter `main+0x765cba8` and setter `main+0x765cbb8`, on the object behind
 `main+0x12674d18`. Turning them off didn't bring the endemic life back; the readback above did.
 

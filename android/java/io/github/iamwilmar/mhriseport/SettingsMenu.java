@@ -270,6 +270,10 @@ final class SettingsMenu {
                         + "lights get drawn. Off: they stay invisible (you can still gather them). Costs almost nothing. "
                         + "Applies at once.",
                 "no_readback_copies", true);
+        flag("GPU occlusion culling",
+                "The game's own test that skips meshes hidden behind others. Turn it off if the world is missing and only "
+                        + "the sky shows (seen with ARM's driver on a Dimensity 720). Off draws a little more. Applies at once.",
+                "no_gpu_occlusion", true);
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
@@ -504,8 +508,8 @@ final class SettingsMenu {
         exclusive("Subgroups under 32",
                 "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
                         + "scene is missing pieces without them; off with ARM's own driver, where they stalled the GPU "
-                        + "for hundreds of ms (before the warp barriers fix: worth trying On again). Quad swaps for the "
-                        + "game's derivatives stay on either way." + next,
+                        + "for seconds even after the warp barriers fix. Quad swaps for the game's derivatives stay on "
+                        + "either way." + next,
                 new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
         header("Driver workarounds");
         flag("Qualcomm: return after a switch",

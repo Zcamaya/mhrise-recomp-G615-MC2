@@ -76,8 +76,12 @@ Turnip was still being brought up on the A8xx while this was written, and builds
   an Adreno.
 - **Subgroups of 16,** half a Maxwell warp:
   - **With ARM's driver,** subgroup operations are off. Eden emulates votes as if each invocation were its own warp.
-    With them on, ARM's driver stalled the GPU, but that was on the Dimensity 8300 before the warp barriers fix below,
-    which is a likely cause of that stall, so it's worth testing again (Debug → Subgroups → On).
+    With them on, ARM's driver stalls the GPU: tested again after the warp barriers fix on a Dimensity 720 (r32p1), a
+    bloom pass took seconds per frame. They stay off there.
+  - **The world missing, only the sky drawn** (Dimensity 720, Mali-G57, ARM's r32p1; fine on PanVK on the same
+    phone). The shadow maps held the whole village, so the game was submitting meshes; the main view had no depth
+    pre-pass and no meshes at all, which points at the game's GPU occlusion culling deciding everything was hidden.
+    `no_gpu_occlusion` (Graphics → GPU occlusion culling) turns that test off; being tested.
   - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off). With subgroups off, Eden's fallback for
     `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
     were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so
