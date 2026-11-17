@@ -1694,6 +1694,10 @@ private:
     // every one instead drew stale arguments past the count: a wall of stretched triangles while turning the camera on
     // a Dimensity 720. Keyed by arguments ^ count address; emptied at each pass.
     void prepare_counted_draws(const PassScan& scan);
+    static uint64_t counted_key(const cmd::Draw& d) {  // (the same arguments with another count or size: its own copy)
+        return (d.indirect ^ (d.draw_count * 0x9E3779B97F4A7C15ull)) + (uint64_t(uint32_t(d.max_draws)) << 32) +
+               uint64_t(uint32_t(d.stride)) * 0xBF58476D1CE4E5B9ull;
+    }
     bool counted_setup();
     std::unordered_map<uint64_t, std::pair<VkBuffer, VkDeviceSize>> counted_fix_;
     VkDescriptorSetLayout counted_set_layout_ = VK_NULL_HANDLE;
@@ -4030,7 +4034,7 @@ void Executor::prepare_counted_draws(const PassScan& scan) {
     };
     std::vector<Job> jobs;
     for (const cmd::Draw& d : scan.counted) {
-        const uint64_t key = d.indirect ^ (d.draw_count * 0x9E3779B97F4A7C15ull);
+        const uint64_t key = counted_key(d);
         if (counted_fix_.count(key) || d.stride < 16 || d.stride % 4 || d.max_draws <= 0) continue;
         const uint64_t one = d.index_type >= 0 ? 20 : 16;
         const VkDeviceSize size = VkDeviceSize(d.stride) * VkDeviceSize(d.max_draws - 1) + one;
@@ -4048,9 +4052,13 @@ void Executor::prepare_counted_draws(const PassScan& scan) {
     if (jobs.empty()) return;
     note_gpu_work();
     VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;  // the game's culling wrote them
-    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0,
+    // The game's culling wrote the arguments and the counts: visible to the copy and to the shader, which reads the
+    // counts where they are. (With only the copy here, ARM's driver sometimes gave the shader an old count: pieces of
+    // the ground missing for a frame on a Dimensity 720.)
+    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
                          nullptr);
     for (const Job& j : jobs) {
         const VkBufferCopy r{j.args_offset, j.copy_offset, j.size};
@@ -7224,7 +7232,7 @@ void Executor::draw(const cmd::Draw& in) {
         } else if (gather_overlays(d.draw_count, 4, &count_buf, &count_offset, &count_host))
             st_.rt_dirty = true;
         const auto fixed = count_fallback && count_buf
-                               ? counted_fix_.find(d.indirect ^ (d.draw_count * 0x9E3779B97F4A7C15ull))
+                               ? counted_fix_.find(counted_key(d))
                                : counted_fix_.end();
         if (fixed != counted_fix_.end()) {
             // The arguments, copied before the pass with 0 instances past the GPU's count (prepare_counted_draws)
@@ -7232,6 +7240,9 @@ void Executor::draw(const cmd::Draw& in) {
             gpu_args_offset = fixed->second.second;
             multi_draws = static_cast<uint32_t>(d.max_draws);
             count_buf = VK_NULL_HANDLE;
+            if (frame_ == trace_frame_)  // DEBUG: the count the CPU sees now (what the shader read, unless the GPU changed it)
+                NVN_LOG("F   counted on the GPU: %u of %d (as the CPU sees it)\n",
+                        count_host ? *reinterpret_cast<const volatile uint32_t*>(count_host) : ~0u, d.max_draws);
         } else if (count_fallback && count_buf) {
             // The count is on the GPU and can't be used there: every draw is drawn. The count is the game's GPU culling
             // (about 7 % of these come back 0 in the village), and the arguments of a culled draw are still a valid
