@@ -448,9 +448,24 @@ final class SettingsMenu {
         action("Profile one GPU frame",
                 "Writes how long each pass of one frame takes to the log (\"perfil GPU\" lines). Use it where it's slow.",
                 () -> {
-                    put("profile_gpu", true);
+                    trigger("profile_gpu", "");
                     dialog.dismiss();
                 });
+        header("Bug report");
+        note("For testers: stand where the problem shows, tap Capture this frame, wait a few seconds, then Save the "
+                + "report and send the zip from your Download folder." + (reportStatus != null ? "\n" + reportStatus : ""));
+        action("Capture this frame",
+                "Saves the next frame's pictures (every render target, depth and shadow maps) and a trace of its draws "
+                        + "to the log. The game stutters for a moment. Old captures are cleared first.",
+                () -> {
+                    clearDir(new File(DUMPS));
+                    trigger("trazar", "completa");
+                    reportStatus = "Frame captured. Wait a few seconds before saving the report.";
+                    dialog.dismiss();
+                });
+        action("Save the report",
+                "Puts log.txt, your settings and the captured frame into Download/mhrise-report.zip, to send.",
+                this::saveReport);
         header("Shaders");
         flag("Remove unused shader functions",
                 "Strips shader code that's never called before the driver sees it. Qualcomm's driver (512.863) "
@@ -1036,6 +1051,63 @@ final class SettingsMenu {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    // ---- bug report -------------------------------------------------------------------------------------------------
+
+    private static final String DUMPS = "/storage/emulated/0/NieR-volcados";  // where the runtime saves captured frames
+    private static String reportStatus;
+
+    // One-shot requests the runtime picks up and deletes (a capture, a GPU profile): plain files, not settings.
+    private void trigger(String name, String content) {
+        if (folder == null) return;
+        try {
+            Files.write(new File(folder, name).toPath(), content.getBytes());
+        } catch (IOException ignored) {
+            // (storage refused: nothing happens)
+        }
+    }
+
+    private static void clearDir(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            if (f.isDirectory()) clearDir(f);
+            f.delete();
+        }
+    }
+
+    private void saveReport() {
+        reportStatus = "Saving the report…";
+        build();
+        new Thread(() -> {
+            File out = new File("/storage/emulated/0/Download/mhrise-report.zip");
+            String result;
+            try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(out))) {
+                for (String name : new String[] {"log.txt", Ini.NAME, "game_settings.txt", "rutas.txt"})
+                    if (folder != null) addToZip(zip, new File(folder, name), name);
+                File[] dumps = new File(DUMPS).listFiles();
+                if (dumps != null)
+                    for (File f : dumps)
+                        if (f.isFile()) addToZip(zip, f, "frame/" + f.getName());
+                result = String.format(java.util.Locale.ROOT, "Report saved: Download/mhrise-report.zip (%.1f MB).",
+                        out.length() / 1048576.0);
+            } catch (IOException e) {
+                result = "Couldn't save the report: " + e.getMessage();
+            }
+            final String done = result;
+            activity.runOnUiThread(() -> {
+                reportStatus = done;
+                build();
+            });
+        }, "Report").start();
+    }
+
+    private static void addToZip(java.util.zip.ZipOutputStream zip, File f, String name) throws IOException {
+        if (!f.isFile()) return;
+        zip.putNextEntry(new java.util.zip.ZipEntry(name));
+        Files.copy(f.toPath(), zip);
+        zip.closeEntry();
     }
 
     private boolean has(String name) {

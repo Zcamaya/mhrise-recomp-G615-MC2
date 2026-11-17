@@ -10729,6 +10729,8 @@ void Executor::dump_frame(Texture* presented) {
         NVN_LOG("F comandos del frame (índice del variant:cuenta):%s; draws con render desactivado %llu\n", counts.c_str(),
                 static_cast<unsigned long long>(prof_disabled_draws_));
     }
+    // The log is written in blocks: after a capture, out to the file now, so a report saved from the menu has it.
+    if (frame_ == trace_frame_ + 2) fflush(stdout);
     if (log_state_ && frame_ % 30 == 0 && !small_state_.empty()) log_small_state("cada 30 frames");
     frame_targets_.clear();
     frame_uploads_.clear();

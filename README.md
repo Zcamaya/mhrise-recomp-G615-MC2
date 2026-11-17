@@ -242,6 +242,15 @@ secrets (alias `recomp`). For development, `tools/apk.sh` builds, installs, star
 adb and prints its log. The Python scripts in `tools/` are analysis helpers that work on your own extracted files in
 `work/` (ignored by git).
 
+## Reporting a graphics bug
+
+No terminal needed. In the game, open the settings menu (the gear) → Debug → Bug report:
+
+1. Stand where the problem shows and tap **Capture this frame**. The game stutters for a moment while it saves every
+   picture of that frame (render targets, depth and shadow maps) and a trace of its draws.
+2. Wait a few seconds, open the menu again and tap **Save the report**.
+3. Send `Download/mhrise-report.zip`, with your phone model and which GPU driver you use.
+
 ## Support
 
 Everything here is free and stays free: every build is public and the same for everyone, and donations do not unlock
