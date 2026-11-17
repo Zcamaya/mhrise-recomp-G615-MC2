@@ -29,6 +29,7 @@ add_library(nnsdk SHARED
   src/nnsdk/swkbd.cpp
   src/nnsdk/time.cpp
   src/nnsdk/nvn/bcn.cpp
+  src/nnsdk/nvn/astc.cpp
   src/nnsdk/nvn/driver.cpp
   src/nnsdk/nvn/perf_hint.cpp
   src/nnsdk/nvn/game_tweaks.cpp
@@ -99,6 +100,14 @@ if(NOT CMAKE_ANDROID_ARCH_ABI)  # (libadrenotools lo exige; el toolchain antiguo
 endif()
 add_subdirectory(${EXTERNAL}/libadrenotools adrenotools)
 target_sources(nnsdk PRIVATE ${EXTERNAL}/volk/volk.c)
+# ARM's ASTC encoder (Apache-2.0, unmodified): BC textures re-encoded as ASTC on Mali (nvn/astc.cpp). NEON only.
+file(GLOB ASTCENC_SOURCES ${EXTERNAL}/astcenc/*.cpp)
+add_library(astcenc STATIC ${ASTCENC_SOURCES})
+target_compile_definitions(astcenc PRIVATE ASTCENC_NEON=1 ASTCENC_SVE=0 ASTCENC_SSE=0 ASTCENC_AVX=0 ASTCENC_POPCNT=0
+                                           ASTCENC_F16C=0)
+target_compile_options(astcenc PRIVATE -w -O2)
+target_include_directories(astcenc PUBLIC ${EXTERNAL}/astcenc)
+target_link_libraries(nnsdk PRIVATE astcenc)
 target_include_directories(nnsdk PRIVATE ${EXTERNAL}/volk)
 target_compile_definitions(nnsdk PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR)
 target_link_libraries(nnsdk PRIVATE adrenotools android mediandk aaudio z dl)

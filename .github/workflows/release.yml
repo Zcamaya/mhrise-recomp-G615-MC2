@@ -27,6 +27,8 @@ jobs:
           "$SDKM" "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-33" > /dev/null
       - name: Third-party sources
         run: bash tools/setup.sh
+      - name: Runtime compute shaders
+        run: bash tools/shaders.sh
       - name: FFmpeg cache
         uses: actions/cache@v4
         with:

@@ -270,6 +270,12 @@ final class SettingsMenu {
                         + "lights get drawn. Off: they stay invisible (you can still gather them). Costs almost nothing. "
                         + "Applies at once.",
                 "no_readback_copies", true);
+        flag("Textures as ASTC (Mali)",
+                "On GPUs that can't read the game's BC textures (Mali), keeps them compressed as ASTC instead of 4-8 "
+                        + "times bigger: less memory traffic every frame. The first time a texture loads it's encoded on the "
+                        + "CPU (slower loading and some stutter), then it comes from a cache in the data folder. Restart the "
+                        + "game to apply.",
+                "bc_astc", false);
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
@@ -1095,7 +1101,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
+        "60fps", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
         "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",

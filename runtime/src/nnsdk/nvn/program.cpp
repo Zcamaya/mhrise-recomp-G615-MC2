@@ -158,12 +158,38 @@ bool c1_allowed(uint64_t print) { return listed_in("with_c1", print); }
 // deja Eden al deshacer un BRX (el skinning de la cara del cazador, 793657b4, tomaba el caso de los pesos a cero) y con
 // -O sale bien. Los compute; con <datos>/spirv_opt_all, todas las etapas. <datos>/no_spirv_opt: ninguna, como antes.
 // Se miran una vez, con el primer shader (al arrancar): van en la clave de la caché, así que cambiarlos solo retraduce.
+// Mesa's drivers (Turnip, PanVK) compile Eden's flag-based flow fine: there only compute shaders with a BRX go through
+// spirv-opt (the BRX rule below), not every compute. spirv-opt on a new compute shader froze the game for seconds the
+// first time an attack or effect used it (4 shaders, 4.3 s on an A725 with Turnip). <data>/spirv_opt_compute: every
+// compute shader again, as before.
+bool mesa_driver() {
+    static const bool yes = [] {
+        nvn::VkContext* c = nvn::vk();
+        if (!c) return false;
+        VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+        if (vkGetPhysicalDeviceProperties2) vkGetPhysicalDeviceProperties2(c->gpu, &p2);
+        switch (driver.driverID) {
+            case VK_DRIVER_ID_MESA_TURNIP:
+            case VK_DRIVER_ID_MESA_PANVK:
+            case VK_DRIVER_ID_MESA_RADV:
+            case VK_DRIVER_ID_MESA_LLVMPIPE:
+            case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
+                return true;
+            default:
+                return false;
+        }
+    }();
+    return yes;
+}
+
 uint32_t spirv_opt_stages() {
     static const uint32_t stages = [] {
-        uint32_t s = 1u << static_cast<uint32_t>(nvnshader::Stage::Compute);
+        uint32_t s = mesa_driver() && !NVN_FLAG("spirv_opt_compute") ? 0 : 1u << static_cast<uint32_t>(nvnshader::Stage::Compute);
         if (NVN_FLAG("no_spirv_opt")) s = 0;
         else if (NVN_FLAG("spirv_opt_all")) s = 0x3F;
-        NVN_LOG("spirv-opt: %s\n", !s ? "apagado (no_spirv_opt)" : s == 0x3F ? "todas las etapas (spirv_opt_all)" : "compute");
+        NVN_LOG("spirv-opt: %s\n", NVN_FLAG("no_spirv_opt") ? "apagado (no_spirv_opt)" : s == 0x3F ? "todas las etapas (spirv_opt_all)"
+                                    : s ? "compute" : "shaders with a BRX only (Mesa driver)");
         return s;
     }();
     return stages;
@@ -482,8 +508,8 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // (9ba7ca38dd1316de). Se sabe después de traducir (has_brx va en la caché): con su propia clave. <datos>/no_spirv_opt_brx
     // al arrancar: como antes.
     const uint32_t stage_bit = 1u << static_cast<uint32_t>(out.shader.stage);
-    if (ok && out.shader.has_brx && out.shader.stage != nvnshader::Stage::Compute && !(options.optimize_stages & stage_bit) &&
-        !NVN_FLAG("no_spirv_opt_brx")) {
+    // (Compute shaders too, on Mesa drivers, where they don't all go through spirv-opt.)
+    if (ok && out.shader.has_brx && !(options.optimize_stages & stage_bit) && !NVN_FLAG("no_spirv_opt_brx")) {
         nvnshader::Options opt = options;
         opt.optimize_stages |= stage_bit;
         nvn::spirv_cache::Key opt_key;

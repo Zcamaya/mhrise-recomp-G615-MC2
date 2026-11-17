@@ -3,7 +3,15 @@
 # deja como arrays en shaders/spirv.h (generado: se sube al repo para no depender de glslc al compilar).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GLSLC="${ANDROID_HOME:-$HOME/Library/Android/sdk}/ndk/28.2.13676358/shader-tools/darwin-x86_64/glslc"
+# The NDK's glslc (macOS or Linux), or one on the PATH (GLSLC=… overrides both).
+if [ -z "${GLSLC:-}" ]; then
+  for host in darwin-x86_64 linux-x86_64; do
+    cand="${ANDROID_HOME:-$HOME/Library/Android/sdk}/ndk/28.2.13676358/shader-tools/$host/glslc"
+    [ -x "$cand" ] && GLSLC="$cand" && break
+  done
+fi
+GLSLC="${GLSLC:-$(command -v glslc || true)}"
+[ -x "$GLSLC" ] || { echo "glslc not found (NDK 28.2.13676358 shader-tools, or set GLSLC)" >&2; exit 1; }
 DIR="$ROOT/runtime/src/nnsdk/nvn/shaders"
 FSR="$ROOT/third_party/eden/externals/FidelityFX-FSR/ffx-fsr"
 OUT="$DIR/spirv.h"
@@ -14,6 +22,7 @@ OUT="$DIR/spirv.h"
   for src in "$DIR"/*.comp; do
     name=$(basename "$src" .comp)
     "$GLSLC" -O --target-env=vulkan1.1 -I "$FSR" "$src" -o "$DIR/$name.spv"
+    echo "#define HAVE_${name}_SPV 1"
     echo "inline constexpr uint32_t k_${name}_spv[] = {"
     python3 -c "import struct,sys; d=open('$DIR/$name.spv','rb').read(); w=struct.unpack('<%dI'%(len(d)//4),d); print(','.join('0x%08x'%x for x in w))"
     echo "};"

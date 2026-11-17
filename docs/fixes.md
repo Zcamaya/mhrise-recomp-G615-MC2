@@ -39,8 +39,10 @@ bias, with the clamp when the device supports `depthBiasClamp` (`no_depth_bias`)
 PanVK on the same phone). MH Rise draws almost all of its main view with multi-draws whose count a compute shader
 writes on the GPU. That needs `VK_KHR_draw_indirect_count`, which this driver doesn't have, so the port skipped them
 (4.6 million draws in one session; "multi-draw no soportado" in the log). The shadow maps still had the village
-because the shadow passes draw differently. Now the count is read on the CPU: the last value the GPU wrote, or every
-draw when there's none (`no_count_fallback`). Found by comparing a PanVK and a stock-driver log from the same phone,
+because the shadow passes draw differently. Now those draws are all drawn, ignoring the count
+(`no_count_fallback`). The count is the game's GPU culling, and a culled draw's arguments are still a valid mesh, so
+this draws a few hidden things (about 7 % in the village). Using last frame's count instead flickered, because it lags
+the arguments by a frame. Found by comparing a PanVK and a stock-driver log from the same phone,
 after dynamic shadows, subgroups, GPU occlusion culling and the read-back buffers had been ruled out.
 
 **Grass drawn as solid polygon cards.** Caused by the old `depth_gequal` debug switch, which made the colour pass test
@@ -92,6 +94,14 @@ mixed each time. It's now one continuous queue (`audio_cola.h`).
 
 ## Performance
 
+- **First-use freezes on Turnip:** every compute shader went through spirv-opt, which took 4.3 s for 4 new shaders the
+  first time an attack used them (plus 1.5 s of their pipelines). That was a fix for Qualcomm's own compiler; on Mesa
+  drivers only compute shaders with a switch (BRX) go through it now (`spirv_opt_compute` restores the old rule).
+- **BC textures as ASTC on Mali** (`bc_astc`, off by default until tested): 2-8 times less texture memory traffic
+  than RGBA8. The first load of each texture is slower (CPU encode); the cache in the data folder makes the next ones a
+  file read.
+- **BC textures on Mali and PowerVR:** BC1–BC3 are decoded on the GPU (`no_gpu_bc`), so loading and streaming no longer
+  decode them on the CPU.
 - **Shader stutter:** translations are cached in `spirv.bin`, pipelines are warmed up from `pipelines_estado.bin`, and
   the driver's pipeline cache is saved. MH Rise creates about 1,200 translations from about 250 distinct shaders per
   session; each one used to cost 2.2 ms with the frame stopped.

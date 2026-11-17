@@ -120,6 +120,8 @@ The game's buffers are its own memory, and the GPU can't read that memory direct
    contain a switch (BRX). That's because Qualcomm's compiler mishandles the flag-based control flow Eden builds for
    switches. Functions the shader never calls are removed (with the capability they bring), unless
    `keep_dead_functions` is set.
+   On Qualcomm's and ARM's drivers every compute shader goes through it; on Mesa's (Turnip, PanVK) only those with a
+   switch.
 3. Translations are cached in `<data>/spirv.bin` (`spirv_cache.cpp`). The key covers the code, every translation option
    and `kKeyVersion` in `program.cpp`. **Bump `kKeyVersion` whenever a change alters the SPIR-V produced**, or old
    cached translations keep being used.
@@ -152,6 +154,8 @@ resolution (see [mh-rise.md](mh-rise.md)).
 
 ## Releasing
 
-`tools/build_apk.sh` (with `RELEASE=1` for `-O3`, stripped symbols and a non-debuggable APK). Pushing a `v*` tag runs
+The port's own compute shaders (`runtime/src/nnsdk/nvn/shaders/*.comp`: FSR, BC decoding) are compiled into
+`shaders/spirv.h` by `tools/shaders.sh` with the NDK's glslc; the workflows run it before building. A shader missing
+from an old `spirv.h` just turns its feature off. `tools/build_apk.sh` (with `RELEASE=1` for `-O3`, stripped symbols and a non-debuggable APK). Pushing a `v*` tag runs
 the `release` workflow, which builds the normal APK plus the AnTuTu and Ludashi package builds. `tools/setup.sh`
 retries the Boost download, because GitHub sometimes answers 502 for a moment.

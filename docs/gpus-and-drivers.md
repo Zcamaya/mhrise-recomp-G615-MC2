@@ -71,9 +71,16 @@ Turnip was still being brought up on the A8xx while this was written, and builds
 
 ## Mali (ARM's driver and PanVK)
 
-- **No BC texture formats:** every BC1–BC7 texture is decompressed on the CPU as it uploads (`bcn.cpp`, written from
-  the format specification). That makes loading slower and textures 4–8 times bigger. `bc_on_cpu` tests this path on
-  an Adreno.
+- **No BC texture formats:** BC1–BC3 (most of the game's colour textures) are decoded by a compute shader as they
+  upload (`shaders/bc_decode.comp`, the same integer math as `bcn.cpp`): only the compressed blocks are uploaded and
+  the CPU does no decoding (`no_gpu_bc` goes back to the CPU). BC4–BC7 are still decompressed on the CPU (`bcn.cpp`,
+  written from the format specification). `bc_on_cpu` tests these paths on an Adreno.
+  With `bc_astc` (Graphics → Textures as ASTC), BC1/BC2/BC3/BC7 are stored as ASTC 4x4 instead, which Mali reads
+  natively: RGBA8 is 4 times the size of BC3/BC7 and 8 times BC1, ASTC 4x4 the same as BC3/BC7. The encode uses ARM's
+  astcenc (fastest preset, 4 threads) the first time a level loads, and the result goes to `<data>/astc_cache/`, keyed
+  by the BC blocks. The idea came from the mesa-wrapper that transcodes BC to ASTC for Winlator; the code is the port's
+  own plus astcenc. The idea came from the bionic
+  Vulkan wrapper, which decodes BC on the GPU for Winlator; the shader here is the port's own.
 - **Subgroups of 16,** half a Maxwell warp:
   - **With ARM's driver,** subgroup operations are off. Eden emulates votes as if each invocation were its own warp.
     With them on, ARM's driver stalls the GPU: tested again after the warp barriers fix on a Dimensity 720 (r32p1), a
@@ -84,7 +91,7 @@ Turnip was still being brought up on the A8xx while this was written, and builds
 ARM's r32 driver on a Dimensity 720 (Mali-G57) lacks `VK_KHR_draw_indirect_count`, `extended_dynamic_state`,
 `depth_clip_enable`, `vertex_attribute_divisor`, `sampler_filter_minmax`, `dynamic_rendering` and vertex-stage
 stores. The one that mattered: without draw-indirect-count, MH Rise's multi-draws (almost the whole main view) were
-skipped and only the sky showed. The count is now taken on the CPU (`no_count_fallback`), and without the
+skipped and only the sky showed. Those draws are now all drawn, ignoring the GPU's count (`no_count_fallback`), and without the
 `multiDrawIndirect` feature each draw gets its own call. Check the log for "multi-draw no soportado" or "sin dibujar"
 numbers in the millions on any new old driver.
 

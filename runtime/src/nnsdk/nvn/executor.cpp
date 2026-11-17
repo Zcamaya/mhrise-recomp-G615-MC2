@@ -38,6 +38,7 @@
 #include <type_traits>
 #include <unordered_map>
 
+#include "nnsdk/nvn/astc.h"
 #include "nnsdk/nvn/bcn.h"
 #include "nnsdk/nvn/commands.h"
 #include "nnsdk/watch.h"
@@ -48,6 +49,7 @@
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/formats.h"
 #include "nnsdk/nvn/records_file.h"
+#include "nnsdk/nvn/shaders/spirv.h"
 #include "nvn_traductor_huella.h"  // NVN_TRADUCTOR_HUELLA: los registros del precalentado son de este traductor
 #include "nnsdk/ini.h"
 
@@ -1190,7 +1192,22 @@ private:
     bool ensure_image(Texture& t, VkCommandBuffer cmd);
     void upload(Texture& t);
     bool decode_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
-                      std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
+                      std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions, VkBuffer blocks_buffer = VK_NULL_HANDLE,
+                      VkDeviceSize blocks_offset = 0);
+    // BC1-BC3 decoded by a compute shader (shaders/bc_decode.comp) instead of on the CPU, where the GPU can't sample them.
+    // The deswizzled blocks go to staging, the shader writes RGBA8 texels to another staging range, and that is copied to
+    // the image like the CPU's. 4x less to upload and no CPU decoding. <data>/no_gpu_bc (live): the CPU, as before.
+    bool bc_on_gpu(const Texture& t);
+    // A level of a BC texture stored as ASTC (astc.h): from the disk cache, or decoded and encoded here and cached.
+    bool astc_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
+                    std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
+    bool bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
+                       uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
+    uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
+    VkDescriptorSetLayout bc_set_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout bc_layout_ = VK_NULL_HANDLE;
+    VkPipeline bc_pipeline_ = VK_NULL_HANDLE;
+    bool bc_setup_done_ = false;
     // ¿Hay que volver a subir una textura que sube la CPU, antes de enlazarla? Vigilada, las páginas escritas desde la
     // última revisión (una vez por envío); si no, la huella muestreada (una vez por frame).
     bool cpu_texture_changed(Texture& t);
@@ -3832,6 +3849,11 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
         if (told.insert(format).second)
             NVN_LOG("formato %s: la GPU no lo lee, se descomprime en la CPU al subirlo\n", f->name);
         format = bcn::decoded_format(format);
+        // Stored as ASTC 4x4 instead (astc.h): the RGBA8 kinds only (BC4/BC5 are one or two channels and BC6H is HDR).
+        // The blocks line up with the BC ones, 4x4 each.
+        const bool rgba_kind = bcn_kind == bcn::kBC1 || bcn_kind == bcn::kBC2 || bcn_kind == bcn::kBC3 || bcn_kind == bcn::kBC7;
+        if (rgba_kind && astc::wanted())
+            format = format == VK_FORMAT_R8G8B8A8_SRGB ? VK_FORMAT_ASTC_4x4_SRGB_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
         vkGetPhysicalDeviceFormatProperties(c->gpu, format, &fp);
     }
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
@@ -3907,6 +3929,7 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
     vkBindImageMemory(c->device, t.image, t.memory.memory, t.memory.offset);
     t.vk_format = format;
     t.bcn = bcn_kind;
+    t.astc = format == VK_FORMAT_ASTC_4x4_SRGB_BLOCK || format == VK_FORMAT_ASTC_4x4_UNORM_BLOCK ? bcn_kind != bcn::kNone : false;
     t.aspect = depth ? (VK_IMAGE_ASPECT_DEPTH_BIT | (has_stencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0))
                      : VK_IMAGE_ASPECT_COLOR_BIT;
     if (format == VK_FORMAT_S8_UINT) t.aspect = VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -3933,8 +3956,158 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
 // Un nivel de una textura descomprimida en la CPU (Texture::bcn): `blocks`, sus bloques ya en orden lineal, salen como
 // texels en trozos de staging (cada uno de las filas que quepan en kStagingChunk), descomprimidos por filas de bloques
 // entre los hilos de row_pool, y una copia por trozo. false: el staging se acabó (se reintenta como cualquier subida).
+bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
+                          std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
+    const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
+    const bool srgb = t.vk_format == VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+    const size_t block_row = size_t{lv.width_blocks} * bcn::block_bytes(kind);
+    const size_t slice_bc = block_row * lv.height_blocks, slice_astc = size_t{lv.width_blocks} * lv.height_blocks * 16;
+    static thread_local std::vector<uint8_t> texels;
+    for (uint32_t z = 0; z < std::max(lv.depth, 1u); z++) {
+        const uint8_t* slice = blocks + size_t{z} * slice_bc;
+        // The key: the BC blocks, their kind, size and colour space, and the encoder's version (1 here: change it if the
+        // encoder settings change, or old files would be used).
+        uint64_t key = full_hash(slice, slice_bc);
+        key ^= (uint64_t{lv.width} << 40) ^ (uint64_t{lv.height} << 16) ^ (uint64_t{kind} << 8) ^ (srgb ? 0x80 : 0) ^ 1;
+        key *= 0x9E3779B97F4A7C15ull;
+        Staging::Alloc a = staging_->alloc(slice_astc, 16);
+        if (!a.data) return false;
+        bool cached;
+        {
+            LoadTimer timer(*this, kLdDeswizzle, slice_astc);
+            cached = astc::load(key, slice_astc, a.data);
+        }
+        if (!cached) {
+            LoadTimer timer(*this, kLdDeswizzle, size_t{lv.width} * lv.height * 4);
+            // Whole blocks (the edge ones too: the encoder wants them filled), then the encode.
+            const uint32_t w = lv.width_blocks * 4, h = lv.height_blocks * 4;
+            texels.resize(size_t{w} * h * 4);
+            bcn::decode(kind, slice, lv.width_blocks, lv.height_blocks, texels.data(), size_t{w} * 4, w, h);
+            if (!astc::encode(texels.data(), w, h, srgb, a.data)) return false;
+            astc::store(key, a.data, slice_astc);
+            prof_astc_encoded_++;
+        } else {
+            prof_astc_cached_++;
+        }
+        VkBufferImageCopy r{};
+        r.bufferOffset = a.offset;
+        r.bufferRowLength = lv.width_blocks * 4;
+        r.bufferImageHeight = lv.height_blocks * 4;
+        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, 1};
+        r.imageOffset = {0, 0, static_cast<int32_t>(z)};
+        r.imageExtent = {lv.width, lv.height, 1};
+        regions.emplace_back(a.buffer, r);
+    }
+    return true;
+}
+
+bool Executor::bc_on_gpu(const Texture& t) {
+#ifdef HAVE_bc_decode_SPV
+    const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
+    if ((kind != bcn::kBC1 && kind != bcn::kBC2 && kind != bcn::kBC3) || NVN_FLAG("no_gpu_bc")) return false;
+    if (!bc_setup_done_) {
+        bc_setup_done_ = true;
+        VkContext* c = vk();
+        const VkDescriptorSetLayoutBinding b[2] = {
+            {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        dl.bindingCount = 2;
+        dl.pBindings = b;
+        const VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 5 * sizeof(uint32_t)};
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &bc_set_layout_;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pc;
+        VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        mi.codeSize = sizeof k_bc_decode_spv;
+        mi.pCode = k_bc_decode_spv;
+        VkShaderModule module = VK_NULL_HANDLE;
+        if (vkCreateDescriptorSetLayout(c->device, &dl, nullptr, &bc_set_layout_) == VK_SUCCESS &&
+            vkCreatePipelineLayout(c->device, &pl, nullptr, &bc_layout_) == VK_SUCCESS &&
+            vkCreateShaderModule(c->device, &mi, nullptr, &module) == VK_SUCCESS) {
+            VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName = "main";
+            ci.layout = bc_layout_;
+            if (vkCreateComputePipelines(c->device, VK_NULL_HANDLE, 1, &ci, nullptr, &bc_pipeline_) != VK_SUCCESS)
+                bc_pipeline_ = VK_NULL_HANDLE;
+        }
+        if (module) vkDestroyShaderModule(c->device, module, nullptr);
+        NVN_LOG("BC1-BC3 textures: %s\n", bc_pipeline_ ? "decoded on the GPU" : "the GPU decoder didn't build, decoded on the CPU");
+    }
+    return bc_pipeline_ != VK_NULL_HANDLE;
+#else
+    (void)t;
+    return false;  // (spirv.h from before bc_decode.comp: tools/shaders.sh adds it)
+#endif
+}
+
+bool Executor::bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
+                             uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
+    const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
+    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
+    const size_t pitch = size_t{lv.width} * 4, block_row = size_t{lv.width_blocks} * bcn::block_bytes(kind);
+    const uint32_t per_chunk = static_cast<uint32_t>(std::max<size_t>(1, kStagingChunk / std::max<size_t>(pitch * 4, 1)));
+    LoadTimer timer(*this, kLdDeswizzle, size_t{lv.width} * lv.height * 4);
+    note_gpu_work();
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, bc_pipeline_);
+    bool any = false;
+    for (uint32_t z = 0; z < std::max(lv.depth, 1u); z++) {
+        for (uint32_t by = 0; by < lv.height_blocks; by += per_chunk) {
+            const uint32_t hb = std::min(per_chunk, lv.height_blocks - by);
+            const uint32_t rows = std::min(hb * 4, lv.height - std::min(lv.height, by * 4));
+            if (!rows) break;
+            Staging::Alloc out = staging_->alloc(pitch * rows, align);
+            const VkDescriptorSet set = out.data ? descriptor_set(bc_set_layout_) : VK_NULL_HANDLE;
+            if (!set) return false;
+            // The blocks of this slice and these rows, bound from an aligned offset; the rest goes in src_word.
+            const VkDeviceSize first = offset + (VkDeviceSize{z} * lv.height_blocks + by) * block_row;
+            const VkDeviceSize base = first / align * align;
+            const VkDescriptorBufferInfo src{blocks, base, VK_WHOLE_SIZE}, dst{out.buffer, out.offset, pitch * rows};
+            VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+            for (int k = 0; k < 2; k++) {
+                w[k].dstSet = set;
+                w[k].dstBinding = static_cast<uint32_t>(k);
+                w[k].descriptorCount = 1;
+                w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[k].pBufferInfo = k ? &dst : &src;
+            }
+            vkUpdateDescriptorSets(vk()->device, 2, w, 0, nullptr);
+            const uint32_t params[5] = {static_cast<uint32_t>((first - base) / 4), lv.width, rows, lv.width_blocks,
+                                        static_cast<uint32_t>(kind)};
+            vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, bc_layout_, 0, 1, &set, 0, nullptr);
+            vkCmdPushConstants(cmd_, bc_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
+            vkCmdDispatch(cmd_, (lv.width + 7) / 8, (rows + 7) / 8, 1);
+            any = true;
+            VkBufferImageCopy r{};
+            r.bufferOffset = out.offset;
+            r.bufferRowLength = lv.width;
+            r.bufferImageHeight = rows;
+            r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, 1};
+            r.imageOffset = {0, static_cast<int32_t>(by * 4), static_cast<int32_t>(z)};
+            r.imageExtent = {lv.width, rows, 1};
+            regions.emplace_back(out.buffer, r);
+        }
+    }
+    if (any) {  // the texels, before the copies to the image (recorded by upload after this)
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+    }
+    return true;
+}
+
 bool Executor::decode_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
-                            std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
+                            std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions, VkBuffer blocks_buffer,
+                            VkDeviceSize blocks_offset) {
+    if (t.astc) return astc_level(t, lv, blocks, level, layer, regions);
+    if (blocks_buffer && bc_pipeline_) return bc_gpu_decode(t, lv, blocks_buffer, blocks_offset, level, layer, regions);
     const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
     const uint32_t bb = bcn::block_bytes(kind), tb = bcn::texel_bytes(kind);
     const size_t pitch = size_t{lv.width} * tb, block_row = size_t{lv.width_blocks} * bb;
@@ -4093,7 +4266,11 @@ void Executor::upload(Texture& t) {
             // los texels (decode_level, más abajo)
             Staging::Alloc a{};
             static thread_local std::vector<uint8_t> bc_scratch;
-            if (t.bcn) {
+            const bool bc_gpu = t.bcn && !t.astc && bc_on_gpu(t);
+            if (bc_gpu) {
+                a = staging_->alloc(linear_size, std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16));
+                if (!a.data) return;
+            } else if (t.bcn) {
                 bc_scratch.resize(linear_size);
                 a.data = bc_scratch.data();
             } else {
@@ -4144,7 +4321,7 @@ void Executor::upload(Texture& t) {
             }
             if (count_zeros && zeros * 100 > linear_size / 16) astc_missing = std::max<int>(astc_missing, static_cast<int>(level));
             if (t.bcn) {
-                if (!decode_level(t, lv, a.data, level, layer, regions)) return;
+                if (!decode_level(t, lv, a.data, level, layer, regions, bc_gpu ? a.buffer : VK_NULL_HANDLE, a.offset)) return;
                 continue;
             }
             VkBufferImageCopy r{};
@@ -4287,7 +4464,9 @@ VkImageView Executor::view(Texture& t, const TextureViewDesc& requested, bool at
                 NVN_LOG("vista con otro formato: textura 0x%x vista 0x%x (%dx%d)%s\n", t.desc.format, v.format, t.desc.width,
                         t.desc.height, t.mutable_format ? "" : ", sin MUTABLE: con el formato de la textura");
             VkFormat want = f->vk;
-            if (t.bcn) {  // (descomprimida: la vista BC es su formato sin comprimir, si mide lo mismo por texel)
+            if (t.astc) {
+                want = vi.format;  // (stored as ASTC: the image's own format)
+            } else if (t.bcn) {  // (descomprimida: la vista BC es su formato sin comprimir, si mide lo mismo por texel)
                 const VkFormat plain = bcn::decoded_format(want);
                 want = plain != VK_FORMAT_UNDEFINED && bcn::texel_bytes(bcn::kind_of(want)) == bcn::texel_bytes(
                            static_cast<bcn::Kind>(t.bcn)) ? plain : vi.format;
@@ -5278,6 +5457,32 @@ bool Executor::apply_texel_writes(Texture& t) {
                     memcpy(a.data + y * row, level + size_t{w.box.y + y} * L.stride + size_t{w.box.x} * bpb, row);
             } else {
                 deswizzle_region(lv, bpb, w.box, level, a.data, row, row * w.box.height);
+            }
+            if (t.astc) {  // the box's blocks decoded and encoded again (no cache: these are small and change)
+                const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
+                const uint32_t tw = w.box.width * 4, th = w.box.height * 4;
+                const uint32_t x0 = w.box.x * 4, y0 = w.box.y * 4;
+                const uint32_t cw = std::min(tw, lv.width - std::min(lv.width, x0)), ch = std::min(th, lv.height - std::min(lv.height, y0));
+                if (!cw || !ch) continue;
+                static thread_local std::vector<uint8_t> texels;
+                texels.resize(size_t{tw} * th * 4);
+                for (uint32_t z = 0; z < std::max(w.box.depth, 1u); z++) {
+                    Staging::Alloc d = staging_->alloc(size_t{w.box.width} * w.box.height * 16, 16);
+                    if (!d.data) return true;
+                    bcn::decode(kind, a.data + size_t{z} * row * w.box.height, w.box.width, w.box.height, texels.data(),
+                                size_t{tw} * 4, tw, th);
+                    if (!astc::encode(texels.data(), tw, th, t.vk_format == VK_FORMAT_ASTC_4x4_SRGB_BLOCK, d.data)) continue;
+                    VkBufferImageCopy r{};
+                    r.bufferOffset = d.offset;
+                    r.bufferRowLength = tw;
+                    r.bufferImageHeight = th;
+                    r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, w.level, w.layer + k, 1};
+                    r.imageOffset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), static_cast<int32_t>(w.box.z + z)};
+                    r.imageExtent = {cw, ch, 1};
+                    note_gpu_work();
+                    vkCmdCopyBufferToImage(cmd_, d.buffer, t.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+                }
+                continue;
             }
             if (t.bcn) {
                 const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
@@ -6887,18 +7092,17 @@ void Executor::draw(const cmd::Draw& in) {
         } else if (gather_overlays(d.draw_count, 4, &count_buf, &count_offset, &count_host))
             st_.rt_dirty = true;
         if (count_fallback && count_buf) {
-            // The count is on the GPU and can't be used there: the last value the CPU can see (the previous run of the
-            // culling, which is usually the same), or every draw if there's none. Draws past the real count can show
-            // something hidden for a frame; that beats an empty world.
-            const uint32_t seen = count_host ? *reinterpret_cast<const volatile uint32_t*>(count_host) : ~0u;
-            multi_draws = std::min<uint32_t>(seen, static_cast<uint32_t>(d.max_draws));
+            // The count is on the GPU and can't be used there: every draw is drawn. The count is the game's GPU culling
+            // (about 7 % of these come back 0 in the village), and the arguments of a culled draw are still a valid
+            // mesh, so this only draws a few hidden things. Taking last frame's count instead flickered: it lags the
+            // arguments by a frame.
+            multi_draws = static_cast<uint32_t>(d.max_draws);
             count_buf = VK_NULL_HANDLE;
             static bool logged = false;
             if (!logged) {
                 logged = true;
-                NVN_LOG("multi-draw with the count on the GPU and no VK_KHR_draw_indirect_count: count taken on the CPU\n");
+                NVN_LOG("multi-draw with the count on the GPU and no VK_KHR_draw_indirect_count: every draw is drawn\n");
             }
-            if (!multi_draws) return;
         } else if (!count_buf) {
             multi_draws = std::min<uint32_t>(*reinterpret_cast<const uint32_t*>(d.draw_count), static_cast<uint32_t>(d.max_draws));
             if (!multi_draws) return;
@@ -10496,6 +10700,10 @@ void Executor::profile_frame() {
             prof_forced_levels_ / double(period), (unsigned long long)prof_forced_unseen_,
             prof_full_hash_bytes_ / double(period) / 1048576.0, (unsigned long long)prof_watched_textures_);
     prof_forced_levels_ = prof_forced_unseen_ = prof_full_hash_bytes_ = 0;
+    if (prof_astc_encoded_ || prof_astc_cached_)
+        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache\n", (unsigned long long)prof_astc_encoded_,
+                (unsigned long long)prof_astc_cached_);
+    prof_astc_encoded_ = prof_astc_cached_ = 0;
     NVN_LOG("perfil fsr: %llu de %d frames con el blit por la guarda (frame del juego > %.1f ms)\n",
             static_cast<unsigned long long>(prof_fsr_guard_frames_), period, (frame_period_ns() < 20'000'000 ? kFsrOffNs60 : kFsrOffNs) / 1e6);
     prof_fsr_guard_frames_ = 0;
