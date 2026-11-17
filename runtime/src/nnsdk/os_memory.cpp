@@ -30,6 +30,7 @@
 #include "nnsdk/os.h"
 #include "nnsdk/types.h"
 #include "nnsdk/watch.h"
+#include "nnsdk/ini.h"
 
 namespace nnsdk {
 bool alias_heap_pages(void* dst, const void* src, size_t size);
@@ -83,8 +84,7 @@ bool reserve() {
     const size_t size = kTotalMemory + kHeapUnit;
     // El memfd no ocupa nada hasta que se tocan sus páginas (como MAP_NORESERVE). <datos>/no_memfd: memoria anónima,
     // como antes (sin alias: lo que MH Rise mapea en sus pools virtuales se vería a cero).
-    const char* data = getenv("NIER_DATA");
-    const bool memfd = access((std::string(data ? data : ".") + "/no_memfd").c_str(), F_OK) != 0;
+    const bool memfd = !nnsdk::ini::on("no_memfd");
     int fd = memfd ? memfd_create("nnsdk-heap", MFD_CLOEXEC) : -1;
     void* p = MAP_FAILED;
     if (fd >= 0 && ftruncate(fd, static_cast<off_t>(size)) == 0)

@@ -49,6 +49,7 @@
 #include "nnsdk/nvn/formats.h"
 #include "nnsdk/nvn/records_file.h"
 #include "nvn_traductor_huella.h"  // NVN_TRADUCTOR_HUELLA: los registros del precalentado son de este traductor
+#include "nnsdk/ini.h"
 
 namespace nvn {
 
@@ -10836,8 +10837,7 @@ private:
     };
     bool async() {
         if (++checks_ % 64 == 1) {  // mirar el fichero de vez en cuando, no en cada envío
-            const char* data = getenv("NIER_DATA");
-            sync_mode_ = access((std::string(data ? data : ".") + "/sincrono").c_str(), F_OK) == 0;
+            sync_mode_ = nnsdk::ini::on("sincrono");
         }
         return !sync_mode_;
     }

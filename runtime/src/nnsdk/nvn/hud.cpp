@@ -22,6 +22,7 @@
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/nvn.h"
 #include "nnsdk/runtime.h"
+#include "nnsdk/ini.h"
 
 namespace nvn::hud {
 namespace {
@@ -122,8 +123,8 @@ public:
         trim(generated_, last_real_);
     }
     void record(VkCommandBuffer cmd, VkImage image, VkExtent2D extent, VkFormat format) {
-        // El contador se apaga con <datos>/no_fps (en vivo, como siempre) o desde el panel, que pone y quita ese mismo
-        // fichero: lo elegido vale también para la próxima vez que se abra el juego.
+        // The counter goes off with no_fps in mhr.ini (live, as always) or from the panel, which writes that same line:
+        // the choice also holds the next time the game opens.
         if (const bool file = NVN_FLAG("no_fps"); !flag_seen_ || file != flag_) flag_seen_ = true, flag_ = hidden_ = file;
         const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -168,7 +169,7 @@ private:
         if (open) {  // por si los ficheros cambiaron desde fuera
             const bool marked = has_setup() && access(data_file("elegir_carpeta").c_str(), F_OK) == 0;
             if (marked != choose_folder_) choose_folder_ = marked, panel_dirty_ = true;
-            const bool tv = has_tv() && access(data_file("tv_mode").c_str(), F_OK) == 0;
+            const bool tv = has_tv() && nnsdk::ini::on("tv_mode");
             if (tv != tv_) tv_ = tv, panel_dirty_ = true;
         }
     }
@@ -258,12 +259,7 @@ private:
     void set_hidden(bool hidden) {
         hidden_ = hidden;
         panel_dirty_ = true;
-        const std::string file = data_file("no_fps");
-        if (!hidden) {
-            unlink(file.c_str());
-        } else if (const int fd = open(file.c_str(), O_WRONLY | O_CREAT, 0644); fd >= 0) {
-            close(fd);
-        }
+        nnsdk::ini::set("no_fps", hidden ? "1" : "0");
         NVN_LOG("hud: contador de FPS %s desde el panel\n", hidden ? "apagado" : "encendido");
     }
     // "Cambiar carpeta": con el fichero <datos>/elegir_carpeta, la pantalla de inicio de la app (que normalmente arranca el
@@ -279,17 +275,12 @@ private:
         }
         NVN_LOG("hud: cambiar de carpeta al abrir la app: %s\n", on ? "sí" : "no");
     }
-    // "Modo TV": con el fichero <datos>/tv_mode el juego cree estar en la base (más resolución, mando Pro) desde la próxima
-    // vez que se abra; el modo se decide al arrancar (nnsdk::tv_mode).
+    // "TV mode": with tv_mode in mhr.ini the game thinks it's docked (more resolution, Pro Controller) from the next
+    // time it opens; the mode is decided at start-up (nnsdk::tv_mode).
     void set_tv(bool on) {
         tv_ = on;
         panel_dirty_ = true;
-        const std::string file = data_file("tv_mode");
-        if (!on) {
-            unlink(file.c_str());
-        } else if (const int fd = open(file.c_str(), O_WRONLY | O_CREAT, 0644); fd >= 0) {
-            close(fd);
-        }
+        nnsdk::ini::set("tv_mode", on ? "1" : "0");
         NVN_LOG("hud: modo TV al abrir la app: %s\n", on ? "sí" : "no");
     }
     void record_panel(VkCommandBuffer cmd, VkImage image, VkExtent2D extent, bool bgra, int64_t now) {
@@ -454,11 +445,11 @@ private:
     std::vector<Buffer> buffers_, panel_buffers_;
     uint32_t next_ = 0, panel_next_ = 0;
     bool failed_ = false;
-    bool hidden_ = false, flag_ = false, flag_seen_ = false;  // el contador apagado; lo último que dijo <datos>/no_fps
+    bool hidden_ = false, flag_ = false, flag_seen_ = false;  // the counter off; what no_fps said last
     bool panel_open_ = false, touch_seen_ = false, gesture_seen_ = false;
     bool panel_dirty_ = true, panel_drawn_hidden_ = false;  // hay que redibujarlo; el estado con el que se dibujó
     bool choose_folder_ = false;                   // la fila "Cambiar carpeta" (el fichero <datos>/elegir_carpeta)
-    bool tv_ = false;                              // la fila "Modo TV" (el fichero <datos>/tv_mode)
+    bool tv_ = false;                              // the "TV mode" row (tv_mode in mhr.ini)
     uint32_t panel_w_ = 0, panel_h_ = 0;           // el tamaño con el que se crearon sus buffers
     float panel_from_ = 0.0f;                     // lo que asomaba cuando se abrió o se cerró por última vez
     int64_t panel_at_ = 0, touched_at_ = 0;       // cuándo fue eso, y la última vez que se tocó

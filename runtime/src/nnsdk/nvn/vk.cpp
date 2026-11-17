@@ -10,6 +10,7 @@
 
 #include "nnsdk/nvn/driver.h"
 #include "nnsdk/nvn/nvn.h"
+#include "nnsdk/ini.h"
 
 namespace nvn {
 
@@ -97,20 +98,12 @@ void probe_limits(VkContext& c) {
 // TU_DEBUG=sysmem,nolrz,noubwc and FD_DEV_FEATURES=… for Turnip (still being brought up on the Adreno 8xx),
 // PAN_DEBUG / PANVK_DEBUG for PanVK. The settings menu writes it (Debug → Driver environment). Read at start-up.
 void driver_environment() {
-    const char* data = getenv("NIER_DATA");
-    FILE* f = fopen((std::string(data ? data : ".") + "/driver_env.txt").c_str(), "r");
-    if (!f) return;
-    char line[512];
-    while (fgets(line, sizeof line, f)) {
-        std::string l(line);
-        while (!l.empty() && (l.back() == '\n' || l.back() == '\r' || l.back() == ' ')) l.pop_back();
-        const size_t eq = l.find('=');
-        if (l.empty() || l[0] == '#' || eq == std::string::npos || eq == 0) continue;
-        const std::string name = l.substr(0, eq), value = l.substr(eq + 1);
-        setenv(name.c_str(), value.c_str(), 1);
-        NVN_LOG("driver environment: %s=%s\n", name.c_str(), value.c_str());
+    // "env.NAME = value" lines of mhr.ini (Debug → Driver environment), set before the driver loads.
+    for (const auto& [key, value] : nnsdk::ini::read()) {
+        if (key.compare(0, 4, "env.") != 0 || key.size() == 4) continue;
+        setenv(key.c_str() + 4, value.c_str(), 1);
+        NVN_LOG("driver environment: %s=%s\n", key.c_str() + 4, value.c_str());
     }
-    fclose(f);
 }
 
 bool create(VkContext& c, bool system_driver) {
@@ -210,7 +203,7 @@ bool create(VkContext& c, bool system_driver) {
     // DEPURACIÓN: <datos>/robusto al arrancar: con robustBufferAccess (los accesos fuera de un buffer devuelven 0, como
     // los cbuf de Maxwell, en vez de leer memoria cualquiera).
     bool robust = false;
-    if (const char* data = getenv("NIER_DATA"); data && access((std::string(data) + "/robusto").c_str(), F_OK) == 0) {
+    if (nnsdk::ini::on("robusto")) {
         features.robustBufferAccess = VK_TRUE;
         robust = true;
         NVN_LOG("robustBufferAccess: sí (<datos>/robusto)\n");

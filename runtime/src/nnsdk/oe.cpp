@@ -17,6 +17,7 @@
 
 #include "nnsdk/runtime.h"
 #include "nnsdk/types.h"
+#include "nnsdk/ini.h"
 
 namespace nn {
 namespace os {
@@ -120,8 +121,7 @@ void GetDisplayVersion(DisplayVersion* out) {
 namespace nnsdk {
 bool docked() {
     static const bool on = [] {
-        const char* data = getenv("NIER_DATA");
-        const bool d = access((std::string(data ? data : ".") + "/dock_mode").c_str(), F_OK) == 0;
+        const bool d = nnsdk::ini::on("dock_mode");
         printf("[oe] mode: %s\n", d ? "docked (dock_mode)" : "handheld");
         return d;
     }();

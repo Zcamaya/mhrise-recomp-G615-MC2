@@ -1,6 +1,6 @@
 #pragma once
-// Wide view (Display -> Wide view): the camera sees as much as a screen of <datos>/wide_view's shape (the phone's
-// width / height, written by the settings menu). The game still draws its usual 16:9 picture, with the wider view
+// Wide view (Display -> Wide view): the camera sees as much as a screen of the wide_view value in mhr.ini (the
+// phone's width / height, written by the settings menu). The game still draws its usual 16:9 picture, with the wider view
 // squeezed into it, and the picture is stretched back out to the whole screen (executor.cpp, picture_rect), so things
 // keep their shape and you see more at the sides. The HUD is stretched with it.
 

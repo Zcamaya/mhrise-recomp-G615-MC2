@@ -31,6 +31,7 @@
 #include "loader/run.h"
 #include "nnsdk/host.h"
 #include "nnsdk/rutas.h"
+#include "nnsdk/ini.h"
 
 namespace {
 
@@ -149,10 +150,8 @@ enum : uint64_t {
 // si su mando se presenta como el del modo Retro (2022:3001, "Retroid Pocket Controller").
 // <datos>/xbox_buttons y <datos>/retro_buttons (en vivo) fuerzan una u otra para todos.
 int forced_layout() {  // 1: Xbox (por posición), 0: Retro (por nombre), -1: sin forzar
-    static const std::string xbox = g_data + "/xbox_buttons";
-    static const std::string retro = g_data + "/retro_buttons";
     static int checks = 0, forced = -1;
-    if (checks++ % 32 == 0) forced = access(xbox.c_str(), F_OK) == 0 ? 1 : access(retro.c_str(), F_OK) == 0 ? 0 : -1;
+    if (checks++ % 32 == 0) forced = nnsdk::ini::on("xbox_buttons") ? 1 : nnsdk::ini::on("retro_buttons") ? 0 : -1;
     return forced;
 }
 struct PadInfo {
@@ -898,8 +897,7 @@ void android_main(android_app* app) {
         // Por bloques: línea a línea, cada printf era una escritura en la SD. <datos>/verbose_log o <datos>/log_lines: línea
         // a línea (para leerlo en vivo, y lo último no se pierde si el proceso se cae).
         static char buffer[1 << 16];
-        const bool verbose = access((g_data + "/verbose_log").c_str(), F_OK) == 0 ||
-                             access((g_data + "/log_lines").c_str(), F_OK) == 0;
+        const bool verbose = nnsdk::ini::on("verbose_log") || nnsdk::ini::on("log_lines");
         setvbuf(stdout, verbose ? nullptr : buffer, verbose ? _IOLBF : _IOFBF, verbose ? 0 : sizeof buffer);
         const bool direct = access((g_data + "/log_direct").c_str(), F_OK) == 0;
         const bool piped = !direct && start_log_pipe();

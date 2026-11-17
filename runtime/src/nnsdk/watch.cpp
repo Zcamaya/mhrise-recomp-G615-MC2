@@ -19,6 +19,7 @@
 #include <string>
 
 #include "nnsdk/nvn/flags.h"
+#include "nnsdk/ini.h"
 
 namespace nnsdk::watch {
 namespace {
@@ -145,8 +146,7 @@ void protect_runs(const std::vector<std::pair<uintptr_t, size_t>>& runs) {
 }  // namespace
 
 void init_heap(uintptr_t map, size_t size) {
-    const char* data = getenv("NIER_DATA");
-    g_enabled = access((std::string(data ? data : ".") + "/no_write_watch").c_str(), F_OK) != 0;
+    g_enabled = !nnsdk::ini::on("no_write_watch");
     if (!g_enabled) return;
     g_version = table<std::atomic<uint32_t>>(size / kPage);
     g_state = table<std::atomic<uint8_t>>(size / kPage);

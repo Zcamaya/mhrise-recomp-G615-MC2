@@ -1,7 +1,8 @@
 #pragma once
-// Interruptores en vivo: un fichero vacío en la carpeta de datos (NIER_DATA) cambia un comportamiento sin
-// reinstalar ni reiniciar el juego (`adb shell touch <datos>/<nombre>`, `rm` para volver). Sirven para
-// comparar una optimización con y sin ella en la misma escena, y para apagarla si algo sale mal.
+// Live switches: a line "name = 1" in <datos>/mhr.ini (what the settings menu writes; ini.h), or an empty file with that
+// name in the data folder (`adb shell touch <datos>/<name>`, `rm` to go back), changes a behaviour without reinstalling
+// or restarting the game. The ini wins when it names the switch. Handy to compare an optimisation with and without it
+// in the same scene, and to turn it off if something goes wrong.
 // Cada interruptor mira su fichero al usarse la primera vez; después los mira todos un hilo propio ("Interruptores")
 // una vez por segundo, con un solo readdir de la carpeta de datos, y anota los cambios en el log. Antes cada uno hacía
 // su access() en el hilo que lo leía: ~75 búsquedas por segundo en la SD (FUSE → MediaProvider → exFAT) desde el
@@ -20,6 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "nnsdk/ini.h"
 #include "nnsdk/nvn/nvn.h"
 
 namespace nvn {
@@ -65,6 +67,8 @@ private:
         const std::string data = env ? env : ".";
         std::unordered_set<std::string> present;
         std::vector<LiveFlag*> flags;
+        ::nnsdk::ini::Values values;
+        long long stamp = -1;
         for (;;) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             DIR* dir = opendir(data.c_str());
@@ -72,11 +76,15 @@ private:
             present.clear();
             while (const dirent* e = readdir(dir)) present.insert(e->d_name);
             closedir(dir);
+            if (const long long now = ::nnsdk::ini::stamp(); now != stamp) {  // (read again only when it changed)
+                stamp = now;
+                values = ::nnsdk::ini::read();
+            }
             {
                 std::lock_guard lock(mutex_);
                 flags = flags_;
             }
-            for (LiveFlag* f : flags) f->set(present.count(f->name()) != 0);
+            for (LiveFlag* f : flags) f->set(::nnsdk::ini::on(values, f->name(), present.count(f->name()) != 0));
         }
     }
 
@@ -86,8 +94,7 @@ private:
 };
 
 inline LiveFlag::LiveFlag(const char* name) : name_(name) {
-    const char* data = getenv("NIER_DATA");
-    const bool v = access((std::string(data ? data : ".") + "/" + name_).c_str(), F_OK) == 0;
+    const bool v = ::nnsdk::ini::on(name_);
     value_.store(v, std::memory_order_relaxed);
     NVN_LOG("switch %s: %s\n", name_, v ? "on" : "off");
     LiveFlags::instance().add(this);
@@ -95,8 +102,8 @@ inline LiveFlag::LiveFlag(const char* name) : name_(name) {
 
 }  // namespace nvn
 
-// true si existe <NIER_DATA>/<nombre>; `nombre` es un literal (un nombre de fichero, sin '/'). Leerlo es una carga
-// atómica: vale en cualquier camino, también por draw.
+// true if mhr.ini turns it on (or, without it there, <NIER_DATA>/<name> exists); `name` is a literal (a file name, no
+// '/'). Reading it is an atomic load: fine on any path, per draw too.
 #define NVN_FLAG(nombre)                     \
     ([]() -> bool {                          \
         static ::nvn::LiveFlag flag(nombre); \

@@ -5,6 +5,8 @@
 #include <cstring>
 #include <string>
 
+#include "nnsdk/ini.h"
+
 namespace wide_view {
 namespace {
 
@@ -23,12 +25,7 @@ uint32_t branch(const void* from, const void* to) {
 
 bool install(Module& mod, std::string& err) {
     (void)err;
-    const char* data = getenv("NIER_DATA");
-    float ratio = 0.0f;
-    if (FILE* f = fopen((std::string(data ? data : ".") + "/wide_view").c_str(), "r")) {
-        if (fscanf(f, "%f", &ratio) != 1) ratio = 0.0f;
-        fclose(f);
-    }
+    const float ratio = nnsdk::ini::number("wide_view");
     if (ratio <= 16.0f / 9.0f + 0.01f || ratio > 3.6f) return true;  // (no file, or not wider than the game's own)
     const bool in_text = kSite >= mod.seg_off[0] && kSite + 8 <= mod.seg_off[0] + mod.seg_size[0];
     auto* site = reinterpret_cast<uint32_t*>(mod.base + kSite);

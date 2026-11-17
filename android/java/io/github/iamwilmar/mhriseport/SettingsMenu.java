@@ -47,7 +47,8 @@ final class SettingsMenu {
     private final LinearLayout list, sections;
     private final ScrollView scroll;
     private final TextView sub;
-    private final File folder;  // the game folder (files/carpeta.txt), where the switches live
+    private final File folder;  // the data folder (files/carpeta.txt), where mhr.ini lives
+    private final Ini ini;
     private final float scale;  // menu size (Display > Menu size): text and spacing, 0.8 by default
     static final String PREFS = "menu", SCALE_KEY = "escala";
     static final int SCALE_DEFAULT = 80;
@@ -82,6 +83,7 @@ final class SettingsMenu {
         root.addView(rule(GREEN, 1));
 
         folder = gameFolder(activity);
+        ini = new Ini(folder);
         LinearLayout body = new LinearLayout(activity);
         sections = new LinearLayout(activity);
         sections.setOrientation(LinearLayout.VERTICAL);
@@ -188,19 +190,14 @@ final class SettingsMenu {
                         + "and nothing is stretched out of shape. The HUD is stretched to the screen, and the aspect "
                         + "ratio above is ignored while it's on. Takes effect on the next start.",
                 () -> has("wide_view") ? 1 : 0, v -> {
-                    File f = new File(folder, "wide_view");
                     if (v == 0) {
-                        f.delete();
+                        ini.set("wide_view", null);
                         return;
                     }
                     DisplayMetrics m = new DisplayMetrics();
                     activity.getWindowManager().getDefaultDisplay().getRealMetrics(m);
                     float ratio = (float) Math.max(m.widthPixels, m.heightPixels) / Math.min(m.widthPixels, m.heightPixels);
-                    try {
-                        Files.write(f.toPath(), String.format(java.util.Locale.ROOT, "%.4f%n", ratio).getBytes());
-                    } catch (IOException ignored) {
-                        // (storage refused: stays off)
-                    }
+                    ini.set("wide_view", String.format(java.util.Locale.ROOT, "%.4f", ratio));
                 });
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
@@ -488,13 +485,13 @@ final class SettingsMenu {
         envToken("Turnip: no UBWC", "TU_DEBUG=noubwc. No compression on any image.", "TU_DEBUG", "noubwc");
         envToken("Turnip: UBWC flag hint", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1. Reported to stop screen "
                 + "flicker with some Adreno 8xx Turnip builds.", "FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1");
-        List<String> env = lines("driver_env.txt");
+        List<String> env = ini.env();
         for (int i = 0; i < env.size(); i++) {
             final int k = i;
             row(env.get(i), "Remove", "Tap to remove this variable.", v -> {
-                List<String> l = lines("driver_env.txt");
+                List<String> l = ini.env();
                 if (k < l.size()) l.remove(k);
-                writeEnv(l);
+                ini.setEnv(l);
                 build();
             }, false);
         }
@@ -506,25 +503,19 @@ final class SettingsMenu {
                 }));
     }
 
-    // ---- driver environment (driver_env.txt, read by vk.cpp at start-up) -----------------------------------------------
+    // ---- driver environment ("env.NAME" lines of mhr.ini, read by vk.cpp at start-up) -----------------------------------
 
     private String envValue(String name) {
-        for (String l : lines("driver_env.txt"))
+        for (String l : ini.env())
             if (l.startsWith(name + "=")) return l.substring(name.length() + 1);
         return null;
     }
 
     private void setEnv(String name, String value) {
-        List<String> l = lines("driver_env.txt");
+        List<String> l = ini.env();
         l.removeIf(x -> x.startsWith(name + "="));
         if (value != null && !value.isEmpty()) l.add(name + "=" + value);
-        writeEnv(l);
-    }
-
-    private void writeEnv(List<String> l) {
-        if (folder == null) return;
-        if (l.isEmpty()) new File(folder, "driver_env.txt").delete();
-        else writeLines("driver_env.txt", l);
+        ini.setEnv(l);
     }
 
     // One option of a comma-separated variable (TU_DEBUG=nolrz,sysmem), or a whole NAME=value, as a toggle
@@ -1039,21 +1030,14 @@ final class SettingsMenu {
     }
 
     private boolean has(String name) {
-        return folder != null && new File(folder, name).exists();
+        return ini.on(name);
     }
 
     private void put(String name, boolean on) {
-        if (folder == null) return;
-        File f = new File(folder, name);
-        try {
-            if (on) f.createNewFile();
-            else f.delete();
-        } catch (IOException ignored) {
-            // (storage refused: it stays as it was, and the row shows that next time)
-        }
+        ini.setOn(name, on);
     }
 
-    // An on / off row backed by a switch file. inverted: the file turns it off (the sin_* ones).
+    // An on / off row backed by a switch in mhr.ini. inverted: the switch turns it off (the no_* ones).
     private void flag(String title, String help, String file, boolean inverted) {
         toggle(title, help, () -> has(file) != inverted ? 1 : 0, v -> put(file, (v != 0) != inverted));
     }
@@ -1084,7 +1068,7 @@ final class SettingsMenu {
         return b.append(". Reopen the menu after a change to see it.").toString();
     }
 
-    // A choice where each option (but the first, the default) is its own switch file
+    // A choice where each option (but the first, the default) is its own switch
     private void exclusive(String title, String help, String[] options, String[] files) {
         choice(title, help, options, () -> {
             for (int i = files.length - 1; i > 0; i--)
