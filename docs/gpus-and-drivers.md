@@ -106,10 +106,11 @@ numbers in the millions on any new old driver.
 
 That driver also has no `multiDrawIndirect` (each multi-draw becomes one indirect call per draw) and no
 `fillModeNonSolid` (point and line polygon modes are drawn filled, since they would make an invalid pipeline).
-  - **Quad swaps stay on regardless, except with ARM's driver** (`no_quad_derivatives` turns them off,
-    `quad_derivatives` forces them on ARM's driver). On ARM's driver the bloom's full-size upsample pass (pixel
-    `75cc74924ff2b1ed`) faulted the GPU with them: `GROUP_ERROR_FATAL` every frame and a black screen with sound on a
-    Mali-G925 Immortalis, and the GPU lost now and then on a Dimensity 720. Neither happened before they were added. With subgroups off, Eden's fallback for
+  - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off).
+  - **The bloom's full-size upsample pass faults the GPU on ARM's driver** (pixel `75cc74924ff2b1ed`, vertex
+    `602b124798536d97`): `GROUP_ERROR_FATAL` every frame and a black screen with sound on a Mali-G925 Immortalis, the
+    GPU lost once a session on a Dimensity 720. Not the quad swaps (it happened with them off too). Still open: the
+    shader's code from breadcrumbs (`<data>/shaders/migas_75cc74924ff2b1ed*.code`) is the next step. With subgroups off, Eden's fallback for
     `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
     were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so
     quad swaps are safe with 16-wide subgroups (cache key version 5).

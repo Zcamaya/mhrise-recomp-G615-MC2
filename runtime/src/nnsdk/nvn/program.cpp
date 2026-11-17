@@ -398,23 +398,15 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             // derivatives (SHFL.BFLY by 1 and 2 in about 80 scenery pixel shaders) still work. Without them Eden's
             // fallback returns each pixel's own value and every slope comes out zero (the same loss that left PanVK
             // without ground). <data>/no_quad_derivatives: nothing, as before.
-            // Not on ARM's own driver: there the bloom's full-size upsample pass (pixel 75cc74924ff2b1ed) faulted the GPU
-            // with them (GROUP_ERROR_FATAL every frame and a black screen on a Mali-G925, the GPU lost now and then on a
-            // Dimensity 720), and it never did before they were added. <data>/quad_derivatives: on there too.
-            static const bool arm_driver = [c] {
-                VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-                VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-                p2.pNext = &driver;
-                if (vkGetPhysicalDeviceProperties2) vkGetPhysicalDeviceProperties2(c->gpu, &p2);
-                return driver.driverID == VK_DRIVER_ID_ARM_PROPRIETARY;
-            }();
+            // (They were turned off on ARM's driver for a while, blamed for the GPU fault in the bloom's full-size pass,
+            // pixel 75cc74924ff2b1ed; the Dimensity 720 lost the GPU in that pass with them off too, so it wasn't them.)
             constexpr uint32_t kBasic = 0x1, kQuad = 0x80;
-            const bool quads = !NVN_FLAG("no_quad_derivatives") && (!arm_driver || NVN_FLAG("quad_derivatives"));
+            const bool quads = !NVN_FLAG("no_quad_derivatives");
             options.subgroup_operations &= quads ? (kBasic | kQuad) : 0u;
             static bool told = false;
             if (!told) {
                 told = true;
-                NVN_LOG("quad swaps for the game's derivatives: %s\n", quads ? "on" : arm_driver ? "off (ARM's driver)" : "off");
+                NVN_LOG("quad swaps for the game's derivatives: %s\n", quads ? "on" : "off (no_quad_derivatives)");
             }
         }
         // Como Eden con el driver propietario de Qualcomm (vendorID 0x5143): shuffle con índice dinámico emulado.
