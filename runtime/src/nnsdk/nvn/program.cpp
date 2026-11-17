@@ -268,7 +268,13 @@ bool qualcomm_7xx_stock() {
         nvn::VkContext* c = nvn::vk();
         if (!c || c->props.vendorID != 0x5143) return false;
         const char* name = c->props.deviceName;
-        const bool stock = strncmp(name, "Adreno", 6) == 0;
+        // By the driver's id when it tells us: some Turnip builds for the A8xx keep Qualcomm's name ("Adreno (TM) 830v1"),
+        // and took the stock driver's workaround, which cost every shader its fixed sampler (no shadows on the A8xx).
+        VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+        if (vkGetPhysicalDeviceProperties2) vkGetPhysicalDeviceProperties2(c->gpu, &p2);
+        const bool stock = driver.driverID ? driver.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY
+                                           : strncmp(name, "Adreno", 6) == 0;
         const char* digits = strpbrk(name, "0123456789");
         const bool newer = digits && (digits[0] == '7' || digits[0] == '8');
         if (stock && newer)
