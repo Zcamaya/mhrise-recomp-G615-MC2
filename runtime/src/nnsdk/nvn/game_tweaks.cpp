@@ -70,10 +70,7 @@ constexpr Check kChecks[] = {
     {0x5a2b8, 0xB91A8D28},    // str w8, [x9, #0x1a8c]    (set_GeometryAOQuality)
     {0x5a6e8, 0xBD1A3100},    // str s0, [x8, #0x1a30]    (set_SmallObjectCullingRatio)
     {0x59f90, 0xBD1A4500},    // str s0, [x8, #0x1a44]    (set_DefaultShadowLodBias)
-    {0x72880, 0x39407508},    // ldrb w8, [x8, #0x1d]     (get_UseGpuOcclusionCulling)
-    {0x72e94, 0x39007509},    // strb w9, [x8, #0x1d]     (set_UseGpuOcclusionCulling)
 };
-constexpr size_t kCullingPointer = 0x12674d08;  // GOT slot -> global -> the culling settings object
 constexpr size_t kDynamicShadowSetter = 0x7930a18;  // void (Renderer*, bool)
 
 
@@ -317,18 +314,6 @@ void renderer_switches(const uint8_t* base) {
     }
 }
 
-// The game's GPU occlusion culling: the 128x64 pass tests a box per mesh and the CPU reads the results back. On a
-// Dimensity 720 with ARM's own driver (Mali-G57, r32p1) every mesh of the main view came back hidden: the shadow maps
-// had the whole village and the screen only the sky. Off, the game culls by the camera alone and draws a bit more.
-ByteSwitch g_occlusion{"GPU occlusion culling", 0x1d, 0};
-
-void culling(const uint8_t* base) {
-    const uint64_t global = *reinterpret_cast<const volatile uint64_t*>(base + kCullingPointer);
-    if (!global) return;
-    uint8_t* settings = *reinterpret_cast<uint8_t* volatile*>(global);
-    if (settings) byte_switch(settings, g_occlusion, NVN_FLAG("no_gpu_occlusion"));
-}
-
 }  // namespace
 
 void game_tweaks() {
@@ -338,7 +323,6 @@ void game_tweaks() {
     model_detail(base);
     texture_detail(base);
     renderer_switches(base);
-    culling(base);
     write_status();
 }
 

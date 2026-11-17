@@ -3231,6 +3231,20 @@ void Executor::deliver_write_backs(uint64_t up_to) {
             auto& pd = prof_delivered_[w.address];
             pd.first = w.size, pd.second += w.size;
             delivered_hash_[w.address] = range_hash(game, w.size);
+            // DEBUG: what the CPU gets back, to compare drivers (the world vanished on a Mali with ARM's driver only).
+            // Every 300 deliveries of each buffer, and in a traced frame.
+            if (pd.second / w.size % 300 == 1 || frame_ == trace_frame_) {
+                size_t nonzero = 0;
+                for (size_t i = 0; i < w.size; i++) nonzero += game[i] != 0;
+                char head[160];
+                int at = 0;
+                for (size_t i = 0; i + 4 <= w.size && i < 48 && at < (int)sizeof(head) - 12; i += 4) {
+                    uint32_t v;
+                    memcpy(&v, game + i, 4);
+                    at += snprintf(head + at, sizeof(head) - at, " %x", v);
+                }
+                NVN_LOG("readback %#llx+%zu: %zu bytes not zero;%s\n", (unsigned long long)w.address, w.size, nonzero, head);
+            }
             continue;
         }
         bool opened = false, cpu_rewrote = false;

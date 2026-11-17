@@ -120,13 +120,15 @@ Kept here so nobody tries them again without a new reason:
 - **PC post-effect switches through RenderConfig** (motion blur, depth of field, bloom, god rays, lens flare,
   chromatic aberration, film grain): the Switch game never reads RenderConfig.
 - **FXAA, shadow cache, small object culling and effect SSR toggles:** the Switch game already has them the cheap way.
-- **GPU instance culling off:** didn't bring endemic life back; the readback did. (GPU occlusion culling is back as
-  `no_gpu_occlusion`, for the missing world on ARM's driver.)
+- **GPU occlusion and instance culling off:** didn't bring endemic life back; the readback did. Occlusion culling off
+  didn't bring the world back on the Dimensity 720 either.
 
 ## Still open
 
-- **The world missing on a Dimensity 720 with ARM's driver** (only the sky; fine on PanVK). Dynamic shadows and
-  subgroups were ruled out. Testing `no_gpu_occlusion`.
+- **The world missing on a Dimensity 720 with ARM's driver** (only the sky; fine on PanVK). The shadow maps have
+  the village, so meshes are submitted; the main view has no depth pre-pass and no meshes. Ruled out: dynamic shadows
+  off, subgroups on (they stall that driver), the game's GPU occlusion culling. The log now prints what each
+  read-back buffer brings to the CPU (`readback …` lines), to compare PanVK and ARM's driver on the same phone.
 
 - **Speckles or magenta and red blocks on the first loading screen** after choosing a save. Probably texture streaming.
 - **Blocky one-frame flicker on an Adreno 8xx** with `Turnip_Gen8_V39` while turning the camera. Probably LRZ or GMEM in

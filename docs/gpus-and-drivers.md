@@ -80,8 +80,8 @@ Turnip was still being brought up on the A8xx while this was written, and builds
     bloom pass took seconds per frame. They stay off there.
   - **The world missing, only the sky drawn** (Dimensity 720, Mali-G57, ARM's r32p1; fine on PanVK on the same
     phone). The shadow maps held the whole village, so the game was submitting meshes; the main view had no depth
-    pre-pass and no meshes at all, which points at the game's GPU occlusion culling deciding everything was hidden.
-    `no_gpu_occlusion` (Graphics → GPU occlusion culling) turns that test off; being tested.
+    pre-pass and no meshes at all, but its GPU occlusion culling isn't why: with it off the main view was just as empty. Dynamic shadows
+    and subgroups were ruled out too. Still open; see [fixes.md](fixes.md).
   - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off). With subgroups off, Eden's fallback for
     `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
     were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so

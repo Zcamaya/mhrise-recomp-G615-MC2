@@ -270,10 +270,6 @@ final class SettingsMenu {
                         + "lights get drawn. Off: they stay invisible (you can still gather them). Costs almost nothing. "
                         + "Applies at once.",
                 "no_readback_copies", true);
-        flag("GPU occlusion culling",
-                "The game's own test that skips meshes hidden behind others. Turn it off if the world is missing and only "
-                        + "the sky shows (seen with ARM's driver on a Dimensity 720). Off draws a little more. Applies at once.",
-                "no_gpu_occlusion", true);
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
