@@ -224,6 +224,9 @@ The SDK and NVN layers were written from scratch by observing what the game call
 official SDK headers or code in this repository); comments next to each deduced value give the evidence. Code comments
 are mostly in Spanish.
 
+The [developer notes](docs/README.md) explain the architecture, how MH Rise renders and which engine objects the port
+touches, what each GPU and driver needs, every fix with its cause, and the debugging tools.
+
 ## Building
 
 Requirements (macOS or Linux): Android SDK with **NDK 28.2.13676358**, build-tools 35.0.0 and platform android-33; a JDK
