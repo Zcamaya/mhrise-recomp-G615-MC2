@@ -185,20 +185,6 @@ final class SettingsMenu {
                         + "whole screen. Applies at once.",
                 new String[] {"Default (16:9)", "Force 4:3", "Force 21:9", "Force 16:10", "Stretch to screen"},
                 new String[] {null, "aspect_4_3", "aspect_21_9", "aspect_16_10", "aspect_stretch"});
-        toggle("Wide view (experimental)",
-                "The camera sees as much as your phone's screen shape instead of 16:9, so you see more at the sides "
-                        + "and nothing is stretched out of shape. The HUD is stretched to the screen, and the aspect "
-                        + "ratio above is ignored while it's on. Takes effect on the next start.",
-                () -> has("wide_view") ? 1 : 0, v -> {
-                    if (v == 0) {
-                        ini.set("wide_view", null);
-                        return;
-                    }
-                    DisplayMetrics m = new DisplayMetrics();
-                    activity.getWindowManager().getDefaultDisplay().getRealMetrics(m);
-                    float ratio = (float) Math.max(m.widthPixels, m.heightPixels) / Math.min(m.widthPixels, m.heightPixels);
-                    ini.set("wide_view", String.format(java.util.Locale.ROOT, "%.4f", ratio));
-                });
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "
@@ -242,6 +228,25 @@ final class SettingsMenu {
                 "The size of the shadow maps, as a share of the game's own. Lower: blurrier shadow edges and a lot less "
                         + "GPU work in one of the heaviest passes. Applies at once.",
                 new String[] {"Game's", "Half", "Quarter"}, new String[] {null, "shadow_half", "shadow_quarter"});
+        flag("Dynamic shadows",
+                "Shadows of things that move (hunters, monsters, swaying plants), like the PC's option. Off: only the "
+                        + "scenery's shadows, a lot less shadow work. Applies at once.",
+                "no_dynamic_shadows", true);
+        flag("Shadow cache",
+                "The game keeps the scenery's shadows from frame to frame and only redraws what moves. Usually less "
+                        + "GPU work; off is the game's own choice. Applies at once.",
+                "shadow_cache", false);
+        flag("Foliage sway",
+                "Grass and leaves moving in the wind, like the PC's option. Off: they stand still, a bit less vertex "
+                        + "work. Applies at once.",
+                "no_foliage_sway", true);
+        flag("FXAA",
+                "The game's edge smoothing. Off: sharper but more jagged edges, a little less work. Applies at once.",
+                "no_fxaa", true);
+        flag("Effect reflections",
+                "Screen-space reflections on effects (water, wet surfaces in effects). Off: less GPU work. Applies at "
+                        + "once.",
+                "no_effect_ssr", true);
         flag("Fast depth test",
                 "The colour pass skips hidden pixels earlier (it uses the depth test the GPU can reject fast with), "
                         + "which can give a few more FPS, mostly on Adreno. Grass and leaves keep the game's own test so "
@@ -253,6 +258,10 @@ final class SettingsMenu {
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
                 new String[] {"Game's", "Low", "Lowest", "High"},
                 new String[] {null, "model_detail_low", "model_detail_lowest", "model_detail_high"});
+        flag("Skip tiny far-away objects",
+                "The engine's small object culling: meshes that would cover only a few pixels aren't drawn. Off is the "
+                        + "game's own choice. Applies at once.",
+                "small_object_culling", false);
         exclusive("Texture streaming",
                 "How many of the largest texture sizes the game skips loading. Fewer: blurrier textures up close, less "
                         + "memory and bandwidth. Applies as textures load.",

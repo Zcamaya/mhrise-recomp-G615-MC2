@@ -1,6 +1,6 @@
 #pragma once
 // <datos>/mhr.ini: the settings menu's choices, one "name = value" per line ('#' or ';' starts a comment, [sections]
-// are only for reading it). A switch is on when its value is 1 / on / true / yes (or another number but 0); for the ones without a value in the
+// are only for reading it). A switch is on when its value is 1 / on / true / yes; for the ones without a value in the
 // file, the old way still works: an empty file with the switch's name in the data folder (handy with adb).
 // Header only: the loader and libnnsdk both use it.
 
@@ -53,7 +53,7 @@ inline long long stamp() {
     return static_cast<long long>(st.st_mtim.tv_sec) * 1000000000ll + st.st_mtim.tv_nsec;
 }
 
-// 1 / on / true / yes, or any other number but 0 (wide_view holds a ratio).
+// 1 / on / true / yes, or any other number but 0.
 inline bool truthy(const std::string& v) {
     if (v == "on" || v == "true" || v == "yes") return true;
     char* end = nullptr;

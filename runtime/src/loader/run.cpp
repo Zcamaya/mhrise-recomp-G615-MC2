@@ -17,7 +17,6 @@
 #include "loader/imports.h"
 #include "loader/nso.h"
 #include "loader/probe.h"
-#include "loader/wide_view.h"
 #include "loader/tls.h"
 #include "nnsdk/host.h"
 
@@ -123,8 +122,8 @@ int nier_run(const RunConfig& cfg) {
            g_main.symbols.size(), g_main.relocs.size());
 
     auto resolve = [&](const ElfSym& s) { return resolve_import(s, have_sdk ? &g_sdk : nullptr); };
-    if (!relocate(g_main, resolve, err) || !probe::install(g_main, err) || !wide_view::install(g_main, err) ||
-        !tls::patch(g_main, err) || !protect(g_main, err))
+    if (!relocate(g_main, resolve, err) || !probe::install(g_main, err) || !tls::patch(g_main, err) ||
+        !protect(g_main, err))
         die(err);
     report_imports(cfg.list_stubs);
 

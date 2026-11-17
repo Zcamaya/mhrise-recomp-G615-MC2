@@ -7,13 +7,23 @@
 //   Model detail     set_MeshQuality (main+0x78a0d68) stores a float on *(main+0x12950568): +60 or +64 depending on
 //                    the LOD mode (main+0x7467ac8 / 0x7467ad0 are those two stores).
 //   Texture detail   set_TextureLoadLevelBias (main+0x78a10d8): Renderer+6728, mip levels the streamer skips (0..12).
+// Renderer switches (via.render.Renderer's own get_/set_ list; its setters store straight into the Renderer):
+//   Foliage sway     SwingEnable +0x1a59 and SwingOnShadowEnable +0x1a56 (the PC's "Foliage Sway")
+//   Dynamic shadows  set_DynamicShadowEnable (main+0x7930a18), +0x1a55, tells the shadow system too (the PC's option)
+//   FXAA             FXAAEnable +0x1a5b
+//   Shadow cache     ShadowCacheEnable +0x1a53 (static shadows drawn once and reused)
+//   Small objects    SmallObjectCullingEnable +0x1a1e (skips tiny far-away meshes; the ratio is +0x1a30)
+//   Effect SSR       EffectSSREnable +0x1a64 (screen-space reflections on effects)
+// And logged only, until we know what their numbers mean: ReducedTransparentBuffer +0x1a68, GeometryAOQuality +0x1a8c,
+// SmallObjectCullingRatio +0x1a30, DefaultShadowLodBias +0x1a44.
 // Each one is read once from the game as its default, changed while its switch is on and put back when it's off.
 // Called from the thread that presents, once per frame: the game calls these setters from its own threads too, and
 // the shadow setter only stores the new size and lets the engine rebuild the maps.
 // Before touching anything the instructions at those addresses are checked, so another build of main is left alone.
 // What's in effect goes to <datos>/game_settings.txt (one line per setting) whenever it changes, for the settings menu.
 // Switches (live): shadow_half, shadow_quarter / model_detail_low, model_detail_lowest, model_detail_high /
-// texture_bias_1, texture_bias_2.
+// texture_bias_1, texture_bias_2 / no_foliage_sway, no_dynamic_shadows, no_fxaa, shadow_cache, small_object_culling,
+// no_effect_ssr.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -53,7 +63,19 @@ constexpr Check kChecks[] = {
     {0x78a0d90, 0xF942B508},  // ldr x8, [x8, #1384]        (set_MeshQuality loads the LOD state)
     {0x78a10dc, 0xF9429D08},  // ldr x8, [x8, #1336]        (set_TextureLoadLevelBias loads the Renderer)
     {0x78a10ec, 0xB91A4909},  // str w9, [x8, #6728]
+    {0x5a750, 0x52834B2A},    // mov w10, #0x1a59         (set_SwingEnable)
+    {0x5a778, 0x52834ACA},    // mov w10, #0x1a56         (set_SwingOnShadowEnable)
+    {0x5a224, 0x52834B6A},    // mov w10, #0x1a5b         (set_FXAAEnable)
+    {0x5a688, 0x52834A6A},    // mov w10, #0x1a53         (set_ShadowCacheEnable)
+    {0x5a6b0, 0x528343CA},    // mov w10, #0x1a1e         (set_SmallObjectCullingEnable)
+    {0x5a1fc, 0x52834C8A},    // mov w10, #0x1a64         (set_EffectSSREnable)
+    {0x7930a18, 0x52834AA8},  // mov w8, #0x1a55          (set_DynamicShadowEnable)
+    {0x5a5d0, 0xB91A6928},    // str w8, [x9, #0x1a68]    (set_ReducedTransparentBuffer)
+    {0x5a2b8, 0xB91A8D28},    // str w8, [x9, #0x1a8c]    (set_GeometryAOQuality)
+    {0x5a6e8, 0xBD1A3100},    // str s0, [x8, #0x1a30]    (set_SmallObjectCullingRatio)
+    {0x59f90, 0xBD1A4500},    // str s0, [x8, #0x1a44]    (set_DefaultShadowLodBias)
 };
+constexpr size_t kDynamicShadowSetter = 0x7930a18;  // void (Renderer*, bool)
 
 const uint8_t* known_main() {
     static const uint8_t* base = [] () -> const uint8_t* {
@@ -67,7 +89,7 @@ const uint8_t* known_main() {
                 return nullptr;
             }
         }
-        NVN_LOG("game settings: MH Rise 16.0.1 (shadows, model detail and texture detail available)\n");
+        NVN_LOG("game settings: MH Rise 16.0.1 (shadows, model detail, texture detail and renderer switches available)\n");
         return b;
     }();
     return base;
@@ -192,6 +214,86 @@ void texture_detail(const uint8_t* base) {
     g_status.bias = *bias, g_status.bias_game = game;
 }
 
+// One byte switch of the Renderer: the game's own value while ours is off, ours (want) while it's on.
+struct ByteSwitch {
+    const char* name;  // for the log
+    size_t offset;
+    uint8_t want;
+    uint8_t game = 0;
+    bool seen = false, ours = false;
+};
+
+void byte_switch(uint8_t* renderer, ByteSwitch& b, bool on) {
+    volatile uint8_t* v = renderer + b.offset;
+    if (!b.seen || !b.ours || *v != b.want) b.game = *v;  // the game set it (a load): that's the new default
+    if (!b.seen) NVN_LOG("game settings: %s is %u in the game\n", b.name, b.game);
+    b.seen = true;
+    const uint8_t target = on ? b.want : b.game;
+    if (*v != target) {
+        *v = target;
+        NVN_LOG("game settings: %s %u (game's %u)\n", b.name, target, b.game);
+    }
+    b.ours = on;
+}
+
+ByteSwitch g_sway{"foliage sway", 0x1a59, 0};
+ByteSwitch g_sway_shadow{"foliage sway in shadows", 0x1a56, 0};
+ByteSwitch g_fxaa{"FXAA", 0x1a5b, 0};
+ByteSwitch g_shadow_cache{"shadow cache", 0x1a53, 1};
+ByteSwitch g_small_objects{"small object culling", 0x1a1e, 1};
+ByteSwitch g_effect_ssr{"effect SSR", 0x1a64, 0};
+
+void renderer_switches(const uint8_t* base) {
+    uint8_t* renderer = object_at<uint8_t>(base, kRendererPointer);
+    if (!renderer) return;
+    const bool no_sway = NVN_FLAG("no_foliage_sway");
+    byte_switch(renderer, g_sway, no_sway);
+    byte_switch(renderer, g_sway_shadow, no_sway);
+    byte_switch(renderer, g_fxaa, NVN_FLAG("no_fxaa"));
+    byte_switch(renderer, g_shadow_cache, NVN_FLAG("shadow_cache"));
+    byte_switch(renderer, g_small_objects, NVN_FLAG("small_object_culling"));
+    byte_switch(renderer, g_effect_ssr, NVN_FLAG("no_effect_ssr"));
+
+    // Dynamic shadows go through the game's setter, which also tells the shadow system.
+    volatile uint8_t* dynamic = renderer + 0x1a55;
+    static uint8_t game_dynamic = 0;
+    static bool seen = false, ours = false;
+    if (!seen || !ours || *dynamic != 0) game_dynamic = *dynamic;
+    if (!seen) NVN_LOG("game settings: dynamic shadows is %u in the game\n", game_dynamic);
+    seen = true;
+    const bool off = NVN_FLAG("no_dynamic_shadows");
+    const uint8_t target = off ? 0 : game_dynamic;
+    if (*dynamic != target) {
+        using Setter = void (*)(void*, bool);
+        reinterpret_cast<Setter>(const_cast<uint8_t*>(base) + kDynamicShadowSetter)(renderer, target != 0);
+        NVN_LOG("game settings: dynamic shadows %u (game's %u)\n", target, game_dynamic);
+    }
+    ours = off;
+
+    // The numbers we don't change yet: logged when the game sets them, to learn what it uses.
+    struct Logged {
+        const char* name;
+        size_t offset;
+        bool is_float;
+        uint32_t last;
+        bool seen;
+    };
+    static Logged logged[] = {{"ReducedTransparentBuffer", 0x1a68, false, 0, false},
+                              {"GeometryAOQuality", 0x1a8c, false, 0, false},
+                              {"SmallObjectCullingRatio", 0x1a30, true, 0, false},
+                              {"DefaultShadowLodBias", 0x1a44, true, 0, false}};
+    for (Logged& l : logged) {
+        uint32_t v;
+        memcpy(&v, renderer + l.offset, 4);
+        if (l.seen && v == l.last) continue;
+        l.seen = true, l.last = v;
+        float f;
+        memcpy(&f, &v, 4);
+        if (l.is_float) NVN_LOG("game settings: %s = %g\n", l.name, f);
+        else NVN_LOG("game settings: %s = %u\n", l.name, v);
+    }
+}
+
 }  // namespace
 
 void game_tweaks() {
@@ -200,6 +302,7 @@ void game_tweaks() {
     shadows(base);
     model_detail(base);
     texture_detail(base);
+    renderer_switches(base);
     write_status();
 }
 
