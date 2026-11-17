@@ -36,7 +36,8 @@ rmdir "$TP/sirit/externals/SPIRV-Headers" 2> /dev/null || true
 if [ ! -d "$TP/boost" ]; then
   tmp="$TP/boost-dl"
   mkdir -p "$tmp"
-  curl -fsSL -o "$tmp/boost.tar.xz" \
+  # GitHub sometimes answers 502 for a moment: retry instead of failing the build.
+  curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$tmp/boost.tar.xz" \
     https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz
   if tar --version 2> /dev/null | grep -q GNU; then
     tar xf "$tmp/boost.tar.xz" -C "$tmp" --wildcards --wildcards-match-slash '*/libs/*/include/*'

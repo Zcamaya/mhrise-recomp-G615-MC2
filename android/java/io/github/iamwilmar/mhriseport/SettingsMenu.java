@@ -252,6 +252,16 @@ final class SettingsMenu {
                         + "which can give a few more FPS, mostly on Adreno. Grass and leaves keep the game's own test so "
                         + "they don't turn into solid cards. Applies at once.",
                 "fast_depth", false);
+        header("Post effects");
+        note("The PC version's effect options, set in the game's own settings object. Experimental: the Switch game may "
+                + "ignore some of them, and they apply the next time the game reads its settings (a new area, or a hunt).");
+        flag("Motion blur", "Blur when the camera or things move fast.", "no_motion_blur", true);
+        flag("Depth of field", "Blurred background in close-ups and cutscenes.", "no_depth_of_field", true);
+        flag("Bloom", "Glow around bright lights and the sky.", "no_bloom", true);
+        flag("God rays", "Beams of light through trees and fog.", "no_god_rays", true);
+        flag("Lens flare", "Flares when looking at the sun.", "no_lens_flare", true);
+        flag("Chromatic aberration", "Coloured fringes at the edges of the picture.", "no_chromatic_aberration", true);
+        flag("Film grain", "A light noise over the picture.", "no_film_grain", true);
         header("Detail");
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "

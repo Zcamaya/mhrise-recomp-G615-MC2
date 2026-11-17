@@ -59,7 +59,8 @@ thread_local bool t_prefetch = false;
 // Cambia si cambia lo que entra en la clave de la caché (translation_key) o cómo se usa lo traducido.
 // 2: Options::optimize_stages (spirv-opt).
 // 3: butterflies by 1..3 in pixel shaders become quad swaps (tools/patches/eden-quad-butterfly.patch).
-constexpr uint32_t kKeyVersion = 3;
+// 4: Options::warp_barriers.
+constexpr uint32_t kKeyVersion = 4;
 
 // <datos>/spirv.bin: se empieza a leer con el primer programa del juego, bastante antes de su primer draw.
 // <datos>/no_spirv_cache al arrancar: sin fichero (y, en vivo, sin buscar ni guardar: se traduce todo como antes).
@@ -247,6 +248,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.subgroup_operations);
     h.u32(o.broken_subgroup_shuffle);
     h.u32(o.broken_unreachable);
+    if (o.warp_barriers) h.u32(0x57415250);  // (only where it's on: other GPUs keep their keys)
     if (!o.multi_viewport) h.u32(0x4D56);  // (solo sin multiViewport: las claves de siempre no cambian)
     h.u32(o.shared_to_local);
     h.u32(o.optimize_stages);
@@ -332,6 +334,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     options.input_types = input_types;
     if (nvn::VkContext* c = nvn::vk()) {
         options.subgroup_size = c->subgroup.subgroupSize;
+        // Subgroups smaller than the Switch's warp of 32 (Mali: 16): barriers for the compute shaders of one warp that
+        // count on lockstep (Options::warp_barriers). Mining and attacks hung a Dimensity 8300's GPU on a5411674ebfff7ec
+        // (32 invocations, counts read back from shared memory with no barrier: the loops ran on garbage).
+        // <datos>/no_warp_barriers at translation (at start-up): without them, as before.
+        options.warp_barriers = c->subgroup.subgroupSize < 32 && !NVN_FLAG("no_warp_barriers");
         options.subgroup_stages = c->subgroup.supportedStages;
         options.subgroup_operations = c->subgroup.supportedOperations;
         // Subgrupos más pequeños que el warp de 32 de Maxwell (las Mali Valhall: 16): Eden solo sabe de iguales o mayores,
@@ -416,6 +423,9 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         if (ok && out.shader.shared_to_local)
             NVN_LOG("shader %016llx (%s): memoria compartida privada de cada invocación a memoria local (%d accesos)\n",
                     static_cast<unsigned long long>(print), nvnshader::stage_name(out.shader.stage), out.shader.shared_to_local);
+        if (ok && out.shader.warp_barriers)
+            NVN_LOG("shader %016llx (%s): one Switch warp on smaller subgroups, %d barriers added in its main flow\n",
+                    static_cast<unsigned long long>(print), nvnshader::stage_name(out.shader.stage), out.shader.warp_barriers);
         if (ok && out.shader.conditional_barriers) {
             NVN_LOG("shader %016llx (%s): %d barreras en flujo condicional, %s%s%s\n", static_cast<unsigned long long>(print),
                     nvnshader::stage_name(out.shader.stage), out.shader.conditional_barriers, keep ? "se dejan" : "quitadas",

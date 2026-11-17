@@ -61,6 +61,7 @@ struct Translated {
     uint32_t spirv_opt_us = 0;     // lo que tardó (validar, optimizar, validar y comparar la interfaz)
     uint32_t spirv_opt_from = 0;   // palabras del de Eden
     std::string spirv_opt_error;
+    int warp_barriers = 0;         // barriers added by Options::warp_barriers
     std::string error;             // vacío si salió bien
 };
 
@@ -108,6 +109,11 @@ struct Options {
     // skinning de la cara del cazador (793657b4) tomaba el caso que pone los pesos a cero (1/0 → NaN, la cabeza no se
     // ve). Se emite OpReturn: nunca se ejecuta y no le da al compilador nada que suponer.
     bool broken_unreachable = false;
+    // Compute of one Switch warp (32 invocations or fewer) on a GPU whose subgroups are smaller (the Mali: 16). Those
+    // shaders share data through shared memory with no barrier, because a Maxwell warp runs in lockstep; split in two
+    // subgroups, one half reads what the other hasn't written yet. With this a workgroup barrier goes in at each point
+    // of the main flow (outside any if or loop) that follows shared memory writes.
+    bool warp_barriers = false;
     // El dispositivo tiene multiViewport (gl_ViewportIndex fuera del geometry shader). Sin él, Eden no lo escribe y el
     // driver acepta el shader (antes se daba por hecho: lo tiene el Adreno, no todas las GPU de gama baja).
     bool multi_viewport = true;

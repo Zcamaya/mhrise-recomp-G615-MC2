@@ -316,6 +316,60 @@ int shared_to_local(Shader::IR::Program& program, const std::array<u32, 3>& work
 
 }  // namespace
 
+// Options::warp_barriers. Only at the top level (every invocation gets there together: a barrier there can't hang),
+// and only until the first return inside a branch (after it some invocations may be gone).
+int add_warp_barriers(Shader::IR::Program& program) {
+    using Shader::IR::AbstractSyntaxNode;
+    using Shader::IR::Opcode;
+    auto writes_shared = [](Shader::IR::Block* block) {
+        for (Shader::IR::Inst& inst : block->Instructions()) {
+            switch (inst.GetOpcode()) {
+                case Opcode::WriteSharedU8: case Opcode::WriteSharedU16: case Opcode::WriteSharedU32:
+                case Opcode::WriteSharedU64: case Opcode::WriteSharedU128:
+                case Opcode::SharedAtomicIAdd32: case Opcode::SharedAtomicExchange32:
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
+    };
+    int depth = 0, added = 0;
+    bool dirty = false;
+    for (AbstractSyntaxNode& node : program.syntax_list) {
+        switch (node.type) {
+            case AbstractSyntaxNode::Type::If:
+            case AbstractSyntaxNode::Type::Loop:
+                depth++;
+                break;
+            case AbstractSyntaxNode::Type::EndIf:
+            case AbstractSyntaxNode::Type::Repeat:
+                depth--;
+                break;
+            case AbstractSyntaxNode::Type::Return:
+            case AbstractSyntaxNode::Type::Unreachable:
+                if (depth > 0) return added;
+                break;
+            case AbstractSyntaxNode::Type::Block: {
+                Shader::IR::Block* block = node.data.block;
+                if (depth == 0 && dirty) {
+                    auto at = block->Instructions().begin();  // after the phis, which have to come first
+                    while (at != block->Instructions().end() && at->GetOpcode() == Opcode::Phi) ++at;
+                    Shader::IR::IREmitter ir{*block, at};
+                    ir.Barrier();
+                    added++;
+                    dirty = false;
+                }
+                if (writes_shared(block)) dirty = true;
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    return added;
+}
+
 uint32_t binding_base(Stage s) { return s == Stage::Compute ? 0 : static_cast<uint32_t>(s) * kBindingsPerStage; }
 
 const char* stage_name(Stage s) {
@@ -358,6 +412,11 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         Shader::IR::Program program = Shader::Maxwell::TranslateProgram(insts, blocks, env, cfg, host);
         out.conditional_barriers = ShimLog::conditional_barriers;
         if (options.shared_to_local) out.shared_to_local = shared_to_local(program, env.WorkgroupSize());
+        if (options.warp_barriers && compute) {
+            const auto wg = env.WorkgroupSize();
+            const uint32_t size = wg[0] * wg[1] * wg[2];
+            if (size > options.subgroup_size && size <= 32) out.warp_barriers = add_warp_barriers(program);
+        }
         if (options.ir) {
             *options.ir = Shader::IR::DumpProgram(program);
             // Qué textura (índice de descriptor) usa cada instrucción de imagen: el volcado de Eden no lo dice.
