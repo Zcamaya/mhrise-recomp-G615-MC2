@@ -76,7 +76,12 @@ Turnip was still being brought up on the A8xx while this was written, and builds
   an Adreno.
 - **Subgroups of 16,** half a Maxwell warp:
   - **With ARM's driver,** subgroup operations are off. Eden emulates votes as if each invocation were its own warp.
-    With them on, ARM's driver stalled the GPU.
+    With them on, ARM's driver stalled the GPU, but that was on the Dimensity 8300 before the warp barriers fix below,
+    which is a likely cause of that stall, so it's worth testing again (Debug → Subgroups → On).
+  - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off). With subgroups off, Eden's fallback for
+    `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
+    were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so
+    quad swaps are safe with 16-wide subgroups (cache key version 5).
   - **With PanVK,** they're on (`short_subgroups`). Without them, Eden's single-lane fallback loses quad derivatives
     and the ground was missing.
   - **Warp-synchronous compute** (32 threads sharing memory with no barrier) races on 16-wide subgroups, so the port

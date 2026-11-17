@@ -504,7 +504,8 @@ final class SettingsMenu {
         exclusive("Subgroups under 32",
                 "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
                         + "scene is missing pieces without them; off with ARM's own driver, where they stalled the GPU "
-                        + "for hundreds of ms." + next,
+                        + "for hundreds of ms (before the warp barriers fix: worth trying On again). Quad swaps for the "
+                        + "game's derivatives stay on either way." + next,
                 new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
         header("Driver workarounds");
         flag("Qualcomm: return after a switch",
@@ -1100,7 +1101,7 @@ final class SettingsMenu {
         "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
-        "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_readback_copies",
+        "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
         "no_return_mali", "no_return_qualcomm", "no_safe_translation", "no_shadows", "no_short_subgroups",
         "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_ubwc", "no_warmup", "perf_stats", "resolution_360",
         "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",

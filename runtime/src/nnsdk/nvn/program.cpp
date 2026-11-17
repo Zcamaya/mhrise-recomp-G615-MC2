@@ -60,7 +60,8 @@ thread_local bool t_prefetch = false;
 // 2: Options::optimize_stages (spirv-opt).
 // 3: butterflies by 1..3 in pixel shaders become quad swaps (tools/patches/eden-quad-butterfly.patch).
 // 4: Options::warp_barriers.
-constexpr uint32_t kKeyVersion = 4;
+// 5: those quad swaps also where the other subgroup operations are off (ARM's driver).
+constexpr uint32_t kKeyVersion = 5;
 
 // <datos>/spirv.bin: se empieza a leer con el primer programa del juego, bastante antes de su primer draw.
 // <datos>/no_spirv_cache al arrancar: sin fichero (y, en vivo, sin buscar ni guardar: se traduce todo como antes).
@@ -365,10 +366,15 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             static bool logged = false;
             if (!logged) {
                 logged = true;
-                NVN_LOG("subgroups of %u (under the warp of 32): no subgroup operations in shaders\n",
-                        options.subgroup_size);
+                NVN_LOG("subgroups of %u (under the warp of 32): no subgroup operations in shaders%s\n",
+                        options.subgroup_size, NVN_FLAG("no_quad_derivatives") ? "" : " but quad swaps");
             }
-            options.subgroup_operations = 0;
+            // Quad operations are the exception: a quad is 4 invocations on any GPU, so the game's hand-made
+            // derivatives (SHFL.BFLY by 1 and 2 in about 80 scenery pixel shaders) still work. Without them Eden's
+            // fallback returns each pixel's own value and every slope comes out zero (the same loss that left PanVK
+            // without ground). <data>/no_quad_derivatives: nothing, as before.
+            constexpr uint32_t kBasic = 0x1, kQuad = 0x80;
+            options.subgroup_operations &= NVN_FLAG("no_quad_derivatives") ? 0u : (kBasic | kQuad);
         }
         // Como Eden con el driver propietario de Qualcomm (vendorID 0x5143): shuffle con índice dinámico emulado.
         // <datos>/no_shuffle_qualcomm al traducir (al arrancar): el OpGroupNonUniformShuffle de siempre.
