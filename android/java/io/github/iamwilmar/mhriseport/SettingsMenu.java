@@ -168,6 +168,19 @@ final class SettingsMenu {
                     dialog.dismiss();
                     new SettingsMenu(activity, cfg).show();  // (sizes are fixed at build time, so reopen with the new one)
                 });
+        action(resetArmed ? "Tap again to restore the defaults" : "Restore default settings",
+                "Puts every setting of this menu back as it comes: graphics, performance, debug and the driver "
+                        + "variables. Your touch layout, combos and button mapping stay. Some settings need a restart.",
+                () -> {
+                    if (!resetArmed) {
+                        resetArmed = true;
+                        build();
+                        return;
+                    }
+                    resetArmed = false;
+                    ini.reset(SWITCHES);
+                    build();
+                });
         header("Resolution");
         note("The game's 3D resolution. On the handheld console it's 960x540 inside a 720p picture, which is then scaled "
                         + "to the screen. Higher: sharper, and more work for the GPU.");
@@ -446,6 +459,10 @@ final class SettingsMenu {
                     trigger("profile_gpu", "");
                     dialog.dismiss();
                 });
+        flag("Performance stats",
+                "Every 10 seconds, where the port's CPU time goes (\"perfil\" lines in the log), without the rest of "
+                        + "the detailed log. Turn it on, play a minute, and send the report.",
+                "perf_stats", false);
         header("Game experiments");
         note("Switches inside the game for tracking down bugs (wirebugs and endemic life you can gather but can't see). "
                 + "They apply at once.");
@@ -1113,6 +1130,24 @@ final class SettingsMenu {
         Files.copy(f.toPath(), zip);
         zip.closeEntry();
     }
+
+    private boolean resetArmed;  // Restore default settings asks for a second tap
+
+    // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
+    private static final String[] SWITCHES = {
+        "60fps", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
+        "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
+        "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
+        "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",
+        "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
+        "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
+        "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur",
+        "no_return_mali", "no_return_qualcomm", "no_safe_translation", "no_shadows", "no_short_subgroups",
+        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_ubwc", "no_warmup", "perf_stats", "resolution_360",
+        "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
+        "shadow_half", "shadow_quarter", "short_subgroups", "single_thread_pipelines", "small_object_culling",
+        "texture_bias_1", "texture_bias_2", "tv_mode", "ultrawide", "verbose_log", "wide_view",
+    };
 
     private boolean has(String name) {
         return ini.on(name);

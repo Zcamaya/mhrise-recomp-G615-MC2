@@ -70,6 +70,14 @@ final class Ini {
         set(name, on ? "1" : null);
     }
 
+    // Everything back to the defaults: the ini goes, and so do the old empty files of the given switches.
+    void reset(String[] oldFiles) {
+        values.clear();
+        if (folder == null) return;
+        new File(folder, NAME).delete();
+        for (String name : oldFiles) new File(folder, name).delete();
+    }
+
     // The driver variables (Debug → Driver environment) as NAME=value, from their "env.NAME" lines.
     List<String> env() {
         List<String> out = new ArrayList<>();

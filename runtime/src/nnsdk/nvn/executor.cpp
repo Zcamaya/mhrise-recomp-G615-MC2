@@ -10362,7 +10362,7 @@ void Executor::profile_frame() {
     std::lock_guard lock(g_mutex);
     // Sin <datos>/verbose_log, solo lo que hace falta (guardar la caché de pipelines): el perfil lee /proc, recorre la
     // memoria y escribe una docena de líneas en la SD cada 10 s.
-    if (!NVN_FLAG("verbose_log")) {
+    if (!NVN_FLAG("verbose_log") && !NVN_FLAG("perf_stats")) {  // (perf_stats: just the profile, without the slow log)
         save_pipeline_cache();
         save_pipeline_records();
         load_period_ = LoadProf{};
