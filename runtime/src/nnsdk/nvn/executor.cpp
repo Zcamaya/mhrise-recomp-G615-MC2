@@ -1912,6 +1912,7 @@ private:
         // Su hueco en la arena (sin el desfase de la dirección): al tirarlo vuelve a overlay_free_ (ver make_overlay).
         VkDeviceSize slot_offset = 0, slot_size = 0;
         uint8_t* slot_data = nullptr;
+        bool cpu_reads = false;  // destination of a GPU copy the game reads back on the CPU (copy_from_overlay)
         bool merged = false;  // hecho por merge_overlays (une rangos: que la CPU lo tire es lo que la unión puede empeorar)
         // <datos>/watch_overlays: sus páginas vigiladas (nnsdk/watch.h); overlay_unchanged mira si alguna se escribió
         // antes de pasar a la huella.
@@ -2133,6 +2134,11 @@ private:
     bool recycle_overlays_ = true;  // interruptor no_overlay_gaps (read_flags)
     bool patch_overlays_ = true;    // interruptor no_patch_overlays (read_flags; ver overlay_containing)
     bool write_back_on_ = false;    // use_return (read_flags): sin él no hace falta la referencia de cada overlay
+    // Without use_return, still return the destinations of GPU copies out of GPU-written buffers (Overlay::cpu_reads):
+    // that's how the game reads results back. MH Rise's occlusion test writes which objects it saw from a pixel shader,
+    // copies that to another buffer and checks it on the CPU the next frame; without it the CPU saw zeros, and endemic
+    // life and wirebugs were never drawn (you could still gather them). <datos>/no_readback_copies: as before.
+    bool readback_copies_ = true, any_cpu_reads_ = false;
     // Perfil: bytes de overlays nuevos (de la arena) y en huecos reutilizados; compactaciones y lo que costaron.
     uint64_t prof_overlay_new_bytes_ = 0, prof_overlay_reused_bytes_ = 0;
     uint64_t prof_compactions_ = 0, prof_compact_wait_us_ = 0, prof_compact_copy_us_ = 0;
@@ -2623,7 +2629,7 @@ void Executor::finish(bool wait) {
     if (!recording_) return;
     end_render_pass();
     flush_clears(nullptr);  // borrados diferidos: presentar (otro command buffer) o la CPU pueden leer la textura
-    readback_pending_ = NVN_FLAG("use_return");  // las copias de lectura de este envío, al principio del siguiente
+    readback_pending_ = NVN_FLAG("use_return") || any_cpu_reads_;  // las copias de lectura de este envío, al principio del siguiente
     vkEndCommandBuffer(cmd_);
     InFlight& f = inflight_[cur_];
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -3318,6 +3324,7 @@ bool Executor::record_overlay_readbacks() {
     for (auto& [address, o] : overlays_) {
         // Escrito desde la última copia (que se grabó al empezar el envío readback_submit: lo de ese envío va después).
         if (!o.written || o.written < o.readback_submit || o.size > kWriteBackMax) continue;
+        if (!write_back_on_ && !o.cpu_reads) continue;  // (without use_return, only what the game copies to read back)
         if (o.readback && busy_readbacks_.count(o.readback_data)) continue;  // la anterior aún sin entregar
         if (!o.readback) {
             const int other = 1 - readback_cur_;
@@ -3477,6 +3484,7 @@ void Executor::read_flags() {
     watch_overlays_ = NVN_FLAG("watch_overlays");
     memo_pipeline_ = !NVN_FLAG("no_pipeline_memo");
     fast_bindless_ = !NVN_FLAG("no_fast_bindless");
+    readback_copies_ = !NVN_FLAG("no_readback_copies");
     const bool write_back = NVN_FLAG("use_return");
     if (write_back && !write_back_on_) {
         // Se enciende en vivo: los overlays de antes no tienen referencia (make_overlay solo la hace con la devolución) y
@@ -7980,6 +7988,25 @@ bool Executor::copy_from_overlay(uint64_t src, uint64_t dst, uint64_t size) {
     if (auto it = overlays_.upper_bound(dst);
         keep_gpu_overlays_ && it != overlays_.begin() && dst < std::prev(it)->first + std::prev(it)->second.size)
         std::prev(it)->second.writers |= kWrittenByCopy;
+    // A copy for the CPU to read (readback_copies_): returned to the game's memory once this submit finishes.
+    if (readback_copies_ && !write_back_on_)
+        if (auto it = overlays_.upper_bound(dst); it != overlays_.begin()) {
+            --it;
+            Overlay& o = it->second;
+            if (dst < it->first + o.size && o.size <= kWriteBackMax) {
+                std::lock_guard lock(wb_mutex_);
+                if (!wb_state_.count(it->first)) {
+                    wb_reference(it->first, o.size);
+                    static int logged = 0;
+                    if (logged++ < 8)
+                        NVN_LOG("copy for the CPU to read: %#llx+%llu goes back to the game's memory\n",
+                                static_cast<unsigned long long>(it->first), static_cast<unsigned long long>(o.size));
+                }
+                o.cpu_reads = true;
+                o.written = submitted_.load(std::memory_order_relaxed) + 1;
+                any_cpu_reads_ = true;
+            }
+        }
     return true;
 }
 

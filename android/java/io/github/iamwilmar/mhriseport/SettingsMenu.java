@@ -463,15 +463,6 @@ final class SettingsMenu {
                 "Every 10 seconds, where the port's CPU time goes (\"perfil\" lines in the log), without the rest of "
                         + "the detailed log. Turn it on, play a minute, and send the report.",
                 "perf_stats", false);
-        header("Game experiments");
-        note("Switches inside the game for tracking down bugs (wirebugs and endemic life you can gather but can't see). "
-                + "They apply at once.");
-        flag("No GPU occlusion culling",
-                "The game stops hiding things it thinks are behind others with its GPU test.",
-                "no_gpu_occlusion", false);
-        flag("No GPU instance culling",
-                "The game stops culling instanced objects (many copies of one model) on the GPU.",
-                "no_gpu_instance_culling", false);
         header("Bug report");
         note("For testers: stand where the problem shows, tap Capture this frame, wait a few seconds, then Save the "
                 + "report and send the zip from your Download folder." + (reportStatus != null ? "\n" + reportStatus : ""));
