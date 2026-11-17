@@ -39,10 +39,11 @@ bias, with the clamp when the device supports `depthBiasClamp` (`no_depth_bias`)
 PanVK on the same phone). MH Rise draws almost all of its main view with multi-draws whose count a compute shader
 writes on the GPU. That needs `VK_KHR_draw_indirect_count`, which this driver doesn't have, so the port skipped them
 (4.6 million draws in one session; "multi-draw no soportado" in the log). The shadow maps still had the village
-because the shadow passes draw differently. Now those draws are all drawn, ignoring the count
-(`no_count_fallback`). The count is the game's GPU culling, and a culled draw's arguments are still a valid mesh, so
-this draws a few hidden things (about 7 % in the village). Using last frame's count instead flickered, because it lags
-the arguments by a frame. Found by comparing a PanVK and a stock-driver log from the same phone,
+because the shadow passes draw differently. Before each render pass, a copy of
+those draws' arguments is made and a small compute shader (`shaders/draw_count.comp`) gives 0 instances to every draw
+past the count; the pass then draws them all from the copy with plain indirect draws (`no_count_fallback` turns this
+off). Two earlier tries failed: last frame's count flickered (it lags the arguments by a frame), and drawing every one
+drew stale arguments past the count, a wall of stretched triangles while turning the camera. Found by comparing a PanVK and a stock-driver log from the same phone,
 after dynamic shadows, subgroups, GPU occlusion culling and the read-back buffers had been ruled out.
 
 **Grass drawn as solid polygon cards.** Caused by the old `depth_gequal` debug switch, which made the colour pass test

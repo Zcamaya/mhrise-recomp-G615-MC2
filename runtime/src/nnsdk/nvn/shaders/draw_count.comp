@@ -1,0 +1,20 @@
+#version 450
+// GPU-counted multi-draws on drivers without VK_KHR_draw_indirect_count (ARM's Vulkan 1.1, on a Dimensity 720): a copy of
+// the draws' arguments, where each draw past the count the game's culling wrote gets 0 instances. executor.cpp draws
+// all max_draws from the copy with plain indirect draws (prepare_counted_draws).
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) buffer Args { uint args[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Count { uint count[]; };
+
+layout(push_constant) uniform Params {
+    uint count_word;    // where the count is in its binding, in 32-bit words
+    uint draws;         // max_draws
+    uint stride_words;  // from one draw's arguments to the next
+} p;
+
+void main() {
+    uint k = gl_GlobalInvocationID.x;
+    if (k >= p.draws || k < count[p.count_word]) return;
+    args[k * p.stride_words + 1u] = 0u;  // {count, instances, …}: no instances
+}
