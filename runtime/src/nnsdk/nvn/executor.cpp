@@ -1207,6 +1207,7 @@ private:
     bool bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
                        uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
     uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0, prof_astc_empty_ = 0, prof_astc_direct_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
+    uint64_t prof_counted_late_ = 0;  // GPU-counted multi-draws fixed at the draw (fix_counted_now), each a pass cut
     VkDescriptorSetLayout bc_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout bc_layout_ = VK_NULL_HANDLE;
     VkPipeline bc_pipeline_ = VK_NULL_HANDLE;
@@ -1602,7 +1603,6 @@ private:
         bool clear_diferido = true;    // borrado completo -> loadOp CLEAR del siguiente pase con ese target
         bool rt_igual = true;          // volver a enlazar los mismos targets no corta el pase
         bool barrera_perezosa = true;  // una barrera dentro del pase solo lo corta si hace falta
-        bool lazy_storage = true;  // ... también tras escribir storage, entre draws iguales que solo escriben (draw())
         bool solo_escritos = true;     // muestrear un adjunto solo corta el pase si se escribió en él (rp_written_)
         bool store_ops = true;         // STORE_OP_NONE para lo que el pase no escribe
         bool area = true;              // renderArea = lo que dibujan los draws del pase
@@ -1634,11 +1634,6 @@ private:
     // Barrera de NVN aplazada al final del pase abierto (nvn_barrier), y si en el pase ya se escribió storage
     // desde la última barrera (entonces no se aplaza).
     bool pending_barrier_ = false, storage_since_barrier_ = false;
-    // The deferred barrier comes after storage writes (lazy_storage_barrier: see draw()); the draws that wrote them, as
-    // storage_signature gives them, and whether those can go on without it
-    bool pending_storage_barrier_ = false, storage_writers_ok_ = false;
-    uint64_t storage_writers_sig_ = 0;
-    uint64_t storage_signature(const cmd::Draw& d, bool* ok);
     // Barreras completas sin repetir. Una barrera completa (full_barrier: de todo a todo, escrituras a lecturas y
     // escrituras) justo detrás de otra, sin nada grabado en medio, no ordena nada más. gpu_work_: se grabó algo desde la
     // última (lo pone note_gpu_work() delante de cada comando de Vulkan que lee o escribe memoria fuera de un pase: copias,
@@ -1696,7 +1691,28 @@ private:
         uint32_t colors_written = 0;  // bit por render target
         bool depth_written = false, cleared = false, drawn = false;
         int64_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // unión de lo que pueden tocar sus draws (sin recortar)
+        std::vector<cmd::Draw> counted;  // multi-draws with their count on the GPU (prepare_counted_draws)
+        std::vector<std::pair<size_t, size_t>> counted_at;  // where each one is (list, command)
     };
+    // Without VK_KHR_draw_indirect_count: before the pass begins, a copy of each GPU-counted multi-draw's arguments with
+    // 0 instances past the count (shaders/draw_count.comp), which draw() then uses with plain indirect draws. Drawing
+    // every one instead drew stale arguments past the count: a wall of stretched triangles while turning the camera on
+    // a Dimensity 720. Keyed by arguments ^ count address; emptied at each pass.
+    void prepare_counted_draws(const PassScan& scan);
+    // The same for one draw the pass's scan didn't cover (its arguments came from several overlays, or the pass began
+    // elsewhere): ends the pass if one is open. Its arguments and count as draw() found them; false: not done.
+    bool fix_counted_now(const cmd::Draw& d, VkBuffer args, VkDeviceSize args_offset, VkBuffer count, VkDeviceSize count_offset,
+                         VkBuffer& out, VkDeviceSize& out_offset);
+    static uint64_t counted_key(const cmd::Draw& d) {  // (the same arguments with another count or size: its own copy)
+        return (d.indirect ^ (d.draw_count * 0x9E3779B97F4A7C15ull)) + (uint64_t(uint32_t(d.max_draws)) << 32) +
+               uint64_t(uint32_t(d.stride)) * 0xBF58476D1CE4E5B9ull;
+    }
+    bool counted_setup();
+    std::unordered_map<uint64_t, std::pair<VkBuffer, VkDeviceSize>> counted_fix_;
+    VkDescriptorSetLayout counted_set_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout counted_layout_ = VK_NULL_HANDLE;
+    VkPipeline counted_pipeline_ = VK_NULL_HANDLE;
+    bool counted_setup_done_ = false;
     PassScan scan_;
     const PassScan& scan_pass(const cmd::SetRenderTargets& pass);
     // Pases unidos (<datos>/merged_passes, en vivo; apagado por defecto). MH Rise cambia en mitad de la escena entre unos
@@ -2678,8 +2694,14 @@ void Executor::finish(bool wait) {
     }
     recording_ = false;
     if (r != VK_SUCCESS) {
-        NVN_LOG("vkQueueSubmit: %s\n", vk_result_name(r));
-        crumb_report();
+        // A lost device stays lost: every later submit fails too and the game waits forever on a frame that never ends
+        // (an SD870 with a Turnip build for the A7xx, after 16 minutes: 9500 of these lines). Said once, clearly.
+        static int failures = 0;
+        if (failures++ < 3) NVN_LOG("vkQueueSubmit: %s (%d)\n", vk_result_name(r), static_cast<int>(r));
+        if (r == VK_ERROR_DEVICE_LOST && failures == 1)
+            NVN_LOG("the GPU driver lost the device (the GPU crashed or was reset); the game can't go on. Usually the "
+                    "driver: try another build made for this GPU. GPU breadcrumbs (on from the start) name the last pass.\n");
+        if (failures == 1) crumb_report();
     } else {
         {
             std::lock_guard lock(fence_mutex_);
@@ -3491,7 +3513,6 @@ void Executor::read_flags() {
     opt_.clear_diferido = !NVN_FLAG("no_deferred_clear");
     opt_.rt_igual = !NVN_FLAG("no_same_rt");
     opt_.barrera_perezosa = !NVN_FLAG("no_lazy_barrier");
-    opt_.lazy_storage = !NVN_FLAG("no_lazy_storage_barrier");
     opt_.solo_escritos = !NVN_FLAG("no_written_only");
     opt_.store_ops = !NVN_FLAG("no_store_ops");
     opt_.area = !NVN_FLAG("no_area");
@@ -3502,7 +3523,11 @@ void Executor::read_flags() {
     low_table_ = !NVN_FLAG("no_low_table");
     separate_tables_ = !NVN_FLAG("no_split_tables");
     scan_per_pass_ = NVN_FLAG("inspect_per_pass");
-    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
+    // On by default on Mali (vendor 0x13B5): the Dimensity 720 recorded 256 full barriers a frame and 122 of them had
+    // nothing recorded since the one before (they order nothing, and a full barrier stalls the whole GPU there).
+    // <data>/no_tight_barriers: every one, as before.
+    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers") ||
+                               (vk()->props.vendorID == 0x13B5 && !NVN_FLAG("no_tight_barriers"));
     recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
     keep_gpu_overlays_ = !NVN_FLAG("no_keep_overlays");
@@ -3971,6 +3996,179 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
 // Un nivel de una textura descomprimida en la CPU (Texture::bcn): `blocks`, sus bloques ya en orden lineal, salen como
 // texels en trozos de staging (cada uno de las filas que quepan en kStagingChunk), descomprimidos por filas de bloques
 // entre los hilos de row_pool, y una copia por trozo. false: el staging se acabó (se reintenta como cualquier subida).
+bool Executor::counted_setup() {
+#ifdef HAVE_draw_count_SPV
+    if (counted_setup_done_) return counted_pipeline_ != VK_NULL_HANDLE;
+    counted_setup_done_ = true;
+    VkContext* c = vk();
+    const VkDescriptorSetLayoutBinding b[2] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dl.bindingCount = 2;
+    dl.pBindings = b;
+    const VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 3 * sizeof(uint32_t)};
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &counted_set_layout_;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &pc;
+    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    mi.codeSize = sizeof k_draw_count_spv;
+    mi.pCode = k_draw_count_spv;
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateDescriptorSetLayout(c->device, &dl, nullptr, &counted_set_layout_) == VK_SUCCESS &&
+        vkCreatePipelineLayout(c->device, &pl, nullptr, &counted_layout_) == VK_SUCCESS &&
+        vkCreateShaderModule(c->device, &mi, nullptr, &module) == VK_SUCCESS) {
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = module;
+        ci.stage.pName = "main";
+        ci.layout = counted_layout_;
+        if (vkCreateComputePipelines(c->device, VK_NULL_HANDLE, 1, &ci, nullptr, &counted_pipeline_) != VK_SUCCESS)
+            counted_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (module) vkDestroyShaderModule(c->device, module, nullptr);
+    NVN_LOG("multi-draws counted on the GPU without draw_indirect_count: %s\n",
+            counted_pipeline_ ? "arguments fixed by a compute shader" : "the shader didn't build, every draw is drawn");
+    return counted_pipeline_ != VK_NULL_HANDLE;
+#else
+    return false;  // (spirv.h from before draw_count.comp: tools/shaders.sh adds it)
+#endif
+}
+
+void Executor::prepare_counted_draws(const PassScan& scan) {
+    if (scan.counted.empty() || !counted_setup()) return;
+    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
+    struct Job {
+        VkBuffer args, count, copy;
+        VkDeviceSize args_offset, count_base, copy_offset, size;
+        uint32_t count_word, draws, stride_words;
+    };
+    std::vector<Job> jobs;
+    for (size_t i = 0; i < scan.counted.size(); i++) {
+        const cmd::Draw& d = scan.counted[i];
+        // Already drawn: the pass began again after a dispatch or a copy, and the scan is the one from its start
+        if (i < scan.counted_at.size() && scan.counted_at[i] < std::make_pair(cur_list_, cur_index_)) continue;
+        const uint64_t key = counted_key(d);
+        if (counted_fix_.count(key) || d.stride < 16 || d.stride % 4 || d.max_draws <= 0) continue;
+        const uint64_t one = d.index_type >= 0 ? 20 : 16;
+        const VkDeviceSize size = VkDeviceSize(d.stride) * VkDeviceSize(d.max_draws - 1) + one;
+        VkDeviceSize ao = 0, co = 0;
+        const Overlay* a = find_overlay(d.indirect, size, &ao);
+        const Overlay* n = find_overlay(d.draw_count, 4, &co);
+        // (arguments or count from the CPU: draw() handles those exactly. A count no GPU work wrote is the game's own,
+        // from the CPU, even with a buffer for its address: that copy can be behind the game's memory, and a 0 there
+        // hid pieces of the ground up close on a Dimensity 720, where the game picks the near ones on the CPU.)
+        // A count a draw's shader writes (kWrittenByGraphics: the game's culling in a fragment shader, earlier in this
+        // same pass) isn't there yet before the pass: draw() fixes that one at the draw, after the writes. Read before
+        // them, it was 0 and the ground near the camera vanished on a Dimensity 720.
+        if (!a || !n || !n->writers || (n->writers & kWrittenByGraphics)) continue;
+        Staging::Alloc copy = staging_->alloc(size, align);
+        if (!copy.data) break;
+        const VkDeviceSize base = co / align * align;
+        jobs.push_back({a->buffer, n->buffer, copy.buffer, ao, base, copy.offset, size, static_cast<uint32_t>((co - base) / 4),
+                        static_cast<uint32_t>(d.max_draws), static_cast<uint32_t>(d.stride / 4)});
+        counted_fix_[key] = {copy.buffer, copy.offset};
+    }
+    if (jobs.empty()) return;
+    note_gpu_work();
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    // The game's culling wrote the arguments and the counts: visible to the copy and to the shader, which reads the
+    // counts where they are. (With only the copy here, ARM's driver sometimes gave the shader an old count: pieces of
+    // the ground missing for a frame on a Dimensity 720.)
+    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    for (const Job& j : jobs) {
+        const VkBufferCopy r{j.args_offset, j.copy_offset, j.size};
+        vkCmdCopyBuffer(cmd_, j.args, j.copy, 1, &r);
+    }
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_pipeline_);
+    for (const Job& j : jobs) {
+        const VkDescriptorSet set = descriptor_set(counted_set_layout_);
+        if (!set) break;
+        // The count's range ends right after it: VK_WHOLE_SIZE reached to the end of the game's memory pool, which can be
+        // past maxStorageBufferRange (128 MB on ARM's r32)
+        const VkDescriptorBufferInfo args{j.copy, j.copy_offset, j.size}, count{j.count, j.count_base, j.count_word * 4ull + 4};
+        VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+        for (int k = 0; k < 2; k++) {
+            w[k].dstSet = set;
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[k].pBufferInfo = k ? &count : &args;
+        }
+        vkUpdateDescriptorSets(vk()->device, 2, w, 0, nullptr);
+        const uint32_t params[3] = {j.count_word, j.draws, j.stride_words};
+        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_layout_, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd_, counted_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
+        vkCmdDispatch(cmd_, (j.draws + 63) / 64, 1, 1);
+    }
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
+}
+
+bool Executor::fix_counted_now(const cmd::Draw& d, VkBuffer args, VkDeviceSize args_offset, VkBuffer count,
+                               VkDeviceSize count_offset, VkBuffer& out, VkDeviceSize& out_offset) {
+    if (!counted_setup() || !args || !count || d.stride < 16 || d.stride % 4 || d.max_draws <= 0) return false;
+    if (in_render_pass_) end_render_pass();
+    st_.rt_dirty = true;  // (the pass begins again for this draw)
+    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
+    const uint64_t one = d.index_type >= 0 ? 20 : 16;
+    const VkDeviceSize size = VkDeviceSize(d.stride) * VkDeviceSize(d.max_draws - 1) + one;
+    Staging::Alloc copy = staging_->alloc(size, align);
+    const VkDescriptorSet set = copy.data ? descriptor_set(counted_set_layout_) : VK_NULL_HANDLE;
+    if (!set) return false;
+    note_gpu_work();
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    const VkBufferCopy r{args_offset, copy.offset, size};
+    vkCmdCopyBuffer(cmd_, args, copy.buffer, 1, &r);
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    const VkDeviceSize base = count_offset / align * align;
+    const VkDescriptorBufferInfo a{copy.buffer, copy.offset, size}, n{count, base, count_offset - base + 4};  // (see prepare_counted_draws)
+    VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+    for (int k = 0; k < 2; k++) {
+        w[k].dstSet = set;
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[k].pBufferInfo = k ? &n : &a;
+    }
+    vkUpdateDescriptorSets(vk()->device, 2, w, 0, nullptr);
+    const uint32_t params[3] = {static_cast<uint32_t>((count_offset - base) / 4), static_cast<uint32_t>(d.max_draws),
+                                static_cast<uint32_t>(d.stride / 4)};
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_pipeline_);
+    vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_layout_, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd_, counted_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
+    vkCmdDispatch(cmd_, (static_cast<uint32_t>(d.max_draws) + 63) / 64, 1, 1);
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
+    out = copy.buffer;
+    out_offset = copy.offset;
+    prof_counted_late_++;
+    return true;
+}
+
 bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
                           std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
     const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
@@ -4826,6 +5024,10 @@ const Executor::PassScan& Executor::scan_pass(const cmd::SetRenderTargets& pass)
             }
             case kCommandIndex<cmd::Draw>: {
                 const int p = std::get_if<cmd::Draw>(&c)->primitive;
+                if (const cmd::Draw& dr = *std::get_if<cmd::Draw>(&c); dr.draw_count && dr.indirect) {
+                    s.counted.push_back(dr);
+                    s.counted_at.emplace_back(l, k);
+                }
                 for (int t = 0; t < cur.count; t++)
                     if (cur.colors[t] && ((masks >> (4 * t)) & 0xF)) s.colors_written |= 1u << t;
                 if (cur.depth && (ds.depth_write || ds.stencil_test)) s.depth_written = true;  // de más: sin mirar ops
@@ -5092,6 +5294,10 @@ bool Executor::ensure_render_pass(bool full_area) {
                  c0 ? (format_info(c0->desc.format) ? format_info(c0->desc.format)->name : "?") : "-", rt.depth ? " +z" : "");
         crumb_begin('p', label);
     }
+    counted_fix_.clear();
+    // Only with <data>/count_fixup (see draw())
+    if (!vk()->draw_indexed_indirect_count && run_lists_ && !NVN_FLAG("no_count_fallback") && NVN_FLAG("count_fixup"))
+        prepare_counted_draws(scan_pass(rt));
     note_gpu_work();
     vkCmdBeginRenderPass(cmd_, &bi, VK_SUBPASS_CONTENTS_INLINE);
     if (fallback && load_clear)
@@ -5163,13 +5369,13 @@ void Executor::end_render_pass() {
     work_after_pass_ = false;  // lo grabado hasta aquí, ordenado con lo que venga por la dependencia externa del pase
     if (crumbs_passes_) crumb_end();
     if (pending_barrier_) {  // la barrera de NVN aplazada (nvn_barrier)
-        pending_barrier_ = pending_storage_barrier_ = false;
+        pending_barrier_ = false;
         full_barrier();
     }
 }
 
 void Executor::full_barrier() {
-    storage_since_barrier_ = pending_storage_barrier_ = false;
+    storage_since_barrier_ = false;
     // Perfil y tight_barriers (ver gpu_work_): sin nada grabado desde la última, o (_pase) desde el final de un pase.
     prof_full_barriers_++;
     const bool redundant = !gpu_work_, after_pass = gpu_work_ && !work_after_pass_;
@@ -5189,107 +5395,11 @@ void Executor::full_barrier() {
 }
 
 void Executor::barrier() {
-    pending_barrier_ = pending_storage_barrier_ = false;  // esta la cubre
+    pending_barrier_ = false;  // esta la cubre
     if (!split_why_) split_why_ = "barrera";
     end_render_pass();
     st_.rt_dirty = true;
     full_barrier();
-}
-
-// Does the stage only write its storage buffers, never read them? From its SPIR-V: every load, atomic or copy whose pointer
-// comes from a storage buffer variable is a read; a pointer that goes anywhere unknown (a function call, a phi or a
-// select) counts as one too.
-bool storage_write_only(const std::vector<uint32_t>& w) {
-    if (w.size() < 5 || w[0] != 0x07230203u) return false;
-    std::unordered_map<uint32_t, uint32_t> root;  // pointer id -> the storage buffer variable it comes from
-    std::unordered_set<uint32_t> ssbo;
-    bool writes = false;
-    for (size_t i = 5; i < w.size();) {
-        const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
-        if (!n || i + n > w.size()) return false;
-        const uint32_t* a = &w[i + 1];
-        auto from_ssbo = [&](uint32_t id) {
-            auto it = root.find(id);
-            return it != root.end() && ssbo.count(it->second);
-        };
-        switch (op) {
-            case 59:  // OpVariable
-                if (n >= 4 && a[2] == 12) ssbo.insert(a[1]), root[a[1]] = a[1];
-                break;
-            case 65: case 66: case 67: case 83: case 124:  // access chains, OpCopyObject, OpBitcast
-                if (n >= 4 && root.count(a[2])) root[a[1]] = root[a[2]];
-                break;
-            case 61: if (n >= 4 && from_ssbo(a[2])) return false; break;  // OpLoad
-            case 62: if (n >= 3 && from_ssbo(a[0])) writes = true; break;  // OpStore
-            case 63: if (n >= 3 && from_ssbo(a[1])) return false; break;  // OpCopyMemory (its source)
-            case 57:  // OpFunctionCall: a storage pointer passed on
-                for (uint32_t k = 3; k + 1 < n; k++)
-                    if (from_ssbo(a[k])) return false;
-                break;
-            case 245: case 169:  // OpPhi, OpSelect of a storage pointer
-                for (uint32_t k = 2; k + 1 < n; k++)
-                    if (from_ssbo(a[k])) return false;
-                break;
-            default:
-                if (op >= 227 && op <= 242 && n >= 4 && op != 228 && from_ssbo(a[2])) return false;  // atomics (not store)
-                if (op == 228 && n >= 2 && from_ssbo(a[0])) writes = true;                           // OpAtomicStore
-                break;
-        }
-        i += n;
-    }
-    return writes;
-}
-
-// What a storage-writing draw is, for lazy_storage_barrier: its stages and the storage buffers they bind. *ok: a barrier
-// the game puts after it can wait while the same draw repeats. That holds when every stage that writes storage only
-// writes it (one draw's instances already write the same buffers in no set order, so the next identical draw doing the
-// same changes nothing), nothing it reads (storage, vertex or index data) overlaps what it writes, and it writes no
-// images.
-uint64_t Executor::storage_signature(const cmd::Draw& d, bool* ok) {
-    *ok = true;
-    uint64_t h = 0xcbf29ce484222325ull;
-    auto mix = [&h](uint64_t v) {
-        h = (h ^ v) * 0x100000001b3ull;
-        h ^= h >> 29;
-    };
-    static std::vector<std::pair<uint64_t, uint64_t>> written, read;
-    written.clear();
-    read.clear();
-    for (int s = 0; s < kStages; s++) {
-        const ProgramStage* ps = st_.stages[s];
-        if (!ps) continue;
-        mix(reinterpret_cast<uintptr_t>(ps));
-        const uint32_t base = kGraphicsStorageBase + kGraphicsStorageStride * s;
-        for (const Resource& r : ps->shader.resources) {
-            if (r.kind == Resource::Image || r.kind == Resource::ImageBuffer || r.kind == Resource::TextureBuffer) *ok = false;
-            if (r.kind != Resource::StorageBuffer) continue;
-            if (r.cbuf_index != 0 || r.cbuf_offset < base || r.cbuf_offset >= base + 16 * kMaxStorage) {
-                *ok = false;
-                continue;
-            }
-            const BufferRange& b = st_.bindings[s].storage[(r.cbuf_offset - base) / 16];
-            mix(b.address);
-            mix(b.size);
-            mix(r.is_written);
-            if (!r.is_written) {
-                read.emplace_back(b.address, b.size);
-                continue;
-            }
-            written.emplace_back(b.address, b.size);
-            auto* stage = const_cast<ProgramStage*>(ps);
-            if (stage->storage_write_only < 0) stage->storage_write_only = storage_write_only(stage->shader.spirv) ? 1 : 0;
-            if (!stage->storage_write_only) *ok = false;
-        }
-    }
-    for (int k = 0; k < kMaxVertexBuffers; k++)
-        if (st_.vertex_buffers[k].address) read.emplace_back(st_.vertex_buffers[k].address, st_.vertex_buffers[k].size);
-    if (d.index_type >= 0 && d.index_address) read.emplace_back(d.index_address, uint64_t{index_size(d.index_type)} * std::max(d.count, 1));
-    if (d.indirect) read.emplace_back(d.indirect, 20);
-    for (const auto& wr : written)
-        for (const auto& rd : read)
-            if (wr.first < rd.first + rd.second && rd.first < wr.first + wr.second) *ok = false;
-    mix(*ok);
-    return h;
 }
 
 // Barrera de NVN. Todo lo de antes del pase abierto ya va ordenado con él por su dependencia externa: dentro del pase
@@ -5297,10 +5407,7 @@ uint64_t Executor::storage_signature(const cmd::Draw& d, bool* ok) {
 // lo que venga puede leerlos: se corta como siempre. Si no, se aplaza al final del pase (end_render_pass); draw() lo
 // corta antes si un draw muestrea un adjunto del pase o escribe storage.
 void Executor::nvn_barrier(int bits) {
-    // After storage writes, too, when the draws that wrote them can run on without it (see draw()): then the pass goes
-    // on only through more of the same draws.
-    const bool after_storage = storage_since_barrier_ && opt_.lazy_storage && storage_writers_ok_;
-    const bool lazy = opt_.barrera_perezosa && in_render_pass_ && !st_.rt_dirty && (!storage_since_barrier_ || after_storage);
+    const bool lazy = opt_.barrera_perezosa && in_render_pass_ && !st_.rt_dirty && !storage_since_barrier_;
     if (frame_ == trace_frame_) NVN_LOG("F barrera 0x%x%s\n", bits, lazy ? " aplazada" : "");
     if (!lazy) {
         // Perfil de cortes: por qué no se aplazó (si hay pase abierto). rt_dirty: el juego ya cambió de targets.
@@ -5312,7 +5419,6 @@ void Executor::nvn_barrier(int bits) {
         return;
     }
     pending_barrier_ = true;
-    if (storage_since_barrier_) pending_storage_barrier_ = true;
     prof_barriers_deferred_++;
 }
 
@@ -7230,29 +7336,45 @@ void Executor::draw(const cmd::Draw& in) {
     }
     if (multi) {
         if (const Overlay* o = find_overlay(d.draw_count, 4, &count_offset)) {
-            count_buf = o->buffer;
-            if (o->data) count_host = o->data + (count_offset - o->offset);
+            // Only a count the GPU wrote is read there; one the game set on the CPU is read from its memory (see
+            // prepare_counted_draws)
+            if (frame_ == trace_frame_ && count_fallback)  // DEBUG: who wrote the count (1 a draw, 2 a compute, 4 a copy)
+                NVN_LOG("F   count %#llx written by %u\n", static_cast<unsigned long long>(d.draw_count), o->writers);
+            if (o->writers || !count_fallback) {
+                count_buf = o->buffer;
+                if (o->data) count_host = o->data + (count_offset - o->offset);
+            }
         } else if (gather_overlays(d.draw_count, 4, &count_buf, &count_offset, &count_host))
             st_.rt_dirty = true;
-        if (count_fallback && count_buf) {
-            // The count is on the GPU and can't be used there: every draw is drawn. The count is the game's GPU culling
-            // (about 7 % of these come back 0 in the village), and the arguments of a culled draw are still a valid
-            // mesh, so this only draws a few hidden things. Taking last frame's count instead flickered: it lags the
-            // arguments by a frame.
+        bool fix_now = false;
+        const auto fixed = count_fallback && count_buf
+                               ? counted_fix_.find(counted_key(d))
+                               : counted_fix_.end();
+        if (fixed != counted_fix_.end()) {
+            // The arguments, copied before the pass with 0 instances past the GPU's count (prepare_counted_draws)
+            gpu_args = fixed->second.first;
+            gpu_args_offset = fixed->second.second;
             multi_draws = static_cast<uint32_t>(d.max_draws);
             count_buf = VK_NULL_HANDLE;
-            static bool logged = false;
-            if (!logged) {
-                logged = true;
-                NVN_LOG("multi-draw with the count on the GPU and no VK_KHR_draw_indirect_count: every draw is drawn\n");
-            }
+            if (frame_ == trace_frame_)  // DEBUG: the count the CPU sees now (what the shader read, unless the GPU changed it)
+                NVN_LOG("F   counted on the GPU: %u of %d (as the CPU sees it)\n",
+                        count_host ? *reinterpret_cast<const volatile uint32_t*>(count_host) : ~0u, d.max_draws);
+        } else if (count_fallback && count_buf && NVN_FLAG("count_fixup") && counted_setup()) {
+            // Not fixed before the pass: here, once the arguments are on the GPU (below). Drawing them all instead drew
+            // stale arguments past the count (stretched triangles over the ground on a Dimensity 720).
+            fix_now = true;
+        } else if (count_fallback && count_buf) {
+            // Every draw up to max_draws, stale arguments past the GPU's count and all: some stretched triangles while the
+            // camera turns, but the ground is all there. <data>/count_fixup draws only up to the count instead.
+            multi_draws = static_cast<uint32_t>(d.max_draws);
+            count_buf = VK_NULL_HANDLE;
         } else if (!count_buf) {
             multi_draws = std::min<uint32_t>(*reinterpret_cast<const uint32_t*>(d.draw_count), static_cast<uint32_t>(d.max_draws));
             if (!multi_draws) return;
         }
         const bool cpu_args = !gpu_args;
         if (cpu_args) {
-            Staging::Alloc al = staging_->alloc(args_size, 16);
+            Staging::Alloc al = staging_->alloc(args_size, std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16));
             if (!al.data) return;
             memcpy(al.data, reinterpret_cast<const void*>(d.indirect), args_size);
             gpu_args = al.buffer;
@@ -7269,6 +7391,18 @@ void Executor::draw(const cmd::Draw& in) {
                             static_cast<unsigned long long>(delivered_range(d.indirect + uint64_t(k) * d.stride)));
                 e[0] = e[1] = 0;
             }
+        }
+        if (fix_now) {
+            VkBuffer fixed_args = VK_NULL_HANDLE;
+            VkDeviceSize fixed_offset = 0;
+            if (!fix_counted_now(d, gpu_args, gpu_args_offset, count_buf, count_offset, fixed_args, fixed_offset)) {
+                skipped_draws_++;  // (better missing for a frame than drawn from stale arguments)
+                return;
+            }
+            gpu_args = fixed_args;
+            gpu_args_offset = fixed_offset;
+            multi_draws = static_cast<uint32_t>(d.max_draws);
+            count_buf = VK_NULL_HANDLE;
         }
         if (frame_ == trace_frame_) {  // DEPURACIÓN: lo que dejó el frame anterior en los argumentos y el número
             VkDeviceSize ao = 0, co = 0;
@@ -7528,16 +7662,8 @@ void Executor::draw(const cmd::Draw& in) {
         return;
     }
     prof_split(1, prof_s);
-    // A storage-writing draw: what it is (storage_signature) and whether a barrier after it can wait while only the same
-    // draw repeats
-    bool writers_ok = false;
-    const uint64_t writers_sig = writes_storage && opt_.lazy_storage ? storage_signature(d, &writers_ok) : 0;
-    // After a barrier deferred past storage writes, only the same draws go on in the pass (the game's GPU occlusion test:
-    // 30 boxes in a row on a 128x64 depth target, each with a barrier after it, 5 ms of passes on a Mali-G57).
-    const bool same_writers = pending_storage_barrier_ && writes_storage && writers_ok && writers_sig == storage_writers_sig_;
-    const bool storage_cut = pending_barrier_ && (pending_storage_barrier_ ? !same_writers : writes_storage);
     // 2. Render pass, pipeline. Con una barrera aplazada, el pase se corta aquí si este draw la necesita.
-    if (in_render_pass_ && (storage_cut || samples_target || writes_target)) {
+    if (in_render_pass_ && ((pending_barrier_ && writes_storage) || samples_target || writes_target)) {
         split_why_ = writes_target    ? "escribe como imagen un adjunto del pase"
                      : samples_target ? "muestrea un adjunto escrito en el pase"
                                       : "storage tras una barrera aplazada";
@@ -7551,12 +7677,7 @@ void Executor::draw(const cmd::Draw& in) {
         skipped_draws_++;
         return;
     }
-    if (writes_storage) {
-        // The writers since the last barrier: all the same draw, or none can skip it
-        storage_writers_ok_ = writers_ok && (!storage_since_barrier_ || (storage_writers_ok_ && writers_sig == storage_writers_sig_));
-        storage_writers_sig_ = writers_sig;
-        storage_since_barrier_ = true;
-    }
+    if (writes_storage) storage_since_barrier_ = true;
     note_pass_writes();
     if (log_state_ && st_.rt.depth) {  // perfil de la escena (prof_depth_rts_): draws y anchos de viewport por profundidad
         DepthStat& ds = prof_depth_rts_[(static_cast<uint32_t>(st_.rt.depth->desc.width) << 16) |
@@ -10861,6 +10982,8 @@ void Executor::profile_frame() {
                 (unsigned long long)prof_astc_encoded_, (unsigned long long)prof_astc_cached_,
                 (unsigned long long)prof_astc_direct_, (unsigned long long)prof_astc_empty_);
     prof_astc_encoded_ = prof_astc_cached_ = prof_astc_empty_ = prof_astc_direct_ = 0;
+    if (prof_counted_late_) NVN_LOG("perfil multi-draw: %llu fixed at the draw, not before their pass\n", (unsigned long long)prof_counted_late_);
+    prof_counted_late_ = 0;
     NVN_LOG("perfil fsr: %llu de %d frames con el blit por la guarda (frame del juego > %.1f ms)\n",
             static_cast<unsigned long long>(prof_fsr_guard_frames_), period, (frame_period_ns() < 20'000'000 ? kFsrOffNs60 : kFsrOffNs) / 1e6);
     prof_fsr_guard_frames_ = 0;
