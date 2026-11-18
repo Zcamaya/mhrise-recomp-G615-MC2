@@ -65,8 +65,7 @@ To read a PGM or PPM, any image viewer works, or `PIL.Image.open()` in Python. D
 
 `breadcrumbs` (Debug menu). Every pass and dispatch writes a marker, and the GPU runs everything in order. When the GPU
 hangs, or the driver kills a stuck job, the log says `breadcrumbs: GPU perdida` and names the last pass or dispatch
-started, with its shaders. Their code is saved as `shaders/dumps/migas_<print>.code` and `_ctrl.code` in the data folder (Save the report
-includes them), to read with
+started, with its shaders. Their code is saved as `<data>/shaders/migas_<print>.code` and `_ctrl.code`, to read with
 `tools/shadertool`. `breadcrumbs_compute` and `breadcrumbs_light` are lighter variants. It's slow; turn it off
 afterwards.
 
@@ -82,11 +81,9 @@ functions. Instructions that depend on the pc can't be probed.
 
 ## Shader tools
 
-Shader files live in the data folder, `<data>/shaders/`:
-
-- `dumps/`: stages that failed to translate, `migas_*` from breadcrumbs, `barrera_*` (compute with barriers in
+- `<data>/shaders/`: stages that failed to translate, `migas_*` from breadcrumbs, `barrera_*` (compute with barriers in
   conditional flow).
-- `pipelines_fallidas/`: the SPIR-V of each stage of a pipeline the driver refused (64 per session at most).
+- `<data>/pipelines_fallidas/`: the SPIR-V of each stage of a pipeline the driver refused (64 per session at most).
 - `tools/shadertool`: translates a dumped stage with the same recompiler, offline.
 - `tools/revisar_spirv.py`: reads a phone's `spirv.bin`, its `pipelines_fallidas/` or loose `.spv` files, and says
   what each shader uses that tends to break on a given GPU (`--gpu mali-g615|adreno-730|adreno-650`): subgroup ops on

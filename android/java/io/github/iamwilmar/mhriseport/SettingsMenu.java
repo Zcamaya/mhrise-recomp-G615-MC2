@@ -350,6 +350,10 @@ final class SettingsMenu {
                 "At start it builds the pipelines seen in earlier runs, so they don't drop frames when they appear. "
                         + "Takes effect on the next start.",
                 "no_warmup", true);
+        flag("Async shaders",
+                "A shader the game hasn't used before is translated in the background, and what needs it shows a moment "
+                        + "late the first time. Off: the game stops until it's translated (a short freeze).",
+                "no_async_shaders", true);
         flag("Pipelines on one thread",
                 "No background threads or warm-up: more stutter, but some drivers crash building several at once "
                         + "(PowerVR is like that by itself). Takes effect on the next start.",
@@ -504,8 +508,7 @@ final class SettingsMenu {
                     dialog.dismiss();
                 });
         action("Save the report",
-                "Puts log.txt, your settings, the captured frame and any shaders saved for a GPU crash into "
-                        + "Download/mhrise-report.zip, to send.",
+                "Puts log.txt, your settings and the captured frame into Download/mhrise-report.zip, to send.",
                 this::saveReport);
         flag("Capture button",
                 "A small round button over the game, so a frame can be captured right where the problem shows without "
@@ -1151,7 +1154,7 @@ final class SettingsMenu {
         "60fps", "adreno_turbo", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
-        "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_bindless_arrays", "no_bloom",
+        "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_async_shaders", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
         "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",

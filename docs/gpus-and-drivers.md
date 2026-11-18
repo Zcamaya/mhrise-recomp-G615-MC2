@@ -38,7 +38,7 @@ lighting on the A8xx. `qualcomm_7xx_stock()` in `program.cpp` now checks `VK_DRI
     and the capability they bring (`keep_dead_functions` turns that off).
 - **Safe translation:** if a pipeline is still rejected, its stages are retranslated more conservatively: without
   NonUniform marking, then through spirv-opt, then without subgroup operations. The first one that works is
-  remembered for the warm-up. The rejected SPIR-V is saved to `shaders/pipelines_fallidas/` in the app's storage.
+  remembered for the warm-up. The rejected SPIR-V is saved to `<data>/pipelines_fallidas/`.
 - **Miscompiled control flow:** Qualcomm's compiler mishandles Eden's flag-based structuring of switches (BRX), giving
   NaN in the hunter's face skinning. Shaders with a BRX go through spirv-opt. Around an `OpUnreachable` it also
   mis-optimises, so that becomes an `OpReturn` (`eden-unreachable-qualcomm`).
@@ -53,12 +53,6 @@ Turnip compiles everything Qualcomm's driver rejects. Bindless arrays are on.
   On an A725 with Turnip, shadows show with bindless arrays on and disappear with them off.
 - **The dotted black lines on the floor** came from general subgroup shuffles used for derivatives. They were seen on
   an A725 and an A8xx alike, and fixed by `eden-quad-butterfly`.
-
-## Turnip on Adreno 6xx
-
-- **Use a build made for the A6xx.** An SD870 (Adreno 650) running `710_720_722_v4.6`, a Turnip build for the A7xx,
-  lost the GPU after about 16 minutes (`vkQueueSubmit: VK_ERROR_DEVICE_LOST`), and the game froze for good, since a
-  lost device can't be used again. The port now names that error and says so once in the log.
 
 ## Turnip on Adreno 8xx (Gen8 builds)
 
@@ -99,8 +93,7 @@ Turnip was still being brought up on the A8xx while this was written, and builds
 ARM's r32 driver on a Dimensity 720 (Mali-G57) lacks `VK_KHR_draw_indirect_count`, `extended_dynamic_state`,
 `depth_clip_enable`, `vertex_attribute_divisor`, `sampler_filter_minmax`, `dynamic_rendering` and vertex-stage
 stores. The one that mattered: without draw-indirect-count, MH Rise's multi-draws (almost the whole main view) were
-skipped and only the sky showed. Their arguments are now copied before the pass and the draws past the count get 0 instances
-(`shaders/draw_count.comp`, `no_count_fallback`), and without the
+skipped and only the sky showed. Those draws are now all drawn, ignoring the GPU's count (`no_count_fallback`), and without the
 `multiDrawIndirect` feature each draw gets its own call. Check the log for "multi-draw no soportado" or "sin dibujar"
 numbers in the millions on any new old driver.
 
@@ -110,13 +103,6 @@ That driver also has no `multiDrawIndirect` (each multi-draw becomes one indirec
     `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
     were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so
     quad swaps are safe with 16-wide subgroups (cache key version 5).
-  - **Texel fetches outside an image fault the GPU on ARM's driver.** The pass right after the bloom (pixel
-    `75cc74924ff2b1ed`, vertex `602b124798536d97`) does 12 `TLDS` texel fetches at offsets around each pixel and keeps
-    their min and max; at the edges some land outside the image. On the Switch that reads 0. On a Mali-G925 Immortalis
-    and a Mali-G720 (Dimensity 8400, the same driver) it was `GROUP_ERROR_FATAL` every frame, a black screen with
-    sound; on a Dimensity 720, the GPU lost now and then. Found from the shader's code that breadcrumbs saved (it has
-    no buffer reads, no shuffles: not the quad swaps, not `robusto`). `robustImageAccess` (VK_EXT_image_robustness) is
-    on by default with ARM's driver (not PanVK, which reads them safely) (`no_image_robustness`; `image_robustness` turns it on elsewhere).
   - **With PanVK,** they're on (`short_subgroups`). Without them, Eden's single-lane fallback loses quad derivatives
     and the ground was missing.
   - **Warp-synchronous compute** (32 threads sharing memory with no barrier) races on 16-wide subgroups, so the port

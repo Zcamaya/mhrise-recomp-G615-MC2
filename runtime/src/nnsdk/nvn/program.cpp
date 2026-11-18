@@ -26,7 +26,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "nnsdk/ini.h"
 #include "nnsdk/nvn/commands.h"
 #include "nnsdk/nvn/nvn.h"
 #include "nnsdk/nvn/flags.h"
@@ -72,7 +71,8 @@ void open_spirv_cache() {
     static std::once_flag once;
     std::call_once(once, [] {
         if (NVN_FLAG("no_spirv_cache")) return;
-        nvn::spirv_cache::global().open(nnsdk::ini::shader_file("spirv.bin"), NVN_TRADUCTOR_HUELLA);
+        const char* data = getenv("NIER_DATA");
+        nvn::spirv_cache::global().open(std::string(data ? data : "/sdcard/NieR") + "/spirv.bin", NVN_TRADUCTOR_HUELLA);
     });
 }
 
@@ -84,7 +84,8 @@ size_t safe_copy(void* dst, const void* src, size_t size) {
 }
 
 void dump_code(uint64_t code, const std::string& name) {
-    const std::string dir = nnsdk::ini::shader_dir() + "/shaders";
+    const char* data = getenv("NIER_DATA");
+    std::string dir = std::string(data ? data : "/sdcard/NieR") + "/shaders";
     mkdir(dir.c_str(), 0775);
     std::vector<uint8_t> buf(64 * 1024);
     size_t n = safe_copy(buf.data(), reinterpret_cast<const void*>(code), buf.size());
@@ -393,22 +394,15 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             static bool logged = false;
             if (!logged) {
                 logged = true;
-                NVN_LOG("subgroups of %u (under the warp of 32): no subgroup operations in shaders\n", options.subgroup_size);
+                NVN_LOG("subgroups of %u (under the warp of 32): no subgroup operations in shaders%s\n",
+                        options.subgroup_size, NVN_FLAG("no_quad_derivatives") ? "" : " but quad swaps");
             }
             // Quad operations are the exception: a quad is 4 invocations on any GPU, so the game's hand-made
             // derivatives (SHFL.BFLY by 1 and 2 in about 80 scenery pixel shaders) still work. Without them Eden's
             // fallback returns each pixel's own value and every slope comes out zero (the same loss that left PanVK
             // without ground). <data>/no_quad_derivatives: nothing, as before.
-            // (They were turned off on ARM's driver for a while, blamed for the GPU fault in the bloom's full-size pass,
-            // pixel 75cc74924ff2b1ed; the Dimensity 720 lost the GPU in that pass with them off too, so it wasn't them.)
             constexpr uint32_t kBasic = 0x1, kQuad = 0x80;
-            const bool quads = !NVN_FLAG("no_quad_derivatives");
-            options.subgroup_operations &= quads ? (kBasic | kQuad) : 0u;
-            static bool told = false;
-            if (!told) {
-                told = true;
-                NVN_LOG("quad swaps for the game's derivatives: %s\n", quads ? "on" : "off (no_quad_derivatives)");
-            }
+            options.subgroup_operations &= NVN_FLAG("no_quad_derivatives") ? 0u : (kBasic | kQuad);
         }
         // Como Eden con el driver propietario de Qualcomm (vendorID 0x5143): shuffle con índice dinámico emulado.
         // <datos>/no_shuffle_qualcomm al traducir (al arrancar): el OpGroupNonUniformShuffle de siempre.

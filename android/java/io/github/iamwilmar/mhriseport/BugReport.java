@@ -45,11 +45,6 @@ final class BugReport {
                 if (dumps != null)
                     for (File f : dumps)
                         if (f.isFile()) add(zip, f, "frame/" + f.getName());
-                // The shaders the runtime saved for a GPU crash or a rejected pipeline (small; the caches stay out)
-                if (folder != null) {
-                    addDir(zip, new File(folder, "shaders"), "shaders/");
-                    addDir(zip, new File(folder, "pipelines_fallidas"), "pipelines_fallidas/");
-                }
                 result = String.format(Locale.ROOT, "Report saved: Download/mhrise-report.zip (%.1f MB).",
                         out.length() / 1048576.0);
             } catch (IOException e) {
@@ -59,17 +54,8 @@ final class BugReport {
         }, "Report").start();
     }
 
-    private static void addDir(ZipOutputStream zip, File dir, String prefix) throws IOException {
-        File[] files = dir != null ? dir.listFiles() : null;
-        if (files == null) return;
-        for (File f : files) {
-            if (f.isDirectory()) addDir(zip, f, prefix + f.getName() + "/");
-            else if (!f.getName().endsWith(".tmp")) add(zip, f, prefix + f.getName());
-        }
-    }
-
     private static void add(ZipOutputStream zip, File f, String name) throws IOException {
-        if (f == null || !f.isFile()) return;
+        if (!f.isFile()) return;
         zip.putNextEntry(new ZipEntry(name));
         Files.copy(f.toPath(), zip);
         zip.closeEntry();
