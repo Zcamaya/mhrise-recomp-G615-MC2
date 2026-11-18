@@ -431,6 +431,7 @@ BaseResolution base_resolution() {
     if (NVN_FLAG("resolution_480")) return {0.88890f, 480};
     if (NVN_FLAG("resolution_432")) return {0.80001f, 432};
     if (NVN_FLAG("resolution_360")) return {0.66668f, 360};
+    if (NVN_FLAG("resolution_240")) return {0.44445f, 240};
     return {1.0f, 540};
 }
 

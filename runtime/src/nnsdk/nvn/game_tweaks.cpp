@@ -34,6 +34,7 @@
 #include "nnsdk/nvn/commands.h"
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/nvn.h"
+#include "nnsdk/nvn/vk.h"
 #include "nnsdk/runtime.h"
 
 namespace nvn {
@@ -72,18 +73,12 @@ constexpr Check kChecks[] = {
     {0x59f90, 0xBD1A4500},    // str s0, [x8, #0x1a44]    (set_DefaultShadowLodBias)
     {0x72878, 0xF9468508},    // ldr x8, [x8, #0xd08]     (get_UseGpuOcclusionCulling: its GOT entry)
     {0x72880, 0x39407508},    // ldrb w8, [x8, #0x1d]
-    {0x73084, 0xF9468D08},    // ldr x8, [x8, #0xd18]     (get_EnableGpuInstanceCulling: its GOT entry)
-    {0x765cba8, 0xF9400400},  // ldr x0, [x0, #0x8]       (its getter)
-    {0x765cbb8, 0xF9400400},  // ldr x0, [x0, #0x8]       (its setter)
 };
 constexpr size_t kDynamicShadowSetter = 0x7930a18;  // void (Renderer*, bool)
 
-// GPU culling (debug: endemic life and wirebugs you can gather but can't see, on Eden too). Both objects come through
-// GOT entries the loader fills: entry -> global variable -> object.
-//   UseGpuOcclusionCulling: byte +0x1d of the object behind GOT main+0x12674d08 (get_ thunk main+0x72874)
-//   EnableGpuInstanceCulling: get main+0x765cba8 / set main+0x765cbb8 on the object behind GOT main+0x12674d18
-constexpr size_t kOcclusionGot = 0x12674d08, kInstanceCullingGot = 0x12674d18;
-constexpr size_t kInstanceCullingGet = 0x765cba8, kInstanceCullingSet = 0x765cbb8;
+// GPU occlusion culling: UseGpuOcclusionCulling, byte +0x1d of the object behind GOT main+0x12674d08 (the loader fills
+// the entry: entry -> global variable -> object; get_ thunk main+0x72874)
+constexpr size_t kOcclusionGot = 0x12674d08;
 
 const uint8_t* known_main() {
     static const uint8_t* base = [] () -> const uint8_t* {
@@ -117,6 +112,7 @@ uint32_t wanted_shadow_divisor() {
 }
 
 float wanted_lod_scale() {
+    if (NVN_FLAG("model_detail_min")) return 0.25f;
     if (NVN_FLAG("model_detail_lowest")) return 0.5f;
     if (NVN_FLAG("model_detail_low")) return 0.75f;
     if (NVN_FLAG("model_detail_high")) return 1.5f;
@@ -335,27 +331,15 @@ uint8_t* got_object(const uint8_t* base, size_t got) {
 
 ByteSwitch g_gpu_occlusion{"GPU occlusion culling", 0x1d, 0};
 
+// The game's GPU occlusion test (boxes on a 128x64 depth target, then compute shaders that sort what's visible) is off
+// on Mali by default: those compute shaders use the Switch's 32-lane warps, Mali's subgroups are 16 lanes (Eden's
+// translator only handles larger ones), and grass and trees popped in and out every frame, with ARM's driver and PanVK
+// alike. Off, the game culls by the camera alone. <data>/gpu_occlusion keeps it on; <data>/no_gpu_occlusion turns it
+// off anywhere.
 void culling_switches(const uint8_t* base) {
-    if (uint8_t* occ = got_object(base, kOcclusionGot)) byte_switch(occ, g_gpu_occlusion, NVN_FLAG("no_gpu_occlusion"));
-
-    uint8_t* inst = got_object(base, kInstanceCullingGot);
-    if (!inst) return;
-    using Get = bool (*)(void*);
-    using Set = void (*)(void*, bool);
-    auto* get = reinterpret_cast<Get>(const_cast<uint8_t*>(base) + kInstanceCullingGet);
-    auto* set = reinterpret_cast<Set>(const_cast<uint8_t*>(base) + kInstanceCullingSet);
-    static bool seen = false, ours = false, game = false;
-    const bool now = get(inst);
-    if (!seen || !ours || now) game = now;
-    if (!seen) NVN_LOG("game settings: GPU instance culling is %d in the game\n", game);
-    seen = true;
-    const bool off = NVN_FLAG("no_gpu_instance_culling");
-    const bool target = off ? false : game;
-    if (now != target) {
-        set(inst, target);
-        NVN_LOG("game settings: GPU instance culling %d (game's %d)\n", target, game);
-    }
-    ours = off;
+    static const bool mali = nvn::vk() && nvn::vk()->props.vendorID == 0x13B5;
+    const bool off = NVN_FLAG("no_gpu_occlusion") || (mali && !NVN_FLAG("gpu_occlusion"));
+    if (uint8_t* occ = got_object(base, kOcclusionGot)) byte_switch(occ, g_gpu_occlusion, off);
 }
 
 }  // namespace

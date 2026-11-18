@@ -7196,9 +7196,10 @@ void Executor::draw(const cmd::Draw& in) {
             st_.rt_dirty = true;
         // The count stays on the GPU and the vertex shader drops the draws past it (count_check.h): one call per draw
         // (no multiDrawIndirect, so each knows its index), a plain vertex stage (a geometry or tessellation one could
-        // make vertices of its own). <data>/count_check (Graphics → Exact draw counts).
+        // make vertices of its own). On by default there; <data>/no_count_check turns it off, <data>/count_check forces it
+        // (Graphics → Exact draw counts).
         const ProgramStage* game_vs = st_.stages[static_cast<int>(Stage::Vertex)];
-        if (count_fallback && count_buf && NVN_FLAG("count_check") && !vk()->multi_draw_indirect && game_vs &&
+        if (count_fallback && count_buf && (NVN_FLAG("count_check") || !NVN_FLAG("no_count_check")) && !vk()->multi_draw_indirect && game_vs &&
             !st_.stages[static_cast<int>(Stage::Geometry)] && !st_.stages[static_cast<int>(Stage::TessControl)] &&
             !st_.stages[static_cast<int>(Stage::TessEval)])
             if (const ProgramStage* checked = count_check_stage(*game_vs)) {

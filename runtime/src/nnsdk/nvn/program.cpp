@@ -390,7 +390,10 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             if (vkGetPhysicalDeviceProperties2) vkGetPhysicalDeviceProperties2(c->gpu, &p2);
             return driver.driverID == VK_DRIVER_ID_MESA_PANVK;
         }();
-        const bool short_ok = NVN_FLAG("short_subgroups") || (panvk && !NVN_FLAG("no_short_subgroups"));
+        // El driver de ARM sin draw-indirect-count (Dimensity 720): sin ellas el culling de la GPU da cuentas malas y,
+        // con exact draw counts, faltaba el suelo; con ellas salía bien. Ahí también por defecto.
+        const bool old_arm = !c->draw_indexed_indirect_count && c->props.vendorID == 0x13B5;
+        const bool short_ok = NVN_FLAG("short_subgroups") || ((panvk || old_arm) && !NVN_FLAG("no_short_subgroups"));
         if (options.subgroup_size < 32 && !short_ok) {
             static bool logged = false;
             if (!logged) {

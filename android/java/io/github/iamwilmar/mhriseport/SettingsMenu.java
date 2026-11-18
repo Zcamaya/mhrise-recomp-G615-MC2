@@ -189,9 +189,9 @@ final class SettingsMenu {
                 "540p is the game's own. Lower: blurrier, much less GPU work, for weak phones. 720p draws the whole scene "
                         + "at 1280x720, with no scaling inside the game. In docked mode the same steps apply to the "
                         + "game's docked resolution. Applies at once.",
-                new String[] {"540p (960x540)", "360p (640x360)", "432p (768x432)", "480p (854x480)", "576p (1024x576)",
+                new String[] {"540p (960x540)", "240p (427x240)", "360p (640x360)", "432p (768x432)", "480p (854x480)", "576p (1024x576)",
                         "648p (1152x648)", "720p (1280x720)"},
-                new String[] {null, "resolution_360", "resolution_432", "resolution_480", "resolution_576",
+                new String[] {null, "resolution_240", "resolution_360", "resolution_432", "resolution_480", "resolution_576",
                         "resolution_648", "resolution_720"});
         exclusive("Aspect ratio",
                 "The shape of the picture on your screen, like Eden's setting. 16:9 is the game's own, with black bars at "
@@ -289,8 +289,8 @@ final class SettingsMenu {
         exclusive("Model detail",
                 "How soon models switch to their simpler versions with distance (the PC version's mesh quality). Lower: "
                         + "less work for the GPU, simpler models a little closer. Applies at once.",
-                new String[] {"Game's", "Low", "Lowest", "High"},
-                new String[] {null, "model_detail_low", "model_detail_lowest", "model_detail_high"});
+                new String[] {"Game's", "Low", "Lowest", "Minimum", "High"},
+                new String[] {null, "model_detail_low", "model_detail_lowest", "model_detail_min", "model_detail_high"});
         exclusive("Texture streaming",
                 "How many of the largest texture sizes the game skips loading. Fewer: blurrier textures up close, less "
                         + "memory and bandwidth. Applies as textures load.",
@@ -529,25 +529,22 @@ final class SettingsMenu {
         flag("Retry rejected pipelines",
                 "When the driver rejects a pipeline, its shaders are translated again with safer options.",
                 "no_safe_translation", true);
-        flag("No GPU instance culling",
-                "The game stops culling instanced objects (grass, trees: many copies of one model) on the GPU, so its "
-                        + "compute shaders don't decide which are drawn. For grass and trees popping in and out on Mali, "
-                        + "whose 16-lane subgroups those shaders don't run right on. Applies at once.",
-                "no_gpu_instance_culling", false);
-        flag("No GPU occlusion culling",
-                "The game stops hiding what its GPU test says is behind something else. Applies at once.",
-                "no_gpu_occlusion", false);
+        exclusive("GPU occlusion culling",
+                "The game hides what its GPU test says is behind something else. Auto: off on Mali, where that test's "
+                        + "compute shaders don't run right on 16-lane subgroups and grass and trees popped in and out; on "
+                        + "elsewhere. Off: the game culls by the camera alone, a bit more to draw. Applies at once.",
+                new String[] {"Auto", "On", "Off"}, new String[] {null, "gpu_occlusion", "no_gpu_occlusion"});
         if (gpu.mali())
-            flag("Exact draw counts (old drivers)",
+            exclusive("Exact draw counts (old drivers)",
                     "On drivers without draw-indirect-count (ARM's on a Dimensity 720), the vertex shader drops the "
-                            + "game's GPU-counted draws past their count, which should remove the stretched triangles. "
-                            + "Testing.",
-                    "count_check", false);
+                            + "game's GPU-counted draws past their count, which removes the stretched triangles. Auto: on "
+                            + "where the driver lacks draw-indirect-count, unused elsewhere." + next,
+                    new String[] {"Auto", "On", "Off"}, new String[] {null, "count_check", "no_count_check"});
         if (gpu.mali())
             exclusive("Subgroups under 32",
-                    "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
-                            + "scene is missing pieces without them; off with ARM's own driver, where they stalled the GPU "
-                            + "for seconds even after the warp barriers fix. Quad swaps for the game's derivatives stay on "
+                    "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK and with "
+                            + "ARM's driver on GPUs without draw-indirect-count (Dimensity 720), where the ground goes "
+                            + "missing without them; off with newer ARM drivers, where they stalled the GPU. Quad swaps for the game's derivatives stay on "
                             + "either way." + next,
                     new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
         header("Driver workarounds");
@@ -1167,13 +1164,13 @@ final class SettingsMenu {
     private static final String[] SWITCHES = {
         "60fps", "adreno_turbo", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
-        "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
-        "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_async_shaders", "no_bindless_arrays", "no_bloom",
+        "fps_45", "gpu_occlusion", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
+        "model_detail_lowest", "model_detail_min", "no_adpf", "no_af", "no_affinity", "no_ao", "no_async_shaders", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
-        "no_gpu_instance_culling", "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
-        "no_return_mali", "no_return_qualcomm", "no_safe_translation", "no_shadows", "no_short_subgroups",
-        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_ubwc", "no_warmup", "perf_stats", "resolution_360",
+        "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
+        "no_return_mali", "no_return_qualcomm", "no_count_check", "no_safe_translation", "no_shadows", "no_short_subgroups",
+        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
         "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
         "shadow_half", "shadow_quarter", "short_subgroups", "single_thread_pipelines", "small_object_culling",
         "texture_bias_1", "texture_bias_2", "tv_mode", "ultrawide", "verbose_log", "wide_view",
