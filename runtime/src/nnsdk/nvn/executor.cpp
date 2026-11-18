@@ -1691,6 +1691,7 @@ private:
         bool depth_written = false, cleared = false, drawn = false;
         int64_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // unión de lo que pueden tocar sus draws (sin recortar)
         std::vector<cmd::Draw> counted;  // multi-draws with their count on the GPU (prepare_counted_draws)
+        std::vector<std::pair<size_t, size_t>> counted_at;  // where each one is (list, command)
     };
     // Without VK_KHR_draw_indirect_count: before the pass begins, a copy of each GPU-counted multi-draw's arguments with
     // 0 instances past the count (shaders/draw_count.comp), which draw() then uses with plain indirect draws. Drawing
@@ -4041,7 +4042,10 @@ void Executor::prepare_counted_draws(const PassScan& scan) {
         uint32_t count_word, draws, stride_words;
     };
     std::vector<Job> jobs;
-    for (const cmd::Draw& d : scan.counted) {
+    for (size_t i = 0; i < scan.counted.size(); i++) {
+        const cmd::Draw& d = scan.counted[i];
+        // Already drawn: the pass began again after a dispatch or a copy, and the scan is the one from its start
+        if (i < scan.counted_at.size() && scan.counted_at[i] < std::make_pair(cur_list_, cur_index_)) continue;
         const uint64_t key = counted_key(d);
         if (counted_fix_.count(key) || d.stride < 16 || d.stride % 4 || d.max_draws <= 0) continue;
         const uint64_t one = d.index_type >= 0 ? 20 : 16;
@@ -4052,7 +4056,10 @@ void Executor::prepare_counted_draws(const PassScan& scan) {
         // (arguments or count from the CPU: draw() handles those exactly. A count no GPU work wrote is the game's own,
         // from the CPU, even with a buffer for its address: that copy can be behind the game's memory, and a 0 there
         // hid pieces of the ground up close on a Dimensity 720, where the game picks the near ones on the CPU.)
-        if (!a || !n || !n->writers) continue;
+        // A count a draw's shader writes (kWrittenByGraphics: the game's culling in a fragment shader, earlier in this
+        // same pass) isn't there yet before the pass: draw() fixes that one at the draw, after the writes. Read before
+        // them, it was 0 and the ground near the camera vanished on a Dimensity 720.
+        if (!a || !n || !n->writers || (n->writers & kWrittenByGraphics)) continue;
         Staging::Alloc copy = staging_->alloc(size, align);
         if (!copy.data) break;
         const VkDeviceSize base = co / align * align;
@@ -5005,7 +5012,10 @@ const Executor::PassScan& Executor::scan_pass(const cmd::SetRenderTargets& pass)
             }
             case kCommandIndex<cmd::Draw>: {
                 const int p = std::get_if<cmd::Draw>(&c)->primitive;
-                if (const cmd::Draw& dr = *std::get_if<cmd::Draw>(&c); dr.draw_count && dr.indirect) s.counted.push_back(dr);
+                if (const cmd::Draw& dr = *std::get_if<cmd::Draw>(&c); dr.draw_count && dr.indirect) {
+                    s.counted.push_back(dr);
+                    s.counted_at.emplace_back(l, k);
+                }
                 for (int t = 0; t < cur.count; t++)
                     if (cur.colors[t] && ((masks >> (4 * t)) & 0xF)) s.colors_written |= 1u << t;
                 if (cur.depth && (ds.depth_write || ds.stencil_test)) s.depth_written = true;  // de más: sin mirar ops
@@ -7316,6 +7326,8 @@ void Executor::draw(const cmd::Draw& in) {
         if (const Overlay* o = find_overlay(d.draw_count, 4, &count_offset)) {
             // Only a count the GPU wrote is read there; one the game set on the CPU is read from its memory (see
             // prepare_counted_draws)
+            if (frame_ == trace_frame_ && count_fallback)  // DEBUG: who wrote the count (1 a draw, 2 a compute, 4 a copy)
+                NVN_LOG("F   count %#llx written by %u\n", static_cast<unsigned long long>(d.draw_count), o->writers);
             if (o->writers || !count_fallback) {
                 count_buf = o->buffer;
                 if (o->data) count_host = o->data + (count_offset - o->offset);

@@ -32,8 +32,12 @@ inline std::string shader_dir() { return data_dir(); }
 inline std::string shader_file(const char* name) {
     const std::string to = data_dir() + "/" + name;
     const char* app = getenv("NIER_INTERNO");
-    if (!app || !*app || access(to.c_str(), F_OK) == 0) return to;
+    if (!app || !*app) return to;
     const std::string from = std::string(app) + "/shaders/" + name, tmp = to + ".tmp";
+    // One in each place (the data folder kept the one from before those builds): the newer one wins
+    struct stat sf, st;
+    if (stat(from.c_str(), &sf) != 0) return to;
+    if (stat(to.c_str(), &st) == 0 && st.st_mtime >= sf.st_mtime) return to;
     FILE* in = fopen(from.c_str(), "rb");
     if (!in) return to;
     bool ok = false;
