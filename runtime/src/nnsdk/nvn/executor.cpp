@@ -1602,6 +1602,7 @@ private:
         bool clear_diferido = true;    // borrado completo -> loadOp CLEAR del siguiente pase con ese target
         bool rt_igual = true;          // volver a enlazar los mismos targets no corta el pase
         bool barrera_perezosa = true;  // una barrera dentro del pase solo lo corta si hace falta
+        bool lazy_storage = true;  // ... también tras escribir storage, entre draws iguales que solo escriben (draw())
         bool solo_escritos = true;     // muestrear un adjunto solo corta el pase si se escribió en él (rp_written_)
         bool store_ops = true;         // STORE_OP_NONE para lo que el pase no escribe
         bool area = true;              // renderArea = lo que dibujan los draws del pase
@@ -1633,6 +1634,11 @@ private:
     // Barrera de NVN aplazada al final del pase abierto (nvn_barrier), y si en el pase ya se escribió storage
     // desde la última barrera (entonces no se aplaza).
     bool pending_barrier_ = false, storage_since_barrier_ = false;
+    // The deferred barrier comes after storage writes (lazy_storage_barrier: see draw()); the draws that wrote them, as
+    // storage_signature gives them, and whether those can go on without it
+    bool pending_storage_barrier_ = false, storage_writers_ok_ = false;
+    uint64_t storage_writers_sig_ = 0;
+    uint64_t storage_signature(const cmd::Draw& d, bool* ok);
     // Barreras completas sin repetir. Una barrera completa (full_barrier: de todo a todo, escrituras a lecturas y
     // escrituras) justo detrás de otra, sin nada grabado en medio, no ordena nada más. gpu_work_: se grabó algo desde la
     // última (lo pone note_gpu_work() delante de cada comando de Vulkan que lee o escribe memoria fuera de un pase: copias,
@@ -3485,6 +3491,7 @@ void Executor::read_flags() {
     opt_.clear_diferido = !NVN_FLAG("no_deferred_clear");
     opt_.rt_igual = !NVN_FLAG("no_same_rt");
     opt_.barrera_perezosa = !NVN_FLAG("no_lazy_barrier");
+    opt_.lazy_storage = !NVN_FLAG("no_lazy_storage_barrier");
     opt_.solo_escritos = !NVN_FLAG("no_written_only");
     opt_.store_ops = !NVN_FLAG("no_store_ops");
     opt_.area = !NVN_FLAG("no_area");
@@ -5156,13 +5163,13 @@ void Executor::end_render_pass() {
     work_after_pass_ = false;  // lo grabado hasta aquí, ordenado con lo que venga por la dependencia externa del pase
     if (crumbs_passes_) crumb_end();
     if (pending_barrier_) {  // la barrera de NVN aplazada (nvn_barrier)
-        pending_barrier_ = false;
+        pending_barrier_ = pending_storage_barrier_ = false;
         full_barrier();
     }
 }
 
 void Executor::full_barrier() {
-    storage_since_barrier_ = false;
+    storage_since_barrier_ = pending_storage_barrier_ = false;
     // Perfil y tight_barriers (ver gpu_work_): sin nada grabado desde la última, o (_pase) desde el final de un pase.
     prof_full_barriers_++;
     const bool redundant = !gpu_work_, after_pass = gpu_work_ && !work_after_pass_;
@@ -5182,11 +5189,107 @@ void Executor::full_barrier() {
 }
 
 void Executor::barrier() {
-    pending_barrier_ = false;  // esta la cubre
+    pending_barrier_ = pending_storage_barrier_ = false;  // esta la cubre
     if (!split_why_) split_why_ = "barrera";
     end_render_pass();
     st_.rt_dirty = true;
     full_barrier();
+}
+
+// Does the stage only write its storage buffers, never read them? From its SPIR-V: every load, atomic or copy whose pointer
+// comes from a storage buffer variable is a read; a pointer that goes anywhere unknown (a function call, a phi or a
+// select) counts as one too.
+bool storage_write_only(const std::vector<uint32_t>& w) {
+    if (w.size() < 5 || w[0] != 0x07230203u) return false;
+    std::unordered_map<uint32_t, uint32_t> root;  // pointer id -> the storage buffer variable it comes from
+    std::unordered_set<uint32_t> ssbo;
+    bool writes = false;
+    for (size_t i = 5; i < w.size();) {
+        const uint32_t n = w[i] >> 16, op = w[i] & 0xFFFF;
+        if (!n || i + n > w.size()) return false;
+        const uint32_t* a = &w[i + 1];
+        auto from_ssbo = [&](uint32_t id) {
+            auto it = root.find(id);
+            return it != root.end() && ssbo.count(it->second);
+        };
+        switch (op) {
+            case 59:  // OpVariable
+                if (n >= 4 && a[2] == 12) ssbo.insert(a[1]), root[a[1]] = a[1];
+                break;
+            case 65: case 66: case 67: case 83: case 124:  // access chains, OpCopyObject, OpBitcast
+                if (n >= 4 && root.count(a[2])) root[a[1]] = root[a[2]];
+                break;
+            case 61: if (n >= 4 && from_ssbo(a[2])) return false; break;  // OpLoad
+            case 62: if (n >= 3 && from_ssbo(a[0])) writes = true; break;  // OpStore
+            case 63: if (n >= 3 && from_ssbo(a[1])) return false; break;  // OpCopyMemory (its source)
+            case 57:  // OpFunctionCall: a storage pointer passed on
+                for (uint32_t k = 3; k + 1 < n; k++)
+                    if (from_ssbo(a[k])) return false;
+                break;
+            case 245: case 169:  // OpPhi, OpSelect of a storage pointer
+                for (uint32_t k = 2; k + 1 < n; k++)
+                    if (from_ssbo(a[k])) return false;
+                break;
+            default:
+                if (op >= 227 && op <= 242 && n >= 4 && op != 228 && from_ssbo(a[2])) return false;  // atomics (not store)
+                if (op == 228 && n >= 2 && from_ssbo(a[0])) writes = true;                           // OpAtomicStore
+                break;
+        }
+        i += n;
+    }
+    return writes;
+}
+
+// What a storage-writing draw is, for lazy_storage_barrier: its stages and the storage buffers they bind. *ok: a barrier
+// the game puts after it can wait while the same draw repeats. That holds when every stage that writes storage only
+// writes it (one draw's instances already write the same buffers in no set order, so the next identical draw doing the
+// same changes nothing), nothing it reads (storage, vertex or index data) overlaps what it writes, and it writes no
+// images.
+uint64_t Executor::storage_signature(const cmd::Draw& d, bool* ok) {
+    *ok = true;
+    uint64_t h = 0xcbf29ce484222325ull;
+    auto mix = [&h](uint64_t v) {
+        h = (h ^ v) * 0x100000001b3ull;
+        h ^= h >> 29;
+    };
+    static std::vector<std::pair<uint64_t, uint64_t>> written, read;
+    written.clear();
+    read.clear();
+    for (int s = 0; s < kStages; s++) {
+        const ProgramStage* ps = st_.stages[s];
+        if (!ps) continue;
+        mix(reinterpret_cast<uintptr_t>(ps));
+        const uint32_t base = kGraphicsStorageBase + kGraphicsStorageStride * s;
+        for (const Resource& r : ps->shader.resources) {
+            if (r.kind == Resource::Image || r.kind == Resource::ImageBuffer || r.kind == Resource::TextureBuffer) *ok = false;
+            if (r.kind != Resource::StorageBuffer) continue;
+            if (r.cbuf_index != 0 || r.cbuf_offset < base || r.cbuf_offset >= base + 16 * kMaxStorage) {
+                *ok = false;
+                continue;
+            }
+            const BufferRange& b = st_.bindings[s].storage[(r.cbuf_offset - base) / 16];
+            mix(b.address);
+            mix(b.size);
+            mix(r.is_written);
+            if (!r.is_written) {
+                read.emplace_back(b.address, b.size);
+                continue;
+            }
+            written.emplace_back(b.address, b.size);
+            auto* stage = const_cast<ProgramStage*>(ps);
+            if (stage->storage_write_only < 0) stage->storage_write_only = storage_write_only(stage->shader.spirv) ? 1 : 0;
+            if (!stage->storage_write_only) *ok = false;
+        }
+    }
+    for (int k = 0; k < kMaxVertexBuffers; k++)
+        if (st_.vertex_buffers[k].address) read.emplace_back(st_.vertex_buffers[k].address, st_.vertex_buffers[k].size);
+    if (d.index_type >= 0 && d.index_address) read.emplace_back(d.index_address, uint64_t{index_size(d.index_type)} * std::max(d.count, 1));
+    if (d.indirect) read.emplace_back(d.indirect, 20);
+    for (const auto& wr : written)
+        for (const auto& rd : read)
+            if (wr.first < rd.first + rd.second && rd.first < wr.first + wr.second) *ok = false;
+    mix(*ok);
+    return h;
 }
 
 // Barrera de NVN. Todo lo de antes del pase abierto ya va ordenado con él por su dependencia externa: dentro del pase
@@ -5194,7 +5297,10 @@ void Executor::barrier() {
 // lo que venga puede leerlos: se corta como siempre. Si no, se aplaza al final del pase (end_render_pass); draw() lo
 // corta antes si un draw muestrea un adjunto del pase o escribe storage.
 void Executor::nvn_barrier(int bits) {
-    const bool lazy = opt_.barrera_perezosa && in_render_pass_ && !st_.rt_dirty && !storage_since_barrier_;
+    // After storage writes, too, when the draws that wrote them can run on without it (see draw()): then the pass goes
+    // on only through more of the same draws.
+    const bool after_storage = storage_since_barrier_ && opt_.lazy_storage && storage_writers_ok_;
+    const bool lazy = opt_.barrera_perezosa && in_render_pass_ && !st_.rt_dirty && (!storage_since_barrier_ || after_storage);
     if (frame_ == trace_frame_) NVN_LOG("F barrera 0x%x%s\n", bits, lazy ? " aplazada" : "");
     if (!lazy) {
         // Perfil de cortes: por qué no se aplazó (si hay pase abierto). rt_dirty: el juego ya cambió de targets.
@@ -5206,6 +5312,7 @@ void Executor::nvn_barrier(int bits) {
         return;
     }
     pending_barrier_ = true;
+    if (storage_since_barrier_) pending_storage_barrier_ = true;
     prof_barriers_deferred_++;
 }
 
@@ -7421,8 +7528,16 @@ void Executor::draw(const cmd::Draw& in) {
         return;
     }
     prof_split(1, prof_s);
+    // A storage-writing draw: what it is (storage_signature) and whether a barrier after it can wait while only the same
+    // draw repeats
+    bool writers_ok = false;
+    const uint64_t writers_sig = writes_storage && opt_.lazy_storage ? storage_signature(d, &writers_ok) : 0;
+    // After a barrier deferred past storage writes, only the same draws go on in the pass (the game's GPU occlusion test:
+    // 30 boxes in a row on a 128x64 depth target, each with a barrier after it, 5 ms of passes on a Mali-G57).
+    const bool same_writers = pending_storage_barrier_ && writes_storage && writers_ok && writers_sig == storage_writers_sig_;
+    const bool storage_cut = pending_barrier_ && (pending_storage_barrier_ ? !same_writers : writes_storage);
     // 2. Render pass, pipeline. Con una barrera aplazada, el pase se corta aquí si este draw la necesita.
-    if (in_render_pass_ && ((pending_barrier_ && writes_storage) || samples_target || writes_target)) {
+    if (in_render_pass_ && (storage_cut || samples_target || writes_target)) {
         split_why_ = writes_target    ? "escribe como imagen un adjunto del pase"
                      : samples_target ? "muestrea un adjunto escrito en el pase"
                                       : "storage tras una barrera aplazada";
@@ -7436,7 +7551,12 @@ void Executor::draw(const cmd::Draw& in) {
         skipped_draws_++;
         return;
     }
-    if (writes_storage) storage_since_barrier_ = true;
+    if (writes_storage) {
+        // The writers since the last barrier: all the same draw, or none can skip it
+        storage_writers_ok_ = writers_ok && (!storage_since_barrier_ || (storage_writers_ok_ && writers_sig == storage_writers_sig_));
+        storage_writers_sig_ = writers_sig;
+        storage_since_barrier_ = true;
+    }
     note_pass_writes();
     if (log_state_ && st_.rt.depth) {  // perfil de la escena (prof_depth_rts_): draws y anchos de viewport por profundidad
         DepthStat& ds = prof_depth_rts_[(static_cast<uint32_t>(st_.rt.depth->desc.width) << 16) |

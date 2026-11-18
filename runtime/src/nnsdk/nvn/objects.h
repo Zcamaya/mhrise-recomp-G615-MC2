@@ -194,6 +194,8 @@ struct ProgramStage {
     // sin ellas, para sus interruptores en vivo (use_stripped_module). Los mismos recursos que module (el mismo layout).
     VkShaderModule stripped_module = VK_NULL_HANDLE;
     int8_t uniform_barrier_entry = -1;  // su índice en kUniformBarrierShaders (-1: no es de la lista)
+    // Its storage buffers are only written, never read (storage_write_only in executor.cpp): -1 not looked at yet
+    int8_t storage_write_only = -1;
     // Identidad de lo traducido (spirv_identity: el SPIR-V y lo que el layout toma de los recursos). Las pipelines y los
     // layouts del ejecutor van por ella y no por la dirección de la etapa: el juego crea varios programas con el mismo
     // código (MH Rise: 2200 etapas de 496 huellas en una partida) y cada uno llevaba sus propias pipelines. 0: sin traducir.
