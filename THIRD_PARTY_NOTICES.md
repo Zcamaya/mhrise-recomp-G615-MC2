@@ -14,6 +14,7 @@ This project is licensed under GPL-3.0-or-later. It uses or includes the followi
 | [Boost](https://www.boost.org/) (headers) | Used by Eden's shader recompiler | BSL-1.0 |
 | Android NDK `native_app_glue` | NativeActivity glue | Apache-2.0 |
 | [libadrenotools](https://github.com/bylaws/libadrenotools) and liblinkernsbypass | Loading the user's own Adreno driver (`runtime/external/libadrenotools`, unmodified) | BSD-2-Clause, Copyright (c) 2021 Billy Laws (text in its `LICENSE`) |
+| [BOTWRecompAndroid](https://github.com/mamcjr/BOTWRecompAndroid) | The approach of `astc::from_bc1` (BC1 blocks turned into ASTC blocks directly: its `runtime/nvn/bc1_astc.c`); the code here is written from the ASTC specification | MIT, Copyright (c) 2026 Peiikai |
 | [Arm ASTC Encoder (astcenc)](https://github.com/ARM-software/astc-encoder) 5.7.0 | Re-encoding BC textures as ASTC on GPUs without BC (`runtime/external/astcenc`, library sources only, unmodified) | Apache-2.0, Copyright 2020-2026 Arm Limited (text in its `LICENSE.txt`) |
 | [volk](https://github.com/zeux/volk) | Vulkan function loader, so the driver can be the system's or the user's (`runtime/external/volk`, unmodified) | MIT, Copyright (c) 2018-2026 Arseny Kapoulkine (text in its `LICENSE.md`) |
 

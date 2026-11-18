@@ -71,9 +71,9 @@ Turnip was still being brought up on the A8xx while this was written, and builds
 
 ## Mali (ARM's driver and PanVK)
 
-- **No BC texture formats:** BC1–BC3 (most of the game's colour textures) are decoded by a compute shader as they
+- **No BC texture formats:** BC1–BC5 (the game's colour textures, masks and normal maps) are decoded by a compute shader as they
   upload (`shaders/bc_decode.comp`, the same integer math as `bcn.cpp`): only the compressed blocks are uploaded and
-  the CPU does no decoding (`no_gpu_bc` goes back to the CPU). BC4–BC7 are still decompressed on the CPU (`bcn.cpp`,
+  the CPU does no decoding (`no_gpu_bc` goes back to the CPU). BC6H and BC7 are still decompressed on the CPU (`bcn.cpp`,
   written from the format specification). `bc_on_cpu` tests these paths on an Adreno.
   Unsigned BC6H (skies, lighting) is stored as B10G11R11, half the size of RGBA16F.
   With `bc_astc` (Graphics → Textures as ASTC), BC1/BC2/BC3/BC7 are stored as ASTC 4x4 instead, which Mali reads

@@ -100,7 +100,7 @@ mixed each time. It's now one continuous queue (`audio_cola.h`).
 - **BC textures as ASTC on Mali** (`bc_astc`, off by default until tested): 2-8 times less texture memory traffic
   than RGBA8. The first load of each texture is slower (CPU encode); the cache in the data folder makes the next ones a
   file read.
-- **BC textures on Mali and PowerVR:** BC1–BC3 are decoded on the GPU (`no_gpu_bc`), so loading and streaming no longer
+- **BC textures on Mali and PowerVR:** BC1–BC5 are decoded on the GPU (`no_gpu_bc`), so loading and streaming no longer
   decode them on the CPU.
 - **Shader stutter:** translations are cached in `spirv.bin`, pipelines are warmed up from `pipelines_estado.bin`, and
   the driver's pipeline cache is saved. MH Rise creates about 1,200 translations from about 250 distinct shaders per

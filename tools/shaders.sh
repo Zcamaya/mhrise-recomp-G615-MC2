@@ -15,8 +15,9 @@ GLSLC="${GLSLC:-$(command -v glslc || true)}"
 DIR="$ROOT/runtime/src/nnsdk/nvn/shaders"
 FSR="$ROOT/third_party/eden/externals/FidelityFX-FSR/ffx-fsr"
 OUT="$DIR/spirv.h"
-# A shader that doesn't compile here (the FSR ones need Eden's externals/FidelityFX-FSR, which tools/setup.sh doesn't
-# fetch) keeps the array it already has in spirv.h; only a shader with no array yet has to compile.
+# An FSR shader that doesn't compile here (they need Eden's externals/FidelityFX-FSR, which tools/setup.sh doesn't
+# fetch) keeps the array it already has in spirv.h. Any other shader has to compile: an old array kept for a shader
+# whose source changed would run the old code with the new executor (bc_decode with BC4/BC5 sent to it, say).
 TMP="$(mktemp)"
 trap 'rm -f "$TMP" "$DIR"/*.spv "$DIR"/*.err' EXIT
 {
@@ -31,7 +32,7 @@ trap 'rm -f "$TMP" "$DIR"/*.spv "$DIR"/*.err' EXIT
       python3 -c "import struct,sys; d=open('$DIR/$name.spv','rb').read(); w=struct.unpack('<%dI'%(len(d)//4),d); print(','.join('0x%08x'%x for x in w))"
       echo "};"
       rm "$DIR/$name.spv"
-    elif python3 - "$OUT" "$name" <<'PY'
+    elif grep -q "ffx_" "$src" && python3 - "$OUT" "$name" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read()
 m = re.search(r"inline constexpr uint32_t k_%s_spv\[\] = \{\n.*?\n\};" % re.escape(sys.argv[2]), text, re.S)

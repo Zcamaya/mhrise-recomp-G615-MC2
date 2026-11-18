@@ -1,6 +1,8 @@
 #version 450
-// BC1, BC2 and BC3 on the GPU, for GPUs that can't sample them (Mali, PowerVR). The same integer math as bcn.cpp, so both
-// paths give the same texels. One invocation per texel; the output is RGBA8, row after row, `width` texels per row.
+// BC1 to BC5 on the GPU, for GPUs that can't sample them (Mali, PowerVR). The same integer math as bcn.cpp, so both
+// paths give the same texels. One invocation per 32-bit word of output, row after row, `width` texels per row: one RGBA8
+// texel (BC1-BC3), four R8 texels (BC4) or two RG8 texels (BC5). For BC4 and BC5 executor.cpp rounds `width` up to 4 or
+// 2, so a word never spans two rows (or two blocks).
 // executor.cpp (decode_level) binds the deswizzled blocks and a staging range for the texels, then copies that to the
 // image as the CPU path does.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -13,7 +15,7 @@ layout(push_constant) uniform Params {
     uint width;        // texels per row (also the output's row length)
     uint height;       // texel rows
     uint blocks_wide;  // blocks per source row
-    uint kind;         // bcn::Kind: 1 BC1, 2 BC2, 3 BC3
+    uint kind;         // bcn::Kind: 1 BC1, 2 BC2, 3 BC3, 4 BC4, 5 BC4 signed, 6 BC5, 7 BC5 signed
 } p;
 
 ivec3 rgb565(uint c) {
@@ -29,8 +31,45 @@ uint alpha_index(uint lo, uint hi, uint n) {
     return ((lo >> bit) | (hi << (32u - bit))) & 7u;
 }
 
+// A BC4 block (words lo, hi: two 8-bit endpoints and a 3-bit index per texel) at texel n, as bcn.cpp's channel_block:
+// the byte it stores (two's complement for the signed formats)
+uint channel(uint lo, uint hi, uint n, bool sgn) {
+    int e0 = int(lo & 255u), e1 = int((lo >> 8) & 255u);
+    if (sgn) {
+        e0 = max(e0 >= 128 ? e0 - 256 : e0, -127);
+        e1 = max(e1 >= 128 ? e1 - 256 : e1, -127);
+    }
+    int k = int(alpha_index(lo, hi, n)), v;
+    if (k == 0) v = e0;
+    else if (k == 1) v = e1;
+    else if (e0 > e1) v = ((8 - k) * e0 + (k - 1) * e1) / 7;
+    else if (k <= 5) v = ((6 - k) * e0 + (k - 1) * e1) / 5;
+    else if (k == 6) v = sgn ? -127 : 0;
+    else v = sgn ? 127 : 255;
+    return uint(v) & 255u;
+}
+
+void single_channels(uvec2 w) {
+    bool bc5 = p.kind >= 6u, sgn = p.kind == 5u || p.kind == 7u;
+    uint per = bc5 ? 2u : 4u;  // texels in a word
+    if (w.x * per >= p.width || w.y >= p.height) return;
+    uint x = w.x * per;
+    uint at = p.src_word + ((w.y >> 2) * p.blocks_wide + (x >> 2)) * (bc5 ? 4u : 2u);
+    uint row = (w.y & 3u) * 4u, out_word = 0u;
+    for (uint i = 0u; i < per; i++) {
+        uint n = row + ((x + i) & 3u);
+        if (bc5) out_word |= (channel(src[at], src[at + 1u], n, sgn) | channel(src[at + 2u], src[at + 3u], n, sgn) << 8) << (16u * i);
+        else out_word |= channel(src[at], src[at + 1u], n, sgn) << (8u * i);
+    }
+    dst[(w.y * p.width + x) / (4u / (bc5 ? 2u : 1u))] = out_word;
+}
+
 void main() {
     uvec2 t = gl_GlobalInvocationID.xy;
+    if (p.kind >= 4u) {
+        single_channels(t);
+        return;
+    }
     if (t.x >= p.width || t.y >= p.height) return;
     bool bc1 = p.kind == 1u;
     uint at = p.src_word + ((t.y >> 2) * p.blocks_wide + (t.x >> 2)) * (bc1 ? 2u : 4u);
