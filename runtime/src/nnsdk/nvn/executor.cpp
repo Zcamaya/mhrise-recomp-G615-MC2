@@ -4049,7 +4049,10 @@ void Executor::prepare_counted_draws(const PassScan& scan) {
         VkDeviceSize ao = 0, co = 0;
         const Overlay* a = find_overlay(d.indirect, size, &ao);
         const Overlay* n = find_overlay(d.draw_count, 4, &co);
-        if (!a || !n) continue;  // (arguments or count from the CPU: draw() handles those exactly)
+        // (arguments or count from the CPU: draw() handles those exactly. A count no GPU work wrote is the game's own,
+        // from the CPU, even with a buffer for its address: that copy can be behind the game's memory, and a 0 there
+        // hid pieces of the ground up close on a Dimensity 720, where the game picks the near ones on the CPU.)
+        if (!a || !n || !n->writers) continue;
         Staging::Alloc copy = staging_->alloc(size, align);
         if (!copy.data) break;
         const VkDeviceSize base = co / align * align;
@@ -7311,8 +7314,12 @@ void Executor::draw(const cmd::Draw& in) {
     }
     if (multi) {
         if (const Overlay* o = find_overlay(d.draw_count, 4, &count_offset)) {
-            count_buf = o->buffer;
-            if (o->data) count_host = o->data + (count_offset - o->offset);
+            // Only a count the GPU wrote is read there; one the game set on the CPU is read from its memory (see
+            // prepare_counted_draws)
+            if (o->writers || !count_fallback) {
+                count_buf = o->buffer;
+                if (o->data) count_host = o->data + (count_offset - o->offset);
+            }
         } else if (gather_overlays(d.draw_count, 4, &count_buf, &count_offset, &count_host))
             st_.rt_dirty = true;
         bool fix_now = false;
