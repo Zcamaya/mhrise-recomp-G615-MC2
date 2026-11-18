@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "nnsdk/nvn/commands.h"
+#include "nnsdk/nvn/count_check.h"
 #include "nnsdk/nvn/nvn.h"
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/objects.h"
@@ -612,6 +613,14 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             if (out.control) dump_code(reinterpret_cast<uint64_t>(out.control), std::string(name) + "_ctrl");
         }
     }
+    // The draw count check goes in after the cache (which keeps the plain translation, shared with the stage without it)
+    if (out.count_check && out.shader.stage == nvnshader::Stage::Vertex) {
+        if (!nvn::add_count_check(out.shader.spirv)) {
+            NVN_LOG("vertex %016llx: the draw count check didn't go in\n", static_cast<unsigned long long>(print));
+            return false;
+        }
+        out.shader.count_check = true;
+    }
     nvn::VkContext* c = nvn::vk();
     if (VkResult r = nvn::create_shader_module(c->device, out.shader.spirv, &out.module); r != VK_SUCCESS) {
         NVN_LOG("vkCreateShaderModule: %s\n", nvn::vk_result_name(r));
@@ -914,6 +923,7 @@ nvn::ProgramStage::Variant nvn::geometry_variant(ProgramStage& stage, uint64_t p
     variant.control = stage.control;
     variant.constants = stage.constants;
     variant.constants_size = stage.constants_size;
+    variant.count_check = stage.count_check;
     ProgramStage::Variant v;
     if (translate_stage(variant, previous_stores, input_topology)) {
         v.module = variant.module;
@@ -930,6 +940,7 @@ nvn::ProgramStage::Variant nvn::vertex_variant(ProgramStage& stage, uint64_t inp
     variant.control = stage.control;
     variant.constants = stage.constants;
     variant.constants_size = stage.constants_size;
+    variant.count_check = stage.count_check;
     ProgramStage::Variant v;
     // (los mismos recursos, o el layout no valdría; con otros tipos solo cambian las entradas)
     if (translate_stage(variant, ~0ull, 0, 0, 0, input_types)) {
@@ -956,6 +967,7 @@ nvn::ProgramStage::Variant nvn::safe_variant(ProgramStage& stage, uint64_t previ
     variant.control = stage.control;
     variant.constants = stage.constants;
     variant.constants_size = stage.constants_size;
+    variant.count_check = stage.count_check;
     ProgramStage::Variant v;
     // (los mismos recursos que la de siempre, o el layout no valdría: si no, sin variante)
     if (translate_stage(variant, previous_stores, 0, 0, level, input_types)) {

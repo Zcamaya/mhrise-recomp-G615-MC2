@@ -30,6 +30,7 @@
 #include <thread>
 #include <unordered_set>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
@@ -41,6 +42,7 @@
 #include "nnsdk/nvn/astc.h"
 #include "nnsdk/nvn/bcn.h"
 #include "nnsdk/nvn/commands.h"
+#include "nnsdk/nvn/count_check.h"
 #include "nnsdk/watch.h"
 #include "nnsdk/nvn/fsr.h"
 #include "nnsdk/nvn/lsfg/framegen.h"
@@ -1072,6 +1074,7 @@ struct Layout {
     VkDescriptorSetLayout set = VK_NULL_HANDLE;
     VkDescriptorSetLayout bindless = VK_NULL_HANDLE;  // set 1 (nvnshader::kBindlessSet) si hay arrays bindless; compartido
     VkPipelineLayout pipeline = VK_NULL_HANDLE;
+    bool count_check = false;  // its vertex shader has the draw count check: set kCountCheckSet and push constants
     // Gráficos: UBO/SSBO dinámicos (el desplazamiento de cada draw va en el bind), así un draw igual que el
     // anterior salvo por dónde están sus datos reutiliza el set (en la fábrica, ~85 % de los draws).
     bool dynamic = false;
@@ -1206,12 +1209,17 @@ private:
                     std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
     bool bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
                        uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
+    uint64_t prof_count_checked_ = 0;  // multi-draws drawn with the draw count check (count_check.h)
     uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0, prof_astc_empty_ = 0, prof_astc_direct_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
-    uint64_t prof_counted_late_ = 0;  // GPU-counted multi-draws fixed at the draw (fix_counted_now), each a pass cut
     VkDescriptorSetLayout bc_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout bc_layout_ = VK_NULL_HANDLE;
     VkPipeline bc_pipeline_ = VK_NULL_HANDLE;
     bool bc_setup_done_ = false;
+    // Draw count check (count_check.h): the vertex stage with it, per stage of the game (code, control, its SPIR-V);
+    // null if it didn't translate. The set layout of the count and an empty one for set 1 when there's no bindless.
+    std::unordered_map<uint64_t, std::unique_ptr<ProgramStage>> count_check_stages_;
+    VkDescriptorSetLayout count_check_set_layout_ = VK_NULL_HANDLE, empty_set_layout_ = VK_NULL_HANDLE;
+    const ProgramStage* count_check_stage(const ProgramStage& vs);
     // ¿Hay que volver a subir una textura que sube la CPU, antes de enlazarla? Vigilada, las páginas escritas desde la
     // última revisión (una vez por envío); si no, la huella muestreada (una vez por frame).
     bool cpu_texture_changed(Texture& t);
@@ -1691,28 +1699,7 @@ private:
         uint32_t colors_written = 0;  // bit por render target
         bool depth_written = false, cleared = false, drawn = false;
         int64_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // unión de lo que pueden tocar sus draws (sin recortar)
-        std::vector<cmd::Draw> counted;  // multi-draws with their count on the GPU (prepare_counted_draws)
-        std::vector<std::pair<size_t, size_t>> counted_at;  // where each one is (list, command)
     };
-    // Without VK_KHR_draw_indirect_count: before the pass begins, a copy of each GPU-counted multi-draw's arguments with
-    // 0 instances past the count (shaders/draw_count.comp), which draw() then uses with plain indirect draws. Drawing
-    // every one instead drew stale arguments past the count: a wall of stretched triangles while turning the camera on
-    // a Dimensity 720. Keyed by arguments ^ count address; emptied at each pass.
-    void prepare_counted_draws(const PassScan& scan);
-    // The same for one draw the pass's scan didn't cover (its arguments came from several overlays, or the pass began
-    // elsewhere): ends the pass if one is open. Its arguments and count as draw() found them; false: not done.
-    bool fix_counted_now(const cmd::Draw& d, VkBuffer args, VkDeviceSize args_offset, VkBuffer count, VkDeviceSize count_offset,
-                         VkBuffer& out, VkDeviceSize& out_offset);
-    static uint64_t counted_key(const cmd::Draw& d) {  // (the same arguments with another count or size: its own copy)
-        return (d.indirect ^ (d.draw_count * 0x9E3779B97F4A7C15ull)) + (uint64_t(uint32_t(d.max_draws)) << 32) +
-               uint64_t(uint32_t(d.stride)) * 0xBF58476D1CE4E5B9ull;
-    }
-    bool counted_setup();
-    std::unordered_map<uint64_t, std::pair<VkBuffer, VkDeviceSize>> counted_fix_;
-    VkDescriptorSetLayout counted_set_layout_ = VK_NULL_HANDLE;
-    VkPipelineLayout counted_layout_ = VK_NULL_HANDLE;
-    VkPipeline counted_pipeline_ = VK_NULL_HANDLE;
-    bool counted_setup_done_ = false;
     PassScan scan_;
     const PassScan& scan_pass(const cmd::SetRenderTargets& pass);
     // Pases unidos (<datos>/merged_passes, en vivo; apagado por defecto). MH Rise cambia en mitad de la escena entre unos
@@ -2694,14 +2681,8 @@ void Executor::finish(bool wait) {
     }
     recording_ = false;
     if (r != VK_SUCCESS) {
-        // A lost device stays lost: every later submit fails too and the game waits forever on a frame that never ends
-        // (an SD870 with a Turnip build for the A7xx, after 16 minutes: 9500 of these lines). Said once, clearly.
-        static int failures = 0;
-        if (failures++ < 3) NVN_LOG("vkQueueSubmit: %s (%d)\n", vk_result_name(r), static_cast<int>(r));
-        if (r == VK_ERROR_DEVICE_LOST && failures == 1)
-            NVN_LOG("the GPU driver lost the device (the GPU crashed or was reset); the game can't go on. Usually the "
-                    "driver: try another build made for this GPU. GPU breadcrumbs (on from the start) name the last pass.\n");
-        if (failures == 1) crumb_report();
+        NVN_LOG("vkQueueSubmit: %s\n", vk_result_name(r));
+        crumb_report();
     } else {
         {
             std::lock_guard lock(fence_mutex_);
@@ -3523,11 +3504,7 @@ void Executor::read_flags() {
     low_table_ = !NVN_FLAG("no_low_table");
     separate_tables_ = !NVN_FLAG("no_split_tables");
     scan_per_pass_ = NVN_FLAG("inspect_per_pass");
-    // On by default on Mali (vendor 0x13B5): the Dimensity 720 recorded 256 full barriers a frame and 122 of them had
-    // nothing recorded since the one before (they order nothing, and a full barrier stalls the whole GPU there).
-    // <data>/no_tight_barriers: every one, as before.
-    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers") ||
-                               (vk()->props.vendorID == 0x13B5 && !NVN_FLAG("no_tight_barriers"));
+    skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
     recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
     keep_gpu_overlays_ = !NVN_FLAG("no_keep_overlays");
@@ -3996,179 +3973,6 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
 // Un nivel de una textura descomprimida en la CPU (Texture::bcn): `blocks`, sus bloques ya en orden lineal, salen como
 // texels en trozos de staging (cada uno de las filas que quepan en kStagingChunk), descomprimidos por filas de bloques
 // entre los hilos de row_pool, y una copia por trozo. false: el staging se acabó (se reintenta como cualquier subida).
-bool Executor::counted_setup() {
-#ifdef HAVE_draw_count_SPV
-    if (counted_setup_done_) return counted_pipeline_ != VK_NULL_HANDLE;
-    counted_setup_done_ = true;
-    VkContext* c = vk();
-    const VkDescriptorSetLayoutBinding b[2] = {
-        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-    VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dl.bindingCount = 2;
-    dl.pBindings = b;
-    const VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 3 * sizeof(uint32_t)};
-    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pl.setLayoutCount = 1;
-    pl.pSetLayouts = &counted_set_layout_;
-    pl.pushConstantRangeCount = 1;
-    pl.pPushConstantRanges = &pc;
-    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    mi.codeSize = sizeof k_draw_count_spv;
-    mi.pCode = k_draw_count_spv;
-    VkShaderModule module = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(c->device, &dl, nullptr, &counted_set_layout_) == VK_SUCCESS &&
-        vkCreatePipelineLayout(c->device, &pl, nullptr, &counted_layout_) == VK_SUCCESS &&
-        vkCreateShaderModule(c->device, &mi, nullptr, &module) == VK_SUCCESS) {
-        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = module;
-        ci.stage.pName = "main";
-        ci.layout = counted_layout_;
-        if (vkCreateComputePipelines(c->device, VK_NULL_HANDLE, 1, &ci, nullptr, &counted_pipeline_) != VK_SUCCESS)
-            counted_pipeline_ = VK_NULL_HANDLE;
-    }
-    if (module) vkDestroyShaderModule(c->device, module, nullptr);
-    NVN_LOG("multi-draws counted on the GPU without draw_indirect_count: %s\n",
-            counted_pipeline_ ? "arguments fixed by a compute shader" : "the shader didn't build, every draw is drawn");
-    return counted_pipeline_ != VK_NULL_HANDLE;
-#else
-    return false;  // (spirv.h from before draw_count.comp: tools/shaders.sh adds it)
-#endif
-}
-
-void Executor::prepare_counted_draws(const PassScan& scan) {
-    if (scan.counted.empty() || !counted_setup()) return;
-    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
-    struct Job {
-        VkBuffer args, count, copy;
-        VkDeviceSize args_offset, count_base, copy_offset, size;
-        uint32_t count_word, draws, stride_words;
-    };
-    std::vector<Job> jobs;
-    for (size_t i = 0; i < scan.counted.size(); i++) {
-        const cmd::Draw& d = scan.counted[i];
-        // Already drawn: the pass began again after a dispatch or a copy, and the scan is the one from its start
-        if (i < scan.counted_at.size() && scan.counted_at[i] < std::make_pair(cur_list_, cur_index_)) continue;
-        const uint64_t key = counted_key(d);
-        if (counted_fix_.count(key) || d.stride < 16 || d.stride % 4 || d.max_draws <= 0) continue;
-        const uint64_t one = d.index_type >= 0 ? 20 : 16;
-        const VkDeviceSize size = VkDeviceSize(d.stride) * VkDeviceSize(d.max_draws - 1) + one;
-        VkDeviceSize ao = 0, co = 0;
-        const Overlay* a = find_overlay(d.indirect, size, &ao);
-        const Overlay* n = find_overlay(d.draw_count, 4, &co);
-        // (arguments or count from the CPU: draw() handles those exactly. A count no GPU work wrote is the game's own,
-        // from the CPU, even with a buffer for its address: that copy can be behind the game's memory, and a 0 there
-        // hid pieces of the ground up close on a Dimensity 720, where the game picks the near ones on the CPU.)
-        // A count a draw's shader writes (kWrittenByGraphics: the game's culling in a fragment shader, earlier in this
-        // same pass) isn't there yet before the pass: draw() fixes that one at the draw, after the writes. Read before
-        // them, it was 0 and the ground near the camera vanished on a Dimensity 720.
-        if (!a || !n || !n->writers || (n->writers & kWrittenByGraphics)) continue;
-        Staging::Alloc copy = staging_->alloc(size, align);
-        if (!copy.data) break;
-        const VkDeviceSize base = co / align * align;
-        jobs.push_back({a->buffer, n->buffer, copy.buffer, ao, base, copy.offset, size, static_cast<uint32_t>((co - base) / 4),
-                        static_cast<uint32_t>(d.max_draws), static_cast<uint32_t>(d.stride / 4)});
-        counted_fix_[key] = {copy.buffer, copy.offset};
-    }
-    if (jobs.empty()) return;
-    note_gpu_work();
-    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    // The game's culling wrote the arguments and the counts: visible to the copy and to the shader, which reads the
-    // counts where they are. (With only the copy here, ARM's driver sometimes gave the shader an old count: pieces of
-    // the ground missing for a frame on a Dimensity 720.)
-    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
-                         nullptr);
-    for (const Job& j : jobs) {
-        const VkBufferCopy r{j.args_offset, j.copy_offset, j.size};
-        vkCmdCopyBuffer(cmd_, j.args, j.copy, 1, &r);
-    }
-    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
-                         nullptr);
-    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_pipeline_);
-    for (const Job& j : jobs) {
-        const VkDescriptorSet set = descriptor_set(counted_set_layout_);
-        if (!set) break;
-        // The count's range ends right after it: VK_WHOLE_SIZE reached to the end of the game's memory pool, which can be
-        // past maxStorageBufferRange (128 MB on ARM's r32)
-        const VkDescriptorBufferInfo args{j.copy, j.copy_offset, j.size}, count{j.count, j.count_base, j.count_word * 4ull + 4};
-        VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
-        for (int k = 0; k < 2; k++) {
-            w[k].dstSet = set;
-            w[k].dstBinding = static_cast<uint32_t>(k);
-            w[k].descriptorCount = 1;
-            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w[k].pBufferInfo = k ? &count : &args;
-        }
-        vkUpdateDescriptorSets(vk()->device, 2, w, 0, nullptr);
-        const uint32_t params[3] = {j.count_word, j.draws, j.stride_words};
-        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_layout_, 0, 1, &set, 0, nullptr);
-        vkCmdPushConstants(cmd_, counted_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
-        vkCmdDispatch(cmd_, (j.draws + 63) / 64, 1, 1);
-    }
-    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &mb, 0,
-                         nullptr, 0, nullptr);
-}
-
-bool Executor::fix_counted_now(const cmd::Draw& d, VkBuffer args, VkDeviceSize args_offset, VkBuffer count,
-                               VkDeviceSize count_offset, VkBuffer& out, VkDeviceSize& out_offset) {
-    if (!counted_setup() || !args || !count || d.stride < 16 || d.stride % 4 || d.max_draws <= 0) return false;
-    if (in_render_pass_) end_render_pass();
-    st_.rt_dirty = true;  // (the pass begins again for this draw)
-    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
-    const uint64_t one = d.index_type >= 0 ? 20 : 16;
-    const VkDeviceSize size = VkDeviceSize(d.stride) * VkDeviceSize(d.max_draws - 1) + one;
-    Staging::Alloc copy = staging_->alloc(size, align);
-    const VkDescriptorSet set = copy.data ? descriptor_set(counted_set_layout_) : VK_NULL_HANDLE;
-    if (!set) return false;
-    note_gpu_work();
-    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
-                         nullptr);
-    const VkBufferCopy r{args_offset, copy.offset, size};
-    vkCmdCopyBuffer(cmd_, args, copy.buffer, 1, &r);
-    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
-                         nullptr);
-    const VkDeviceSize base = count_offset / align * align;
-    const VkDescriptorBufferInfo a{copy.buffer, copy.offset, size}, n{count, base, count_offset - base + 4};  // (see prepare_counted_draws)
-    VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
-    for (int k = 0; k < 2; k++) {
-        w[k].dstSet = set;
-        w[k].dstBinding = static_cast<uint32_t>(k);
-        w[k].descriptorCount = 1;
-        w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w[k].pBufferInfo = k ? &n : &a;
-    }
-    vkUpdateDescriptorSets(vk()->device, 2, w, 0, nullptr);
-    const uint32_t params[3] = {static_cast<uint32_t>((count_offset - base) / 4), static_cast<uint32_t>(d.max_draws),
-                                static_cast<uint32_t>(d.stride / 4)};
-    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_pipeline_);
-    vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, counted_layout_, 0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd_, counted_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
-    vkCmdDispatch(cmd_, (static_cast<uint32_t>(d.max_draws) + 63) / 64, 1, 1);
-    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &mb, 0,
-                         nullptr, 0, nullptr);
-    out = copy.buffer;
-    out_offset = copy.offset;
-    prof_counted_late_++;
-    return true;
-}
-
 bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* blocks, uint32_t level, uint32_t layer,
                           std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
     const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
@@ -4233,6 +4037,25 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
         regions.emplace_back(a.buffer, r);
     }
     return true;
+}
+
+const ProgramStage* Executor::count_check_stage(const ProgramStage& vs) {
+    const uint64_t key = vs.code ^ (reinterpret_cast<uint64_t>(vs.control) * 0x9E3779B97F4A7C15ull) ^
+                         (vs.spirv_id * 0xC2B2AE3D27D4EB4Full);
+    if (auto it = count_check_stages_.find(key); it != count_check_stages_.end()) return it->second.get();
+    auto stage = std::make_unique<ProgramStage>();
+    stage->code = vs.code;
+    stage->control = vs.control;
+    stage->constants = vs.constants;
+    stage->constants_size = vs.constants_size;
+    stage->count_check = true;
+    ensure_translated(*stage);
+    if (!stage->module || stage->shader.stage != Stage::Vertex) stage.reset();
+    static int logged = 0;
+    if (logged++ < 4)
+        NVN_LOG("vertex %016llx with the draw count check%s\n", static_cast<unsigned long long>(vs.print),
+                stage ? "" : ": didn't translate, drawn without it");
+    return (count_check_stages_[key] = std::move(stage)).get();
 }
 
 bool Executor::bc_on_gpu(const Texture& t) {
@@ -5024,10 +4847,6 @@ const Executor::PassScan& Executor::scan_pass(const cmd::SetRenderTargets& pass)
             }
             case kCommandIndex<cmd::Draw>: {
                 const int p = std::get_if<cmd::Draw>(&c)->primitive;
-                if (const cmd::Draw& dr = *std::get_if<cmd::Draw>(&c); dr.draw_count && dr.indirect) {
-                    s.counted.push_back(dr);
-                    s.counted_at.emplace_back(l, k);
-                }
                 for (int t = 0; t < cur.count; t++)
                     if (cur.colors[t] && ((masks >> (4 * t)) & 0xF)) s.colors_written |= 1u << t;
                 if (cur.depth && (ds.depth_write || ds.stencil_test)) s.depth_written = true;  // de más: sin mirar ops
@@ -5294,10 +5113,6 @@ bool Executor::ensure_render_pass(bool full_area) {
                  c0 ? (format_info(c0->desc.format) ? format_info(c0->desc.format)->name : "?") : "-", rt.depth ? " +z" : "");
         crumb_begin('p', label);
     }
-    counted_fix_.clear();
-    // Only with <data>/count_fixup (see draw())
-    if (!vk()->draw_indexed_indirect_count && run_lists_ && !NVN_FLAG("no_count_fallback") && NVN_FLAG("count_fixup"))
-        prepare_counted_draws(scan_pass(rt));
     note_gpu_work();
     vkCmdBeginRenderPass(cmd_, &bi, VK_SUBPASS_CONTENTS_INLINE);
     if (fallback && load_clear)
@@ -6489,10 +6304,31 @@ Layout& Executor::layout_for(const nvnshader::Translated* const* shaders, const 
         NVN_LOG("vkCreateDescriptorSetLayout (%zu bindings): %s\n", bindings.size(), vk_result_name(r));
     }
     l.bindless = bindless_layout_locked(shaders);
-    const VkDescriptorSetLayout sets[2] = {l.set, l.bindless};
+    VkDescriptorSetLayout sets[3] = {l.set, l.bindless, VK_NULL_HANDLE};
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pi.setLayoutCount = l.bindless ? 2 : 1;
     pi.pSetLayouts = sets;
+    // The draw count check (count_check.h): the count in set 2 (set 1 empty without bindless) and two push constants
+    const VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, kCountCheckPushSize};
+    if (shaders[static_cast<int>(Stage::Vertex)] && shaders[static_cast<int>(Stage::Vertex)]->count_check) {
+        if (!count_check_set_layout_) {
+            const VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+            VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            ci.bindingCount = 1;
+            ci.pBindings = &b;
+            vkCreateDescriptorSetLayout(vk()->device, &ci, nullptr, &count_check_set_layout_);
+            ci.bindingCount = 0;
+            vkCreateDescriptorSetLayout(vk()->device, &ci, nullptr, &empty_set_layout_);
+        }
+        if (count_check_set_layout_ && empty_set_layout_) {
+            if (!sets[1]) sets[1] = empty_set_layout_;
+            sets[kCountCheckSet] = count_check_set_layout_;
+            pi.setLayoutCount = kCountCheckSet + 1;
+            pi.pushConstantRangeCount = 1;
+            pi.pPushConstantRanges = &push;
+            l.count_check = true;
+        }
+    }
     vkCreatePipelineLayout(vk()->device, &pi, nullptr, &l.pipeline);
     return layouts_[key] = l;
 }
@@ -6800,7 +6636,8 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     const uint64_t input_types = typed_inputs ? vertex_input_types(key, inputs) : 0;
     PipelineRecord rec;
     memset(&rec, 0, sizeof rec);
-    bool recordable = true;
+    // (not with the draw count check: the warm-up builds from the SPIR-V cache, which keeps the stage without it)
+    bool recordable = !(st_.stages[static_cast<int>(Stage::Vertex)] && st_.stages[static_cast<int>(Stage::Vertex)]->count_check);
     for (int s = 0; s < kStages; s++) {
         if (!st_.stages[s] || s == static_cast<int>(Stage::Compute)) continue;
         rec.base[s] = st_.stages[s]->cache_key;
@@ -7334,47 +7171,58 @@ void Executor::draw(const cmd::Draw& in) {
         } else if (gather_overlays(d.indirect, args_size, &gpu_args, &gpu_args_offset, &args_host))
             st_.rt_dirty = true;  // las copias cerraron el render pass
     }
+    // Draw count check (count_check.h): the vertex stage with it stands in for the game's until draw() returns
+    struct VertexSwap {
+        QueueState& st;
+        const ProgramStage* saved = nullptr;
+        ~VertexSwap() {
+            if (saved) st.stages[static_cast<int>(Stage::Vertex)] = saved;
+        }
+    } vertex_swap{st_};
+    VkBuffer check_buf = VK_NULL_HANDLE;  // the count it reads, and where
+    VkDeviceSize check_offset = 0;
     if (multi) {
         if (const Overlay* o = find_overlay(d.draw_count, 4, &count_offset)) {
-            // Only a count the GPU wrote is read there; one the game set on the CPU is read from its memory (see
-            // prepare_counted_draws)
-            if (frame_ == trace_frame_ && count_fallback)  // DEBUG: who wrote the count (1 a draw, 2 a compute, 4 a copy)
-                NVN_LOG("F   count %#llx written by %u\n", static_cast<unsigned long long>(d.draw_count), o->writers);
+            // Without draw-indirect-count, a count no GPU work wrote is the game's own, set on the CPU: read from its
+            // memory (below, exactly) rather than drawing every draw up to max_draws
             if (o->writers || !count_fallback) {
                 count_buf = o->buffer;
                 if (o->data) count_host = o->data + (count_offset - o->offset);
             }
         } else if (gather_overlays(d.draw_count, 4, &count_buf, &count_offset, &count_host))
             st_.rt_dirty = true;
-        bool fix_now = false;
-        const auto fixed = count_fallback && count_buf
-                               ? counted_fix_.find(counted_key(d))
-                               : counted_fix_.end();
-        if (fixed != counted_fix_.end()) {
-            // The arguments, copied before the pass with 0 instances past the GPU's count (prepare_counted_draws)
-            gpu_args = fixed->second.first;
-            gpu_args_offset = fixed->second.second;
+        // The count stays on the GPU and the vertex shader drops the draws past it (count_check.h): one call per draw
+        // (no multiDrawIndirect, so each knows its index), a plain vertex stage (a geometry or tessellation one could
+        // make vertices of its own). <data>/count_check (Graphics → Exact draw counts).
+        const ProgramStage* game_vs = st_.stages[static_cast<int>(Stage::Vertex)];
+        if (count_fallback && count_buf && NVN_FLAG("count_check") && !vk()->multi_draw_indirect && game_vs &&
+            !st_.stages[static_cast<int>(Stage::Geometry)] && !st_.stages[static_cast<int>(Stage::TessControl)] &&
+            !st_.stages[static_cast<int>(Stage::TessEval)])
+            if (const ProgramStage* checked = count_check_stage(*game_vs)) {
+                vertex_swap.saved = game_vs;
+                st_.stages[static_cast<int>(Stage::Vertex)] = checked;
+                check_buf = count_buf;
+                check_offset = count_offset;
+            }
+        if (count_fallback && count_buf) {
+            // The count is on the GPU and can't be used there: every draw is drawn. The count is the game's GPU culling
+            // (about 7 % of these come back 0 in the village), and the arguments of a culled draw are still a valid
+            // mesh, so this only draws a few hidden things. Taking last frame's count instead flickered: it lags the
+            // arguments by a frame.
             multi_draws = static_cast<uint32_t>(d.max_draws);
             count_buf = VK_NULL_HANDLE;
-            if (frame_ == trace_frame_)  // DEBUG: the count the CPU sees now (what the shader read, unless the GPU changed it)
-                NVN_LOG("F   counted on the GPU: %u of %d (as the CPU sees it)\n",
-                        count_host ? *reinterpret_cast<const volatile uint32_t*>(count_host) : ~0u, d.max_draws);
-        } else if (count_fallback && count_buf && NVN_FLAG("count_fixup") && counted_setup()) {
-            // Not fixed before the pass: here, once the arguments are on the GPU (below). Drawing them all instead drew
-            // stale arguments past the count (stretched triangles over the ground on a Dimensity 720).
-            fix_now = true;
-        } else if (count_fallback && count_buf) {
-            // Every draw up to max_draws, stale arguments past the GPU's count and all: some stretched triangles while the
-            // camera turns, but the ground is all there. <data>/count_fixup draws only up to the count instead.
-            multi_draws = static_cast<uint32_t>(d.max_draws);
-            count_buf = VK_NULL_HANDLE;
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                NVN_LOG("multi-draw with the count on the GPU and no VK_KHR_draw_indirect_count: every draw is drawn\n");
+            }
         } else if (!count_buf) {
             multi_draws = std::min<uint32_t>(*reinterpret_cast<const uint32_t*>(d.draw_count), static_cast<uint32_t>(d.max_draws));
             if (!multi_draws) return;
         }
         const bool cpu_args = !gpu_args;
         if (cpu_args) {
-            Staging::Alloc al = staging_->alloc(args_size, std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16));
+            Staging::Alloc al = staging_->alloc(args_size, 16);
             if (!al.data) return;
             memcpy(al.data, reinterpret_cast<const void*>(d.indirect), args_size);
             gpu_args = al.buffer;
@@ -7391,18 +7239,6 @@ void Executor::draw(const cmd::Draw& in) {
                             static_cast<unsigned long long>(delivered_range(d.indirect + uint64_t(k) * d.stride)));
                 e[0] = e[1] = 0;
             }
-        }
-        if (fix_now) {
-            VkBuffer fixed_args = VK_NULL_HANDLE;
-            VkDeviceSize fixed_offset = 0;
-            if (!fix_counted_now(d, gpu_args, gpu_args_offset, count_buf, count_offset, fixed_args, fixed_offset)) {
-                skipped_draws_++;  // (better missing for a frame than drawn from stale arguments)
-                return;
-            }
-            gpu_args = fixed_args;
-            gpu_args_offset = fixed_offset;
-            multi_draws = static_cast<uint32_t>(d.max_draws);
-            count_buf = VK_NULL_HANDLE;
         }
         if (frame_ == trace_frame_) {  // DEPURACIÓN: lo que dejó el frame anterior en los argumentos y el número
             VkDeviceSize ao = 0, co = 0;
@@ -7996,6 +7832,28 @@ void Executor::draw(const cmd::Draw& in) {
         }
     }
     if (prof_timing_) fine_.set_bind_ns += ns_since(bind_t0);
+    // The draw count check: the count's word, bound from an aligned offset (the rest goes in the push constants)
+    uint32_t check_word = 0;
+    if (check_buf) {
+        const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
+        const VkDeviceSize base = check_offset / align * align;
+        const VkDescriptorSet cs = l.count_check ? descriptor_set(count_check_set_layout_) : VK_NULL_HANDLE;
+        if (!cs) {
+            skipped_draws_++;
+            return;
+        }
+        const VkDescriptorBufferInfo info{check_buf, base, check_offset - base + 4};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet = cs;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo = &info;
+        vkUpdateDescriptorSets(vk()->device, 1, &w, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, l.pipeline, kCountCheckSet, 1, &cs, 0, nullptr);
+        check_word = static_cast<uint32_t>((check_offset - base) / 4);
+        prof_count_checked_++;
+    }
     prof_mark_sub(2, prof_sub);
 
     prof_mark(2, prof_t);
@@ -8280,11 +8138,19 @@ void Executor::draw(const cmd::Draw& in) {
         else if (multi && count_buf)
             vk()->draw_indirect_count(cmd_, gpu_args, gpu_args_offset, count_buf, count_offset, static_cast<uint32_t>(d.max_draws), stride);
         else if (multi && (vk()->multi_draw_indirect || multi_draws == 1)) {
+            if (check_buf) {  // (one draw: index 0)
+                const uint32_t push[2] = {0, check_word};
+                vkCmdPushConstants(cmd_, l.pipeline, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
+            }
             if (indices) vkCmdDrawIndexedIndirect(cmd_, gpu_args, gpu_args_offset, multi_draws, stride);
             else vkCmdDrawIndirect(cmd_, gpu_args, gpu_args_offset, multi_draws, stride);
         } else if (multi) {  // without the multiDrawIndirect feature: one call per draw
             for (uint32_t k = 0; k < multi_draws; k++) {
                 const VkDeviceSize at = gpu_args_offset + VkDeviceSize{k} * stride;
+                if (check_buf) {  // this draw's index, for the count check
+                    const uint32_t push[2] = {k, check_word};
+                    vkCmdPushConstants(cmd_, l.pipeline, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
+                }
                 if (indices) vkCmdDrawIndexedIndirect(cmd_, gpu_args, at, 1, 0);
                 else vkCmdDrawIndirect(cmd_, gpu_args, at, 1, 0);
             }
@@ -10982,8 +10848,9 @@ void Executor::profile_frame() {
                 (unsigned long long)prof_astc_encoded_, (unsigned long long)prof_astc_cached_,
                 (unsigned long long)prof_astc_direct_, (unsigned long long)prof_astc_empty_);
     prof_astc_encoded_ = prof_astc_cached_ = prof_astc_empty_ = prof_astc_direct_ = 0;
-    if (prof_counted_late_) NVN_LOG("perfil multi-draw: %llu fixed at the draw, not before their pass\n", (unsigned long long)prof_counted_late_);
-    prof_counted_late_ = 0;
+    if (prof_count_checked_)
+        NVN_LOG("perfil multi-draw: %.1f per frame with the draw count check\n", prof_count_checked_ / double(period));
+    prof_count_checked_ = 0;
     NVN_LOG("perfil fsr: %llu de %d frames con el blit por la guarda (frame del juego > %.1f ms)\n",
             static_cast<unsigned long long>(prof_fsr_guard_frames_), period, (frame_period_ns() < 20'000'000 ? kFsrOffNs60 : kFsrOffNs) / 1e6);
     prof_fsr_guard_frames_ = 0;

@@ -36,6 +36,7 @@ add_library(nnsdk SHARED
   src/nnsdk/nvn/buffer.cpp
   src/nnsdk/nvn/device.cpp
   src/nnsdk/nvn/cmdbuf.cpp
+  src/nnsdk/nvn/count_check.cpp
   src/nnsdk/nvn/formats.cpp
   src/nnsdk/nvn/executor.cpp
   src/nnsdk/nvn/gpu_memory.cpp

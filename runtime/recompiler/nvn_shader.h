@@ -62,6 +62,7 @@ struct Translated {
     uint32_t spirv_opt_from = 0;   // palabras del de Eden
     std::string spirv_opt_error;
     int warp_barriers = 0;         // barriers added by Options::warp_barriers
+    bool count_check = false;      // vertex: with the draw count check (nvn/count_check.h; not in the SPIR-V cache)
     std::string error;             // vacío si salió bien
 };
 

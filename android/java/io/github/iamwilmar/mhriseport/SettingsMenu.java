@@ -531,10 +531,10 @@ final class SettingsMenu {
                 "no_safe_translation", true);
         if (gpu.mali())
             flag("Exact draw counts (old drivers)",
-                    "On drivers without draw-indirect-count (ARM's on a Dimensity 720), draws the game's GPU-counted "
-                            + "batches only up to their count, which removes the stretched triangles. Testing: it lost "
-                            + "the ground up close before; tell us how it looks.",
-                    "count_fixup", false);
+                    "On drivers without draw-indirect-count (ARM's on a Dimensity 720), the vertex shader drops the "
+                            + "game's GPU-counted draws past their count, which should remove the stretched triangles. "
+                            + "Testing.",
+                    "count_check", false);
         if (gpu.mali())
             exclusive("Subgroups under 32",
                     "Subgroup operations on GPUs whose subgroups are under 32 (Mali: 16). Auto: on with PanVK, where the "
@@ -1158,7 +1158,7 @@ final class SettingsMenu {
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
         "60fps", "adreno_turbo", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
-        "capture_button", "count_fixup", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
+        "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
         "model_detail_lowest", "no_adpf", "no_af", "no_affinity", "no_ao", "no_async_shaders", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",

@@ -54,12 +54,6 @@ Turnip compiles everything Qualcomm's driver rejects. Bindless arrays are on.
 - **The dotted black lines on the floor** came from general subgroup shuffles used for derivatives. They were seen on
   an A725 and an A8xx alike, and fixed by `eden-quad-butterfly`.
 
-## Turnip on Adreno 6xx
-
-- **Use a build made for the A6xx.** An SD870 (Adreno 650) running `710_720_722_v4.6`, a Turnip build for the A7xx,
-  lost the GPU after about 16 minutes (`vkQueueSubmit: VK_ERROR_DEVICE_LOST`), and the game froze for good, since a
-  lost device can't be used again. The port now names that error and says so once in the log.
-
 ## Turnip on Adreno 8xx (Gen8 builds)
 
 Turnip was still being brought up on the A8xx while this was written, and builds differ a lot.
@@ -99,8 +93,7 @@ Turnip was still being brought up on the A8xx while this was written, and builds
 ARM's r32 driver on a Dimensity 720 (Mali-G57) lacks `VK_KHR_draw_indirect_count`, `extended_dynamic_state`,
 `depth_clip_enable`, `vertex_attribute_divisor`, `sampler_filter_minmax`, `dynamic_rendering` and vertex-stage
 stores. The one that mattered: without draw-indirect-count, MH Rise's multi-draws (almost the whole main view) were
-skipped and only the sky showed. Now all of them are drawn up to the maximum (`no_count_fallback` skips them;
-`count_fixup` draws only up to the count, see fixes.md), and without the
+skipped and only the sky showed. Those draws are now all drawn, ignoring the GPU's count (`no_count_fallback`), and without the
 `multiDrawIndirect` feature each draw gets its own call. Check the log for "multi-draw no soportado" or "sin dibujar"
 numbers in the millions on any new old driver.
 
@@ -117,8 +110,6 @@ That driver also has no `multiDrawIndirect` (each multi-draw becomes one indirec
     Dimensity 8300 (Mali-G615).
 - **Integer vertex attributes** (bone indices) declared as float get converted by Mali (5 → 5.0), which stretched
   skinned characters into spikes. They're declared as integers (`no_int_attribs`).
-- **Redundant barriers skipped** (`no_tight_barriers` keeps them): a full barrier with nothing recorded since the one
-  before orders nothing. The Dimensity 720 recorded 256 a frame, 122 of them like that.
 - **Shared memory** is 32 KB, against the Switch's 48 KB, so it's clamped to the device's limit.
 - **`OpUnreachable` after a switch** becomes `OpReturn` here too, in the skinning shaders (`no_return_mali`).
 - **A Mali-G615 hung on every frame** on the BRX control flow Eden builds for switches. Graphics shaders with a BRX now
