@@ -529,6 +529,14 @@ final class SettingsMenu {
         flag("Retry rejected pipelines",
                 "When the driver rejects a pipeline, its shaders are translated again with safer options.",
                 "no_safe_translation", true);
+        flag("No GPU instance culling",
+                "The game stops culling instanced objects (grass, trees: many copies of one model) on the GPU, so its "
+                        + "compute shaders don't decide which are drawn. For grass and trees popping in and out on Mali, "
+                        + "whose 16-lane subgroups those shaders don't run right on. Applies at once.",
+                "no_gpu_instance_culling", false);
+        flag("No GPU occlusion culling",
+                "The game stops hiding what its GPU test says is behind something else. Applies at once.",
+                "no_gpu_occlusion", false);
         if (gpu.mali())
             flag("Exact draw counts (old drivers)",
                     "On drivers without draw-indirect-count (ARM's on a Dimensity 720), the vertex shader drops the "

@@ -1219,6 +1219,9 @@ private:
     // null if it didn't translate. The set layout of the count and an empty one for set 1 when there's no bindless.
     std::unordered_map<uint64_t, std::unique_ptr<ProgramStage>> count_check_stages_;
     VkDescriptorSetLayout count_check_set_layout_ = VK_NULL_HANDLE, empty_set_layout_ = VK_NULL_HANDLE;
+    // Its sets by buffer and offset, for the current descriptor_epoch_ (thousands of multi-draws a frame share a few)
+    std::unordered_map<uint64_t, VkDescriptorSet> count_check_sets_;
+    uint64_t count_check_sets_epoch_ = 0;
     const ProgramStage* count_check_stage(const ProgramStage& vs);
     // ¿Hay que volver a subir una textura que sube la CPU, antes de enlazarla? Vigilada, las páginas escritas desde la
     // última revisión (una vez por envío); si no, la huella muestreada (una vez por frame).
@@ -7837,19 +7840,29 @@ void Executor::draw(const cmd::Draw& in) {
     if (check_buf) {
         const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
         const VkDeviceSize base = check_offset / align * align;
-        const VkDescriptorSet cs = l.count_check ? descriptor_set(count_check_set_layout_) : VK_NULL_HANDLE;
-        if (!cs) {
+        if (count_check_sets_epoch_ != descriptor_epoch_) {  // (the pools they came from were reset)
+            count_check_sets_.clear();
+            count_check_sets_epoch_ = descriptor_epoch_;
+        }
+        // One set per count (buffer and offset): the multi-draws of a frame use a few counts many times over
+        const uint64_t key = (reinterpret_cast<uint64_t>(check_buf) * 0x9E3779B97F4A7C15ull) ^ check_offset;
+        VkDescriptorSet cs = VK_NULL_HANDLE;
+        if (auto it = count_check_sets_.find(key); it != count_check_sets_.end()) cs = it->second;
+        else if (l.count_check && (cs = descriptor_set(count_check_set_layout_))) {
+            const VkDescriptorBufferInfo info{check_buf, base, check_offset - base + 4};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet = cs;
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo = &info;
+            vkUpdateDescriptorSets(vk()->device, 1, &w, 0, nullptr);
+            count_check_sets_[key] = cs;
+        }
+        if (!cs || !l.count_check) {
             skipped_draws_++;
             return;
         }
-        const VkDescriptorBufferInfo info{check_buf, base, check_offset - base + 4};
-        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w.dstSet = cs;
-        w.dstBinding = 0;
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w.pBufferInfo = &info;
-        vkUpdateDescriptorSets(vk()->device, 1, &w, 0, nullptr);
         vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, l.pipeline, kCountCheckSet, 1, &cs, 0, nullptr);
         check_word = static_cast<uint32_t>((check_offset - base) / 4);
         prof_count_checked_++;
