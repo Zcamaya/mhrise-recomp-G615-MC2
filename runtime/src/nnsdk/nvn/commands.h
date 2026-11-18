@@ -226,6 +226,9 @@ struct PrimitiveRestart {
     bool enable;
     uint32_t index;
 };
+struct PatchSize {
+    uint32_t size;  // control points per patch
+};
 
 }  // namespace cmd
 
@@ -237,7 +240,7 @@ using Command = std::variant<cmd::SetRenderTargets, cmd::ClearColor, cmd::ClearD
                              cmd::Stencil, cmd::Draw, cmd::Dispatch, cmd::CopyBuffer, cmd::CopyTexture,
                              cmd::CopyBufferToTexture, cmd::Barrier, cmd::ReportCounter, cmd::BlendColor,
                              cmd::RenderEnable, cmd::ReportValue, cmd::ClearBuffer, cmd::BindImage, cmd::ClearTexture,
-                             cmd::UpdateBuffer, cmd::PrimitiveRestart, cmd::FenceSync, cmd::PolygonOffset>;
+                             cmd::UpdateBuffer, cmd::PrimitiveRestart, cmd::FenceSync, cmd::PolygonOffset, cmd::PatchSize>;
 
 // Las listas se reciclan (cmdbuf.cpp) y vaciarlas no recorre sus ~35k comandos: que siga siendo así.
 static_assert(std::is_trivially_destructible_v<Command> && std::is_trivially_copyable_v<Command>);

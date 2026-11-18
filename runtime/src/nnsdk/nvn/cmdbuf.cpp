@@ -345,6 +345,10 @@ void nvnCommandBufferSetDepthRanges(void* cmd, int first, int count, const float
 void nvnCommandBufferSetPrimitiveRestart(void* cmd, nvn::Boolean enable, int index) {
     record(cmd, cmd::PrimitiveRestart{enable != 0, static_cast<uint32_t>(index)});
 }
+// Puntos de control por parche de teselación (MH Rise: 1, en las Islas Heladas).
+void nvnCommandBufferSetPatchSize(void* cmd, int size) {
+    record(cmd, cmd::PatchSize{static_cast<uint32_t>(size)});
+}
 // Rasterización conservadora: el Adreno no la tiene en Vulkan. MH Rise la apaga al empezar cada lista; si alguna vez
 // la enciende, se dibuja normal (se avisa).
 void nvnCommandBufferSetConservativeRasterEnable(void*, nvn::Boolean enable) {
@@ -606,6 +610,7 @@ NVN_PROC(nvnCommandBufferSetScissors);
 NVN_PROC(nvnCommandBufferSetDepthRange);
 NVN_PROC(nvnCommandBufferSetDepthRanges);
 NVN_PROC(nvnCommandBufferSetPrimitiveRestart);
+NVN_PROC(nvnCommandBufferSetPatchSize);
 NVN_PROC(nvnCommandBufferSetConservativeRasterEnable);
 NVN_PROC(nvnCommandBufferSetConservativeRasterDilate);
 NVN_PROC(nvnCommandBufferSetPointSize);

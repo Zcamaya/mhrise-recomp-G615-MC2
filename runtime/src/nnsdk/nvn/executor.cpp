@@ -195,7 +195,7 @@ struct VariantIndex<T, std::variant<Ts...>> {
 };
 template <typename T>
 constexpr size_t kCommandIndex = VariantIndex<T, Command>::value;
-static_assert(kCommandIndex<cmd::SetRenderTargets> == 0 && kCommandIndex<cmd::PolygonOffset> == std::variant_size_v<Command> - 1);
+static_assert(kCommandIndex<cmd::SetRenderTargets> == 0 && kCommandIndex<cmd::PatchSize> == std::variant_size_v<Command> - 1);
 
 // Mismos targets con las mismas vistas (lo que hay más allá de count no cuenta).
 bool same_targets(const cmd::SetRenderTargets& a, const cmd::SetRenderTargets& b) {
@@ -994,6 +994,7 @@ struct QueueState {
     bool render_enabled = true;
     bool primitive_restart = false;
     uint32_t restart_index = ~0u;
+    uint32_t patch_size = 3;  // (lo de OpenGL; MH Rise pone el suyo antes de dibujar)
     ProgramStage* compute = nullptr;
 };
 
@@ -1015,6 +1016,7 @@ struct PipelineKey {
     uint8_t alpha_to_coverage;  // estaba en el pipeline pero no en la clave
     uint8_t skip_gs;            // pre-pase sin su geometry shader de compactación
     uint8_t primitive_restart;  // solo en las topologías de tiras y abanicos (las de listas no lo admiten)
+    uint8_t patch_size;         // con teselación: puntos de control por parche (iba en el relleno: 0 en las guardadas)
     VertexAttribState attribs[16];
     uint32_t strides[16], divisors[16];
 };
@@ -2465,7 +2467,7 @@ constexpr const char* kCommandNames[] = {
     "ColorState", "ChannelMaskState", "DepthStencilState", "PolygonState", "MultisampleState", "BindVertexAttribs",
     "BindVertexStreams", "SetPools", "Stencil", "Draw", "Dispatch", "CopyBuffer", "CopyTexture", "CopyBufferToTexture",
     "Barrier", "ReportCounter", "BlendColor", "RenderEnable", "ReportValue", "ClearBuffer", "BindImage", "ClearTexture",
-    "UpdateBuffer", "PrimitiveRestart", "FenceSync", "PolygonOffset"};
+    "UpdateBuffer", "PrimitiveRestart", "FenceSync", "PolygonOffset", "PatchSize"};
 static_assert(std::size(kCommandNames) == std::variant_size_v<Command>);
 
 bool Executor::init() {
@@ -3728,6 +3730,8 @@ void Executor::apply(const Command& c) {
             } else if constexpr (std::is_same_v<T, cmd::PrimitiveRestart>) {
                 st_.primitive_restart = v.enable;
                 st_.restart_index = v.index;
+            } else if constexpr (std::is_same_v<T, cmd::PatchSize>) {
+                st_.patch_size = v.size;
             } else if constexpr (std::is_same_v<T, cmd::FenceSync>) {
                 // Lo pone la cola de envíos al encolar (el ticket del envío): con el envío asíncrono, el juego
                 // puede esperar el sync antes de que esto se reproduzca.
@@ -6473,6 +6477,13 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     pi.pMultisampleState = &ms;
     pi.pDepthStencilState = &ds;
     pi.pColorBlendState = &cb;
+    // Con etapas de teselación Vulkan pide el estado de teselación: sin él, el driver de ARM leía patchControlPoints de
+    // un puntero nulo (el crash de las Islas Heladas en un Mali-G615, dirección 0x14).
+    VkPipelineTessellationStateCreateInfo ts{VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO};
+    ts.patchControlPoints = std::clamp<uint32_t>(key.patch_size ? key.patch_size : 3, 1,
+                                                 std::max(1u, vk()->props.limits.maxTessellationPatchSize));
+    if (key.stages[static_cast<int>(Stage::TessControl)] || key.stages[static_cast<int>(Stage::TessEval)])
+        pi.pTessellationState = &ts;
     pi.pDynamicState = &dy;
     pi.layout = layout;
     pi.renderPass = rp;
@@ -6530,6 +6541,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
                            topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY ||
                            topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
         key.primitive_restart = st_.primitive_restart && strip && d.index_type >= 0;
+        key.patch_size = static_cast<uint8_t>(std::min<uint32_t>(st_.patch_size, 255));
         const uint32_t all_ones = d.index_type == 0 ? 0xFFu : d.index_type == 1 ? 0xFFFFu : 0xFFFFFFFFu;
         static int logged = 0;
         if (key.primitive_restart && st_.restart_index != all_ones && logged++ < 4)
@@ -7155,6 +7167,19 @@ void Executor::draw(const cmd::Draw& in) {
     // Without VK_KHR_draw_indirect_count (ARM's Vulkan 1.1 drivers, such as r32 on a Dimensity 720) the count can't be
     // read on the GPU. MH Rise draws almost its whole main view this way, so skipping them left only the sky: the count
     // is taken on the CPU instead (see below). <data>/no_count_fallback: skipped, as before.
+    // Teselación: Vulkan la quiere con las dos etapas, parches como primitiva y la feature del driver. Un draw que no
+    // cumple no se dibuja (un pipeline así no es válido, y un driver puede caerse al crearlo).
+    if (const bool tcs = st_.stages[static_cast<int>(Stage::TessControl)], tes = st_.stages[static_cast<int>(Stage::TessEval)];
+        tcs || tes || d.primitive == 14) {
+        if (!tcs || !tes || d.primitive != 14 || !vk()->tessellation) {
+            static int logged = 0;
+            if (logged++ < 4)
+                NVN_LOG("draw con teselación sin dibujar: control %d, evaluación %d, primitiva %d, feature %d\n", tcs, tes,
+                        d.primitive, vk()->tessellation);
+            skipped_draws_++;
+            return;
+        }
+    }
     const bool count_fallback = multi && !vk()->draw_indexed_indirect_count && !NVN_FLAG("no_count_fallback");
     if (multi && ((!vk()->draw_indexed_indirect_count && !count_fallback) || d.stride < static_cast<int>(one_args) ||
                   d.stride % 4 || d.indirect % 4 || d.draw_count % 4)) {

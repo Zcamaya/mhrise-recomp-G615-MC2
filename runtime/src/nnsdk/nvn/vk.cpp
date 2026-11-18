@@ -212,6 +212,7 @@ bool create(VkContext& c, bool system_driver) {
     c.depth_bias_clamp = features.depthBiasClamp == VK_TRUE;
     c.multi_viewport = features.multiViewport == VK_TRUE;
     c.multi_draw_indirect = features.multiDrawIndirect == VK_TRUE;
+    c.tessellation = features.tessellationShader == VK_TRUE;
     c.fill_non_solid = features.fillModeNonSolid == VK_TRUE;
     // DEPURACIÓN: <datos>/robusto al arrancar: con robustBufferAccess (los accesos fuera de un buffer devuelven 0, como
     // los cbuf de Maxwell, en vez de leer memoria cualquiera).
