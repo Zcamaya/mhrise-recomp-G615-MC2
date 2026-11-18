@@ -276,6 +276,32 @@ bool create(VkContext& c, bool system_driver) {
                     NVN_LOG("robustBufferAccess2: sí\n");
                 }
             }
+    // Texel fetches outside an image read 0 instead of faulting (VK_EXT_image_robustness). On a Switch they're harmless;
+    // on newer Malis with ARM's driver they aren't: the pass after the bloom (pixel 75cc74924ff2b1ed, a 3x3-ish
+    // neighbourhood of texelFetches around each pixel) faulted the GPU every frame on a Mali-G925 and a G720, a black
+    // screen with sound, and now and then on a Dimensity 720. On by default with ARM's own driver (PanVK reads them
+    // safely already); <data>/no_image_robustness (at start-up) turns it off, <data>/image_robustness turns it on
+    // elsewhere.
+    VkPhysicalDeviceImageRobustnessFeaturesEXT image_robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES_EXT};
+    const bool arm_driver = [&] {
+        VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+        if (vkGetPhysicalDeviceProperties2) vkGetPhysicalDeviceProperties2(c.gpu, &p2);
+        return driver.driverID == VK_DRIVER_ID_ARM_PROPRIETARY;
+    }();
+    if ((arm_driver && !nnsdk::ini::on("no_image_robustness")) || nnsdk::ini::on("image_robustness"))
+        for (const VkExtensionProperties& e : exts)
+            if (strcmp(e.extensionName, VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME) == 0) {
+                VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                f2.pNext = &image_robust;
+                vkGetPhysicalDeviceFeatures2(c.gpu, &f2);
+                if (image_robust.robustImageAccess) {
+                    image_robust.pNext = const_cast<void*>(dci.pNext);
+                    dci.pNext = &image_robust;
+                    device_ext.push_back(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
+                    NVN_LOG("robustImageAccess: on (texel fetches outside an image read 0)\n");
+                }
+            }
     // gl_DrawID, gl_BaseVertex y gl_BaseInstance en los shaders traducidos (el DrawID de los multi-draw).
     VkPhysicalDeviceShaderDrawParametersFeatures draw_parameters{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES};
     {

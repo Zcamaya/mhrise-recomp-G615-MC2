@@ -504,7 +504,8 @@ final class SettingsMenu {
                     dialog.dismiss();
                 });
         action("Save the report",
-                "Puts log.txt, your settings and the captured frame into Download/mhrise-report.zip, to send.",
+                "Puts log.txt, your settings, the captured frame and any shaders saved for a GPU crash into "
+                        + "Download/mhrise-report.zip, to send.",
                 this::saveReport);
         flag("Capture button",
                 "A small round button over the game, so a frame can be captured right where the problem shows without "

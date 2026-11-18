@@ -26,6 +26,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "nnsdk/ini.h"
 #include "nnsdk/nvn/commands.h"
 #include "nnsdk/nvn/nvn.h"
 #include "nnsdk/nvn/flags.h"
@@ -55,6 +56,8 @@ std::atomic<int64_t> g_opt_us{0};
 // El hilo de la precarga (prefetch_loop): sus fallos no se cuentan ni se vuelcan (el código pudo cambiar o liberarse entre
 // SetShaders y la traducción; el ejecutor lo vuelve a intentar al enlazarlo).
 thread_local bool t_prefetch = false;
+// translate_or_queue: only from the SPIR-V cache (translate_stage gives up on a miss, saying so in t_cache_missed)
+thread_local bool t_cache_only = false, t_cache_missed = false;
 
 // Cambia si cambia lo que entra en la clave de la caché (translation_key) o cómo se usa lo traducido.
 // 2: Options::optimize_stages (spirv-opt).
@@ -69,8 +72,7 @@ void open_spirv_cache() {
     static std::once_flag once;
     std::call_once(once, [] {
         if (NVN_FLAG("no_spirv_cache")) return;
-        const char* data = getenv("NIER_DATA");
-        nvn::spirv_cache::global().open(std::string(data ? data : "/sdcard/NieR") + "/spirv.bin", NVN_TRADUCTOR_HUELLA);
+        nvn::spirv_cache::global().open(nnsdk::ini::shader_file("spirv.bin"), NVN_TRADUCTOR_HUELLA);
     });
 }
 
@@ -82,8 +84,7 @@ size_t safe_copy(void* dst, const void* src, size_t size) {
 }
 
 void dump_code(uint64_t code, const std::string& name) {
-    const char* data = getenv("NIER_DATA");
-    std::string dir = std::string(data ? data : "/sdcard/NieR") + "/shaders";
+    const std::string dir = nnsdk::ini::shader_dir() + "/shaders";
     mkdir(dir.c_str(), 0775);
     std::vector<uint8_t> buf(64 * 1024);
     size_t n = safe_copy(buf.data(), reinterpret_cast<const void*>(code), buf.size());
@@ -456,6 +457,10 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     // La clave de la traducción sin barreras: la que se guarda de las de la lista y la que queda si con ellas no se puede.
     const bool stripped_cacheable = cacheable && keep && translation_key(out, bound, options, false, stripped_key);
     const bool cached = cacheable && nvn::spirv_cache::global().find(key, out.shader);
+    if (!cached && t_cache_only) {
+        t_cache_missed = cacheable;
+        return false;
+    }
     if (cached) out.cache_key = key;  // el precalentado de pipelines la apunta
     nvnshader::Translated stripped;
     bool have_stripped = false, barriers_kept = cached;
@@ -802,7 +807,91 @@ void prefetch(uint64_t code, const void* control) {
     g_prefetch_cv.notify_one();
 }
 
+// --- Graphics shaders translated in the background ---
+// A graphics stage not in the SPIR-V cache yet was translated in NvnSubmit, with the frame stopped: 2-4 ms each, and a
+// monster or an area brings 15 at once (half a second of freeze on an A725). Now a thread translates a copy of it into
+// the cache (as the preload does) and the draws that use it wait, a few frames at most: the effect shows a little late
+// the first time instead of the game stopping. Compute shaders still translate here (a dispatch can't wait: its results
+// would be missing). <data>/no_async_shaders (live): all in NvnSubmit, as before.
+struct AsyncShader {
+    int state = 0;  // 1 queued or translating, 2 done (in the cache), 3 failed
+};
+std::mutex g_async_mutex;
+std::condition_variable g_async_cv;
+std::deque<std::pair<uint64_t, std::pair<uint64_t, const void*>>> g_async_queue;  // (id, (code, control))
+std::unordered_map<uint64_t, AsyncShader> g_async;
+
+void async_shader_loop() {
+    pthread_setname_np(pthread_self(), "ShaderAsync");
+    setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 5);
+    t_prefetch = true;  // (its failures aren't counted or dumped: the executor translates those itself)
+    for (;;) {
+        std::pair<uint64_t, std::pair<uint64_t, const void*>> job;
+        {
+            std::unique_lock lock(g_async_mutex);
+            g_async_cv.wait(lock, [] { return !g_async_queue.empty(); });
+            job = g_async_queue.front();
+            g_async_queue.pop_front();
+        }
+        bool ok = false;
+        Snapshot snap;
+        if (take_snapshot(job.second.first, job.second.second, snap) && known_stage(snap) && !compute_snapshot(snap)) {
+            nvn::ProgramStage stage;
+            stage.code = reinterpret_cast<uint64_t>(snap.code.data());
+            stage.control = snap.control.data();
+            set_stage_constants(stage);
+            ok = translate_stage(stage, ~0ull, 0, snap.code.size());
+            const VkDevice device = nvn::vk()->device;
+            if (stage.module) vkDestroyShaderModule(device, stage.module, nullptr);
+            if (stage.stripped_module) vkDestroyShaderModule(device, stage.stripped_module, nullptr);
+        }
+        std::lock_guard lock(g_async_mutex);
+        g_async[job.first].state = ok ? 2 : 3;
+    }
+}
+
 }  // namespace
+
+int nvn::translate_or_queue(ProgramStage& stage) {
+    if (stage.tried) return 0;
+    uint32_t magic = 0, type = 0;
+    if (stage.code) memcpy(&magic, reinterpret_cast<const void*>(stage.code), 4);
+    if (stage.control) memcpy(&type, static_cast<const uint8_t*>(stage.control) + 0x714, 4);
+    const bool compute = magic == nvnshader::kNvnComputeCodeMagic || (magic != nvnshader::kNvnCodeMagic && type == 5);
+    if (compute || !stage.control || NVN_FLAG("no_async_shaders")) return ensure_translated(stage), 0;
+    const uint64_t id = stage.code ^ (reinterpret_cast<uint64_t>(stage.control) * 0x9E3779B97F4A7C15ull);
+    int state = 0;
+    {
+        std::lock_guard lock(g_async_mutex);
+        if (auto it = g_async.find(id); it != g_async.end()) state = it->second.state;
+    }
+    if (state == 1) return 1;  // (still translating: no need to look in the cache again)
+    // From the cache if it's there (a fraction of a ms): the usual case after the first time
+    set_stage_constants(stage);
+    t_cache_only = true;
+    t_cache_missed = false;
+    const bool ok = translate_stage(stage);
+    t_cache_only = false;
+    if (ok) {
+        stage.tried = true;
+        return 0;
+    }
+    // Not in the cache: to the thread, unless it already tried (failed, or done and still missing: the executor then
+    // translates it itself, as before) or the cache is off
+    if (!t_cache_missed || state != 0) return ensure_translated(stage), 0;
+    {
+        std::lock_guard lock(g_async_mutex);
+        static bool started = false;
+        if (!started) {
+            started = true;
+            std::thread(async_shader_loop).detach();  // lives as long as the process
+        }
+        g_async[id].state = 1;
+        g_async_queue.emplace_back(id, std::make_pair(stage.code, stage.control));
+    }
+    g_async_cv.notify_one();
+    return 1;
+}
 
 bool nvn::ensure_translated(ProgramStage& stage) {
     if (!stage.tried) {

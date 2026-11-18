@@ -65,8 +65,7 @@ void dump_rejected_spirv(const std::string& name, const std::vector<uint32_t>& s
     static std::unordered_set<std::string> done;
     std::lock_guard lock(m);
     if (spirv.empty() || done.size() >= 64 || !done.insert(name).second) return;
-    const char* data = getenv("NIER_DATA");
-    const std::string dir = std::string(data ? data : ".") + "/pipelines_fallidas";
+    const std::string dir = nnsdk::ini::shader_dir() + "/pipelines_fallidas";
     mkdir(dir.c_str(), 0755);
     if (FILE* f = fopen((dir + "/" + name + ".spv").c_str(), "wb")) {
         fwrite(spirv.data(), sizeof(uint32_t), spirv.size(), f);
@@ -971,6 +970,9 @@ struct QueueState {
     bool scissor_set = false;
     const ProgramStage* stages[kStages] = {};  // por nvnshader::Stage
     uint64_t stage_generation[kStages] = {};
+    // NVN stage bits (BindProgram) whose bound program has a stage still translating in the background
+    // (translate_or_queue): draws wait until it's ready.
+    uint32_t pending_stages = 0;
     BlendState blend[8]{};
     ColorState color{};
     ChannelMaskState masks{0xFFFFFFFF};
@@ -3603,12 +3605,17 @@ void Executor::apply(const Command& c) {
                 for (int b = 0; b < 6; b++)
                     if (v.stages & (1 << b)) st_.stages[static_cast<int>(kBits[b])] = nullptr;
                 if (v.stages & 32) st_.compute = nullptr;
+                st_.pending_stages &= ~static_cast<uint32_t>(v.stages);
                 // El compute va aparte: st_.stages solo lleva las etapas del pipeline gráfico.
                 if (v.program)
                     for (ProgramStage& ps : v.program->stages)
                         if (ps.tried ? ps.module != VK_NULL_HANDLE : [&] {
                                 LoadTimer timer(*this, kLdShader);  // solo la primera vez (traducir o de la caché)
-                                return ensure_translated(ps);
+                                if (translate_or_queue(ps) == 1) {
+                                    st_.pending_stages |= static_cast<uint32_t>(v.stages) & 31u;
+                                    return false;
+                                }
+                                return ps.module != VK_NULL_HANDLE;
                             }()) {
                             if (ps.shader.stage == Stage::Compute) {
                                 st_.compute = &ps;
@@ -4073,7 +4080,10 @@ void Executor::prepare_counted_draws(const PassScan& scan) {
     for (const Job& j : jobs) {
         const VkDescriptorSet set = descriptor_set(counted_set_layout_);
         if (!set) break;
-        const VkDescriptorBufferInfo args{j.copy, j.copy_offset, j.size}, count{j.count, j.count_base, VK_WHOLE_SIZE};
+        // The count's range ends right after it: VK_WHOLE_SIZE reached to the end of the game's memory pool, past
+        // maxStorageBufferRange on a big one (128 MB on ARM's r32), which Vulkan leaves undefined: the suspect for the
+        // ground missing on a Dimensity 720 since this fixup came in.
+        const VkDescriptorBufferInfo args{j.copy, j.copy_offset, j.size}, count{j.count, j.count_base, j.count_word * 4ull + 4};
         VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
         for (int k = 0; k < 2; k++) {
             w[k].dstSet = set;
@@ -4119,7 +4129,7 @@ bool Executor::fix_counted_now(const cmd::Draw& d, VkBuffer args, VkDeviceSize a
     vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
                          nullptr);
     const VkDeviceSize base = count_offset / align * align;
-    const VkDescriptorBufferInfo a{copy.buffer, copy.offset, size}, n{count, base, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo a{copy.buffer, copy.offset, size}, n{count, base, count_offset - base + 4};  // (see prepare_counted_draws)
     VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
     for (int k = 0; k < 2; k++) {
         w[k].dstSet = set;
@@ -5260,7 +5270,9 @@ bool Executor::ensure_render_pass(bool full_area) {
         crumb_begin('p', label);
     }
     counted_fix_.clear();
-    if (!vk()->draw_indexed_indirect_count && run_lists_ && !NVN_FLAG("no_count_fallback")) prepare_counted_draws(scan_pass(rt));
+    // <data>/count_fix_at_draw: every one fixed at its draw instead (a pass cut each; to tell timing problems apart)
+    if (!vk()->draw_indexed_indirect_count && run_lists_ && !NVN_FLAG("no_count_fallback") && !NVN_FLAG("count_fix_at_draw"))
+        prepare_counted_draws(scan_pass(rt));
     note_gpu_work();
     vkCmdBeginRenderPass(cmd_, &bi, VK_SUBPASS_CONTENTS_INLINE);
     if (fallback && load_clear)
@@ -7229,6 +7241,10 @@ static bool absurd_draw(uint32_t count, uint32_t instances) {
 void Executor::draw(const cmd::Draw& in) {
     if (!st_.render_enabled) {
         if (frame_ == trace_frame_) prof_disabled_draws_++;
+        return;
+    }
+    if (st_.pending_stages) {  // a shader of this program is still translating in the background (translate_or_queue)
+        g_drop_stats.draws_skipped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     maybe_split();
@@ -10345,10 +10361,7 @@ void Executor::watch_kgsl() {
 }
 
 namespace {
-std::string pipeline_cache_path() {
-    const char* data = getenv("NIER_DATA");
-    return std::string(data ? data : "/sdcard/NieR") + "/pipelines.bin";
-}
+std::string pipeline_cache_path() { return nnsdk::ini::shader_file("pipelines.bin"); }
 
 // data en path, por path.tmp y rename (con fsync antes: un corte deja el fichero de antes entero), a ritmo: trozos de 1
 // MB con una pausa entre ellos y fdatasync cada 4 MB. De un tirón, los ~25 MB de pipelines.bin llenaban la cola de la SD
@@ -10495,10 +10508,7 @@ constexpr char kRecordsMagic[8] = {'N', 'V', 'P', 'I', 'P', 'E', 'S', '1'};
 constexpr size_t kRecordsHeader = 32;
 constexpr size_t kWarmMax = 4000;               // como mucho (lo de la aldea y la primera cacería está al principio)
 constexpr long kWarmMinAvailableKb = 700 * 1024;  // con menos RAM libre en el sistema, se para
-std::string pipeline_records_path() {
-    const char* data = getenv("NIER_DATA");
-    return std::string(data ? data : "/sdcard/NieR") + "/pipelines_estado.bin";
-}
+std::string pipeline_records_path() { return nnsdk::ini::shader_file("pipelines_estado.bin"); }
 long available_kb() {
     long kb = -1;
     if (FILE* f = fopen("/proc/meminfo", "r")) {

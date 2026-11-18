@@ -122,12 +122,15 @@ The game's buffers are its own memory, and the GPU can't read that memory direct
    `keep_dead_functions` is set.
    On Qualcomm's and ARM's drivers every compute shader goes through it; on Mesa's (Turnip, PanVK) only those with a
    switch.
-3. Translations are cached in `<data>/spirv.bin` (`spirv_cache.cpp`). The key covers the code, every translation option
+3. Translations are cached in `spirv.bin` (`spirv_cache.cpp`), in the data folder with the other shader files
+   (`<data>/shaders/`, `nnsdk::ini::shader_dir`). The key covers the code, every translation option
    and `kKeyVersion` in `program.cpp`. **Bump `kKeyVersion` whenever a change alters the SPIR-V produced**, or old
-   cached translations keep being used.
+   cached translations keep being used. A graphics stage missing from the cache is translated on a background thread
+   (`translate_or_queue`); the draws that need it are skipped until it's ready, instead of the game freezing on it.
+   Compute shaders are still translated where they're used. `no_async_shaders` turns this off.
 4. Pipelines: built in the background, with a warm-up at start (`pipelines_estado.bin` lists what was used last time)
    and the driver's pipeline cache. If a driver rejects a pipeline, the stages are retranslated more conservatively
-   (`no_safe_translation` turns that off), and the rejected SPIR-V goes to `<data>/pipelines_fallidas/`.
+   (`no_safe_translation` turns that off), and the rejected SPIR-V goes to `shaders/pipelines_fallidas/`.
 
 ### Presenting (`window.cpp`, `fsr.cpp`, `lsfg/`, `hud.cpp`)
 

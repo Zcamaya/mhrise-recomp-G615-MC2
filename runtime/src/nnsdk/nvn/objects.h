@@ -242,6 +242,9 @@ extern Objects<DescriptorPool> g_texture_pools, g_sampler_pools;
 Program* find_program(const void* program);
 // Traduce la etapa la primera vez que se usa (program.cpp); false si no se pudo.
 bool ensure_translated(ProgramStage& stage);
+// The same, but a graphics stage that isn't in the SPIR-V cache yet goes to a background thread instead (program.cpp):
+// 0, done here as ensure_translated (stage.module says if it worked); 1, queued (draws with it wait).
+int translate_or_queue(ProgramStage& stage);
 // Precarga (program.cpp): el hilo que traduce los shaders al fijarlos le pasa al ejecutor cada compute traducido, para
 // crear su pipeline antes del primer dispatch (la toma warm_take).
 void prefetch_compute_pipeline(const ProgramStage& stage);

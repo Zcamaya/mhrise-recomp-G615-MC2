@@ -24,6 +24,32 @@ inline std::string data_dir() {
 
 inline std::string path() { return data_dir() + "/mhr.ini"; }
 
+// The shader caches (spirv.bin, pipelines.bin, pipelines_estado.bin) and the shader dumps (shaders/,
+// pipelines_fallidas/): in the data folder, where testers can reach them. For a few builds they lived in the app's own
+// storage (/data/data/<app>/files/shaders); shader_file() brings a file left there back the first time.
+inline std::string shader_dir() { return data_dir(); }
+
+inline std::string shader_file(const char* name) {
+    const std::string to = data_dir() + "/" + name;
+    const char* app = getenv("NIER_INTERNO");
+    if (!app || !*app || access(to.c_str(), F_OK) == 0) return to;
+    const std::string from = std::string(app) + "/shaders/" + name, tmp = to + ".tmp";
+    FILE* in = fopen(from.c_str(), "rb");
+    if (!in) return to;
+    bool ok = false;
+    if (FILE* out = fopen(tmp.c_str(), "wb")) {
+        std::vector<char> buf(1 << 20);
+        size_t n;
+        ok = true;
+        while ((n = fread(buf.data(), 1, buf.size(), in)) > 0) ok = ok && fwrite(buf.data(), 1, n, out) == n;
+        ok = fclose(out) == 0 && ok;
+    }
+    fclose(in);
+    if (ok && rename(tmp.c_str(), to.c_str()) == 0) unlink(from.c_str());
+    else unlink(tmp.c_str());
+    return to;
+}
+
 inline std::string trim(const std::string& s) {
     const size_t a = s.find_first_not_of(" \t\r\n");
     if (a == std::string::npos) return {};

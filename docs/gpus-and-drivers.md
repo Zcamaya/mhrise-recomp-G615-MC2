@@ -38,7 +38,7 @@ lighting on the A8xx. `qualcomm_7xx_stock()` in `program.cpp` now checks `VK_DRI
     and the capability they bring (`keep_dead_functions` turns that off).
 - **Safe translation:** if a pipeline is still rejected, its stages are retranslated more conservatively: without
   NonUniform marking, then through spirv-opt, then without subgroup operations. The first one that works is
-  remembered for the warm-up. The rejected SPIR-V is saved to `<data>/pipelines_fallidas/`.
+  remembered for the warm-up. The rejected SPIR-V is saved to `shaders/pipelines_fallidas/` in the app's storage.
 - **Miscompiled control flow:** Qualcomm's compiler mishandles Eden's flag-based structuring of switches (BRX), giving
   NaN in the hunter's face skinning. Shaders with a BRX go through spirv-opt. Around an `OpUnreachable` it also
   mis-optimises, so that becomes an `OpReturn` (`eden-unreachable-qualcomm`).
@@ -106,14 +106,17 @@ numbers in the millions on any new old driver.
 
 That driver also has no `multiDrawIndirect` (each multi-draw becomes one indirect call per draw) and no
 `fillModeNonSolid` (point and line polygon modes are drawn filled, since they would make an invalid pipeline).
-  - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off).
-  - **The bloom's full-size upsample pass faults the GPU on ARM's driver** (pixel `75cc74924ff2b1ed`, vertex
-    `602b124798536d97`): `GROUP_ERROR_FATAL` every frame and a black screen with sound on a Mali-G925 Immortalis, the
-    GPU lost once a session on a Dimensity 720. Not the quad swaps (it happened with them off too). Still open: the
-    shader's code from breadcrumbs (`<data>/shaders/migas_75cc74924ff2b1ed*.code`) is the next step. With subgroups off, Eden's fallback for
+  - **Quad swaps stay on regardless** (`no_quad_derivatives` turns them off). With subgroups off, Eden's fallback for
     `SHFL.BFLY` returned each pixel's own value, so the game's hand-made derivatives in about 80 scenery pixel shaders
     were all zero on ARM's driver: the same loss that left PanVK without ground. A quad is 4 pixels on any GPU, so
     quad swaps are safe with 16-wide subgroups (cache key version 5).
+  - **Texel fetches outside an image fault the GPU on ARM's driver.** The pass right after the bloom (pixel
+    `75cc74924ff2b1ed`, vertex `602b124798536d97`) does 12 `TLDS` texel fetches at offsets around each pixel and keeps
+    their min and max; at the edges some land outside the image. On the Switch that reads 0. On a Mali-G925 Immortalis
+    and a Mali-G720 (Dimensity 8400, the same driver) it was `GROUP_ERROR_FATAL` every frame, a black screen with
+    sound; on a Dimensity 720, the GPU lost now and then. Found from the shader's code that breadcrumbs saved (it has
+    no buffer reads, no shuffles: not the quad swaps, not `robusto`). `robustImageAccess` (VK_EXT_image_robustness) is
+    on by default with ARM's driver (not PanVK, which reads them safely) (`no_image_robustness`; `image_robustness` turns it on elsewhere).
   - **With PanVK,** they're on (`short_subgroups`). Without them, Eden's single-lane fallback loses quad derivatives
     and the ground was missing.
   - **Warp-synchronous compute** (32 threads sharing memory with no barrier) races on 16-wide subgroups, so the port
