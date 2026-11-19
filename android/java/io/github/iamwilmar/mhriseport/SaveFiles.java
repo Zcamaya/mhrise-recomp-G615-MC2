@@ -230,11 +230,45 @@ final class SaveFiles {
     }
 
     private static String steamNotes(boolean encrypted, boolean template) {
-        String s = encrypted ? " Encrypted for the Steam account of the Steam save you imported last."
-                : " Not encrypted: import your Steam save here once (the port learns your account's key from it), or encrypt "
-                        + "these with a save editor such as ree-save-editor.";
+        String s = encrypted ? " Encrypted for the Steam account set in Saves."
+                : " Not encrypted: set the Steam account first (Saves → Set from a Steam save), or encrypt these with a save "
+                        + "editor such as ree-save-editor.";
         if (!template) s += " Without a Steam save of yours to fill, a few things only the PC version has are missing.";
         return s;
+    }
+
+    // Kept to fill when a save goes back to Steam: what only the PC version has comes from here
+    private static void keepSteam(File data, SaveData.Opened o) throws IOException {
+        File dir = steamDir(data);
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't write " + dir);
+        writeFile(new File(dir, o.name + ".steam"), SaveData.write(o.roots, SaveData.STEAM_BASE));
+    }
+
+    // The Steam account saves are exported for: the one of the last Steam save opened here, if its key is known
+    static String steamAccount(File data) {
+        Ini ini = new Ini(data);
+        long id = SaveData.steamId(ini.get("steam_id"));
+        if (id == 0 || curve(ini) < 0) return null;
+        boolean full = true;
+        for (String n : MAIN) full &= new File(steamDir(data), n + ".steam").isFile();
+        return id + (full ? "" : " (from a save without " + (new File(steamDir(data), SaveData.SLOT + ".steam").isFile()
+                ? SaveData.SYSTEM : SaveData.SLOT) + ")");
+    }
+
+    // Only learns the account from a Steam save (its key, and its layout to fill), without importing anything: for a
+    // save started in the port that's going to a Steam account it has never seen
+    static String learnSteam(Context c, Incoming in, File data, long typed) throws IOException {
+        Map<String, SaveData.Opened> opened = open(c, in, data, typed);
+        List<String> kept = new ArrayList<>();
+        for (SaveData.Opened o : opened.values()) {
+            if (!o.steam) continue;
+            keepSteam(data, o);
+            kept.add(o.name);
+        }
+        if (kept.isEmpty()) throw new IOException("that's a Switch save; pick one from the Steam account");
+        if (steamAccount(data) == null) throw new IOException("it isn't encrypted, so it doesn't give the account's key; pick the save "
+                + "as Steam wrote it");
+        return "Steam account set from that save (" + String.join(", ", kept) + "). Export for Steam now encrypts for it.";
     }
 
     // ---- the menu's actions ---------------------------------------------------------------------------------------------
@@ -252,10 +286,7 @@ final class SaveFiles {
             }
             steam = true;
             out.put(o.name, toSwitch(data, o, notes));
-            // Kept to fill when this save goes back to Steam: what only the PC version has comes from here
-            File dir = steamDir(data);
-            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't write " + dir);
-            writeFile(new File(dir, o.name + ".steam"), SaveData.write(o.roots, SaveData.STEAM_BASE));
+            keepSteam(data, o);
         }
         String backup = backup(data);
         File dir = saveDir(data);
@@ -319,6 +350,7 @@ final class SaveFiles {
         for (SaveData.Opened o : opened.values()) {
             if (steam) {
                 out.put(o.name, o.steam ? toSwitch(data, o, notes) : in.files.get(o.name));
+                if (o.steam) keepSteam(data, o);
             } else {
                 template &= steamTemplate(data, o.name) != null;
                 out.put(o.name, toSteam(c, data, o, encrypted, notes));

@@ -302,8 +302,12 @@ Settings → **Saves** handles the save in the data folder's `save/`, which is i
   the game afterwards: it still has the old save loaded.
 - **Export for Steam**: the save converted to the PC version's, in `win64_save/`, to copy into Steam's
   `...\1446780\remote\win64_save` (with the game closed, and Steam Cloud off for it, or it may bring the old one back).
-  The PC version encrypts saves with a key made from the Steam ID, so once you've imported a Steam save here the export
-  is encrypted for that account; before that it comes out plain, for a save editor such as
+  It's encrypted for the account under **Steam account**.
+- **Steam account → Set from a Steam save**: the PC version encrypts saves with a key that comes from the Steam ID, and
+  that key can only be found from a save the game encrypted for the account. So the port learns it (and the PC
+  version's layout, to fill) from any Steam save it opens: this row, an import or a convert. Nothing is imported here.
+  Started in the port and never played on PC? Start the PC game once on that Steam account, make a character and save,
+  then pick that save here. Until an account is set, the Steam export comes out unencrypted, for a save editor such as
   [ree-save-editor](https://github.com/kvasszn/ree-save-editor) to encrypt.
 - **Convert a save**: the same conversions into a zip, without touching the port's save.
 

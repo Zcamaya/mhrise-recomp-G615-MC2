@@ -1441,10 +1441,24 @@ final class SettingsMenu {
         });
         action("Export for Steam", "Converts the save to the PC version's and zips it in win64_save/, to put in Steam's "
                 + "...\\1446780\\remote\\win64_save (close the game first, and turn off Steam Cloud for it or it may bring the "
-                + "old one back). It's encrypted for your account once you've imported a Steam save here.", () -> {
+                + "old one back). It's encrypted for the Steam account below.", () -> {
             dialog.dismiss();
             activity.exportSave(true);
         });
+
+        header("Steam account");
+        String account = SaveFiles.steamAccount(folder);
+        note(account != null ? "Saves for Steam are encrypted for " + account + "." : "None yet: a save for Steam comes "
+                + "out unencrypted. The PC version encrypts its saves with a key that comes from the Steam ID, and the only way "
+                + "to get that key is from a save the game encrypted for that account, so the port learns it from any Steam "
+                + "save it opens. Played in the port first? Start the PC game once on that account, make a character and "
+                + "save, then pick that save here.");
+        action("Set from a Steam save", "Pick a save from that Steam account (a zip or its win64_save folder). Nothing is "
+                + "imported: the port only learns the account's key and the PC version's layout from it.", () -> dropDown(
+                "Set from a Steam save", new String[] {"From a .zip", "From a folder"}, -1, i -> {
+                    dialog.dismiss();
+                    activity.pickSave(i == 1, 2);
+                }));
 
         header("Import");
         note("Takes the place of this save. The one here is backed up first. A Steam save is converted on the way in: it's "
@@ -1454,7 +1468,7 @@ final class SettingsMenu {
         action("Import a save", "A zip or a folder with data001Slot.bin and data00-1.bin, from the Switch, Eden, Yuzu, "
                 + "another copy of the port, or Steam (win64_save).", () -> dropDown("Import a save", from, -1, i -> {
                     dialog.dismiss();
-                    activity.pickSave(i == 1, false);
+                    activity.pickSave(i == 1, 0);
                 }));
         List<File> backups = SaveFiles.backups(folder);
         if (!backups.isEmpty()) {
@@ -1477,12 +1491,12 @@ final class SettingsMenu {
 
         header("Convert");
         note("A save from one platform into a zip for the other, without touching this one. Steam to Switch fills this "
-                + "save's layout (have one here first for the best result). Switch to Steam fills the last Steam save you "
-                + "imported, and is encrypted for that account.");
+                + "save's layout (have one here first for the best result). Switch to Steam fills the Steam account's save "
+                + "and is encrypted for it.");
         action("Convert a save", "Pick a Steam save to get the Switch's, or a Switch save to get Steam's; then where to "
                 + "save the zip.", () -> dropDown("Convert a save", from, -1, i -> {
                     dialog.dismiss();
-                    activity.pickSave(i == 1, true);
+                    activity.pickSave(i == 1, 1);
                 }));
     }
 
