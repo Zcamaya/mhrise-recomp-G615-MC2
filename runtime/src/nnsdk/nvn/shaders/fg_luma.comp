@@ -1,20 +1,14 @@
 #version 450
-// Built-in frame generation (lsfg/motion.cpp), 1: the frame's luma at a quarter of its size. Each texel is the average
-// of its 4x4 pixels: four bilinear taps, one at the middle of each 2x2.
+// Built-in frame generation (lsfg/motion.cpp), 1: the frame's luma at half its size, the finest flow level. Each texel
+// is the average of its 2x2 pixels: one bilinear tap in their middle.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D src;
 layout(binding = 1, r32f) uniform writeonly image2D dst;
 layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int pad; } p;
 
-float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
-
 void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (q.x >= p.size.x || q.y >= p.size.y) return;
-    vec2 base = vec2(q * 4);
-    float sum = 0.0;
-    for (int y = 0; y < 2; y++)
-        for (int x = 0; x < 2; x++)
-            sum += luma(textureLod(src, (base + vec2(x * 2 + 1, y * 2 + 1)) * p.inv_src, 0.0).rgb);
-    imageStore(dst, q, vec4(sum * 0.25));
+    vec3 c = textureLod(src, vec2(q * 2 + 1) * p.inv_src, 0.0).rgb;
+    imageStore(dst, q, vec4(dot(c, vec3(0.299, 0.587, 0.114))));
 }

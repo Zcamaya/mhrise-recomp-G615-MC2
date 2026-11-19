@@ -45,6 +45,7 @@
 #include "nnsdk/nvn/count_check.h"
 #include "nnsdk/watch.h"
 #include "nnsdk/nvn/fsr.h"
+#include "nnsdk/nvn/hud.h"
 #include "nnsdk/nvn/lsfg/framegen.h"
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/runtime.h"
@@ -1213,6 +1214,30 @@ private:
                        uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
     uint64_t prof_count_checked_ = 0;  // multi-draws drawn with the draw count check (count_check.h)
     uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0, prof_astc_empty_ = 0, prof_astc_direct_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
+    // Deferred encodes: a big level that isn't in the ASTC cache is encoded by a background thread instead of inside the
+    // submit (seconds of it, the first time a monster's or an effect's textures load: the freezes in fights on Mali).
+    // Until it's back the texture is sampled from its next smaller level (min_level), as when the game hasn't streamed a
+    // level in yet; the result goes to the cache too. <data>/sync_astc (live): encoded in the submit, as before.
+    struct AstcJob {
+        Texture* texture = nullptr;  // only compared: astc_waiting_ says whether it's still there
+        VkImage image = VK_NULL_HANDLE;
+        uint64_t key = 0, cache_key = 0;  // key: what astc_pending holds for it (never 0); cache_key: the disk cache's
+        uint32_t level = 0, layer = 0, width = 0, height = 0, wb = 0, hb = 0;
+        uint8_t kind = 0;
+        bool srgb = false, ok = false;
+        std::vector<uint8_t> blocks, astc;
+    };
+    static constexpr size_t kAstcDeferTexels = 256 * 256;  // smaller levels are quick enough to encode in the submit
+    void defer_astc(AstcJob job);
+    void apply_astc_results();
+    void astc_worker();
+    static void refresh_min_level(Texture& t);
+    std::mutex astc_mutex_;
+    std::condition_variable astc_cv_;
+    std::deque<AstcJob> astc_todo_, astc_done_;
+    bool astc_started_ = false;
+    std::unordered_map<Texture*, int> astc_waiting_;  // textures with levels away, and how many (under g_mutex)
+    uint64_t prof_astc_deferred_ = 0, prof_astc_applied_ = 0;
     VkDescriptorSetLayout bc_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout bc_layout_ = VK_NULL_HANDLE;
     VkPipeline bc_pipeline_ = VK_NULL_HANDLE;
@@ -3166,6 +3191,8 @@ void Executor::write_stamps(InFlight& f) {
 
 void Executor::retire_texture(Texture& t) {
     std::lock_guard lock(g_mutex);
+    astc_waiting_.erase(&t);  // (an encode still away for it is dropped when it's back)
+    t.astc_pending.clear();
     // Fuera de run() no queda ninguno (finish los hace); por si acaso, ninguno con una imagen que ya no está.
     pending_clears_.erase(std::remove_if(pending_clears_.begin(), pending_clears_.end(),
                                          [&](const PendingClear& p) { return p.texture == &t; }),
@@ -3472,6 +3499,7 @@ void Executor::run(const std::vector<const CommandList*>& lists) {
     buffer_cache_.prof = prof_timing_ ? &fine_.vtx : nullptr;
     read_flags();
     begin();
+    apply_astc_results();
     if (!NVN_FLAG("no_mirrors_at_start")) preload_mirrors();
     run_lists_ = &lists;  // la mirada adelante de los render passes (scan_pass) recorre lo que queda
     run_serial_++;
@@ -4014,6 +4042,9 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
     const size_t block_row = size_t{lv.width_blocks} * bcn::block_bytes(kind);
     const size_t slice_bc = block_row * lv.height_blocks, slice_astc = size_t{lv.width_blocks} * lv.height_blocks * 16;
     static thread_local std::vector<uint8_t> texels;
+    // (whatever this upload does with the level, an encode still away for it is old now)
+    const size_t slot = size_t{layer} * 16 + level;
+    if (slot < t.astc_pending.size()) t.astc_pending[slot] = 0;
     for (uint32_t z = 0; z < std::max(lv.depth, 1u); z++) {
         const uint8_t* slice = blocks + size_t{z} * slice_bc;
         Staging::Alloc a = staging_->alloc(slice_astc, 16);
@@ -4047,6 +4078,27 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
         {
             LoadTimer timer(*this, kLdDeswizzle, slice_astc);
             cached = astc::load(key, slice_astc, a.data);
+        }
+        if (!cached && lv.depth <= 1 && size_t{lv.width} * lv.height >= kAstcDeferTexels && !NVN_FLAG("sync_astc")) {
+            AstcJob job;
+            job.texture = &t;
+            job.image = t.image;
+            job.key = key | 1;
+            job.cache_key = key;
+            job.level = level;
+            job.layer = layer;
+            job.width = lv.width;
+            job.height = lv.height;
+            job.wb = lv.width_blocks;
+            job.hb = lv.height_blocks;
+            job.kind = static_cast<uint8_t>(kind);
+            job.srgb = srgb;
+            job.blocks.assign(slice, slice + slice_bc);
+            if (t.astc_pending.size() <= slot) t.astc_pending.resize(slot + 1, 0);
+            t.astc_pending[slot] = job.key;
+            defer_astc(std::move(job));
+            prof_astc_deferred_++;
+            continue;  // (nothing for this level now: upload() keeps it out of what's sampled)
         }
         if (!cached) {
             LoadTimer timer(*this, kLdDeswizzle, size_t{lv.width} * lv.height * 4);
@@ -4090,6 +4142,104 @@ const ProgramStage* Executor::count_check_stage(const ProgramStage& vs) {
         NVN_LOG("vertex %016llx with the draw count check%s\n", static_cast<unsigned long long>(vs.print),
                 stage ? "" : ": didn't translate, drawn without it");
     return (count_check_stages_[key] = std::move(stage)).get();
+}
+
+// ---- ASTC encodes in the background (see AstcJob) ---------------------------------------------------------------------
+
+void Executor::refresh_min_level(Texture& t) {
+    int top = -1;  // the smallest level still away (levels count up as they get smaller)
+    for (size_t k = 0; k < t.astc_pending.size(); k++)
+        if (t.astc_pending[k]) top = std::max(top, static_cast<int>(k % 16));
+    const int levels = std::max(t.desc.levels, 1);
+    t.min_level = top < 0 ? t.min_level_base : std::max(t.min_level_base, std::min(top + 1, levels - 1));
+}
+
+void Executor::defer_astc(AstcJob job) {
+    astc_waiting_[job.texture]++;
+    {
+        std::lock_guard lock(astc_mutex_);
+        astc_todo_.push_back(std::move(job));
+    }
+    if (!astc_started_) {
+        astc_started_ = true;
+        std::thread([this] { astc_worker(); }).detach();  // lives as long as the process (the executor is global)
+    }
+    astc_cv_.notify_one();
+}
+
+void Executor::astc_worker() {
+    pthread_setname_np(pthread_self(), "AstcEncode");
+    // Below the game's threads: this is catch-up work (the encoder's helper threads inherit it)
+    setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 10);
+    std::vector<uint8_t> texels;
+    for (;;) {
+        AstcJob job;
+        {
+            std::unique_lock lock(astc_mutex_);
+            astc_cv_.wait(lock, [&] { return !astc_todo_.empty(); });
+            job = std::move(astc_todo_.front());
+            astc_todo_.pop_front();
+        }
+        const uint32_t w = job.wb * 4, h = job.hb * 4;
+        texels.resize(size_t{w} * h * 4);
+        bcn::decode(static_cast<bcn::Kind>(job.kind), job.blocks.data(), job.wb, job.hb, texels.data(), size_t{w} * 4, w, h);
+        job.astc.resize(size_t{job.wb} * job.hb * 16);
+        job.ok = astc::encode(texels.data(), w, h, job.srgb, job.astc.data());
+        if (job.ok) astc::store(job.cache_key, job.astc.data(), job.astc.size());  // (the next time, a file read)
+        job.blocks = {};
+        std::lock_guard lock(astc_mutex_);
+        astc_done_.push_back(std::move(job));
+    }
+}
+
+// At the start of a submit (no render pass yet): the levels that came back, into their images, for the textures that
+// still have them (same image, same blocks as when they left).
+void Executor::apply_astc_results() {
+    std::deque<AstcJob> done;
+    {
+        std::lock_guard lock(astc_mutex_);
+        if (astc_done_.empty()) return;
+        done.swap(astc_done_);
+    }
+    bool open = false;  // the barrier before the copies, once
+    for (AstcJob& j : done) {
+        auto it = astc_waiting_.find(j.texture);
+        if (it == astc_waiting_.end()) continue;  // retired meanwhile
+        Texture& t = *j.texture;
+        if (--it->second <= 0) astc_waiting_.erase(it);
+        const size_t slot = size_t{j.layer} * 16 + j.level;
+        if (t.image != j.image || slot >= t.astc_pending.size() || t.astc_pending[slot] != j.key) continue;  // old
+        if (!j.ok) continue;  // (stays out of what's sampled; the next upload of the level tries again)
+        Staging::Alloc a = staging_->alloc(j.astc.size(), 16);
+        if (!a.data) continue;
+        memcpy(a.data, j.astc.data(), j.astc.size());
+        if (!open) {
+            open = true;
+            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+            mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                                 nullptr, 0, nullptr);
+        }
+        VkBufferImageCopy r{};
+        r.bufferOffset = a.offset;
+        r.bufferRowLength = j.wb * 4;
+        r.bufferImageHeight = j.hb * 4;
+        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, j.level, j.layer, 1};
+        r.imageExtent = {j.width, j.height, 1};
+        note_gpu_work();
+        vkCmdCopyBufferToImage(cmd_, a.buffer, t.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+        t.astc_pending[slot] = 0;
+        refresh_min_level(t);  // (the views made from here on start lower again)
+        prof_astc_applied_++;
+    }
+    if (open) {
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+    }
 }
 
 bool Executor::bc_on_gpu(const Texture& t) {
@@ -4430,6 +4580,8 @@ void Executor::upload(Texture& t) {
     }
     if (astc_missing >= 0)
         t.min_level = std::max(t.min_level, std::min(astc_missing + 1, std::max(t.desc.levels, 1) - 1));
+    t.min_level_base = t.min_level;
+    refresh_min_level(t);
     for (size_t k = 0; k < regions.size();) {
         size_t end = k;
         std::vector<VkBufferImageCopy> batch;
@@ -6740,6 +6892,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
             async_pending_.insert(h);
             async_queue_.push_back(job);
         }
+        hud::shader_queued();
         async_cv_.notify_one();
         g_drop_stats.pipelines_async.fetch_add(1, std::memory_order_relaxed);
         g_drop_stats.draws_skipped.fetch_add(1, std::memory_order_relaxed);
@@ -10705,6 +10858,7 @@ void Executor::async_loop() {
             if (!abandoned && ok && (p || r == VK_SUCCESS)) async_ready_[job.h] = p;
             else if (!abandoned) async_retry_.insert(job.h);
         }
+        hud::shader_done();
         if (abandoned && p) {  // NvnSubmit no pudo esperarla (un pase de una vez) y la creó él
             vkDestroyPipeline(device, p, nullptr);
             p = VK_NULL_HANDLE;
@@ -11016,11 +11170,13 @@ void Executor::profile_frame() {
             prof_forced_levels_ / double(period), (unsigned long long)prof_forced_unseen_,
             prof_full_hash_bytes_ / double(period) / 1048576.0, (unsigned long long)prof_watched_textures_);
     prof_forced_levels_ = prof_forced_unseen_ = prof_full_hash_bytes_ = 0;
-    if (prof_astc_encoded_ || prof_astc_cached_ || prof_astc_empty_ || prof_astc_direct_)
-        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache, %llu BC1 converted directly, %llu empty (not streamed in yet)\n",
+    if (prof_astc_encoded_ || prof_astc_cached_ || prof_astc_empty_ || prof_astc_direct_ || prof_astc_deferred_ || prof_astc_applied_)
+        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache, %llu BC1 converted directly, %llu empty (not streamed in yet); "
+                "%llu sent to the background encoder, %llu back from it\n",
                 (unsigned long long)prof_astc_encoded_, (unsigned long long)prof_astc_cached_,
-                (unsigned long long)prof_astc_direct_, (unsigned long long)prof_astc_empty_);
-    prof_astc_encoded_ = prof_astc_cached_ = prof_astc_empty_ = prof_astc_direct_ = 0;
+                (unsigned long long)prof_astc_direct_, (unsigned long long)prof_astc_empty_,
+                (unsigned long long)prof_astc_deferred_, (unsigned long long)prof_astc_applied_);
+    prof_astc_encoded_ = prof_astc_cached_ = prof_astc_empty_ = prof_astc_direct_ = prof_astc_deferred_ = prof_astc_applied_ = 0;
     if (prof_count_checked_)
         NVN_LOG("perfil multi-draw: %.1f per frame with the draw count check\n", prof_count_checked_ / double(period));
     prof_count_checked_ = 0;

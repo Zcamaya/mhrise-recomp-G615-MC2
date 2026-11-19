@@ -1,6 +1,9 @@
 #pragma once
 // Contador de FPS arriba a la izquierda: solo el número de frames en pantalla por segundo (con los generados de
-// LSFG), pequeño y en color (verde a su ritmo, amarillo corto, rojo mal). Lo dibuja la CPU en un buffer pequeño que se
+// LSFG), pequeño y en color (verde a su ritmo, amarillo corto, rojo mal). With any of the overlay's other lines on
+// (hud_frametime, hud_cpu, hud_gpu, hud_ram, hud_battery, hud_shaders in mhr.ini, live) it becomes a small box: the
+// FPS and, one line each, frame time and 1 % low, the game's CPU use, the GPU's (where the phone lets apps read it),
+// memory, battery and pipelines being built. Lo dibuja la CPU en un buffer pequeño que se
 // copia tal cual sobre la imagen del swapchain, después del escalado del frame. <datos>/no_fps lo oculta en vivo.
 // Panel de ajustes: un cajón de un tercio de la pantalla que sale del borde derecho, con una fila por ajuste (hoy, el
 // interruptor del contador de FPS, que queda guardado con ese mismo fichero). Se abre con el gesto de "atrás" del sistema
@@ -23,6 +26,10 @@ namespace nvn::hud {
 void real_frame(int64_t now_ns);
 // lsfg/framegen.cpp: se presentó un frame generado.
 void generated_frame();
+// executor.cpp: a pipeline went to the background threads to be built, or came back from them (the overlay's
+// "shaders building" line).
+void shader_queued();
+void shader_done();
 // Copia el HUD sobre la imagen del swapchain, que está en TRANSFER_DST_OPTIMAL (entre el blit y la barrera a
 // PRESENT_SRC). format es el del swapchain: solo se dibuja si es RGBA8 o BGRA8.
 void record(VkCommandBuffer cmd, VkImage image, VkExtent2D extent, VkFormat format);

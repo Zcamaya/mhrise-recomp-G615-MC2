@@ -101,6 +101,10 @@ struct Texture {
     // Primer nivel con memoria detrás (texturas sparse por streaming: MH Rise mapea los mips grandes cuando le hacen
     // falta). Lo muestreado empieza ahí: los niveles sin mapear se leen a cero, que en ASTC es el magenta de error.
     int min_level = 0;
+    // Executor, BC stored as ASTC: the levels a background thread is still encoding (layer * 16 + level: the key of the
+    // blocks it was given; 0 none), and min_level without them, to go back to as they arrive.
+    std::vector<uint64_t> astc_pending;
+    int min_level_base = 0;
     // Huella muestreada de cada nivel (capa x nivel) de la última subida: al cambiar la memoria solo se vuelven a subir
     // los niveles que cambiaron (el streaming va trayendo tiles de los mips grandes frame a frame).
     std::vector<uint64_t> level_hash;

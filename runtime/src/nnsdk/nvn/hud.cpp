@@ -4,6 +4,8 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+
+#include <atomic>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
@@ -37,6 +39,10 @@ uint32_t find_memory(uint32_t bits, VkMemoryPropertyFlags props) {
 constexpr uint32_t kW = 44, kH = 26;       // en píxeles del swapchain (1920x1080): solo el número, que no estorbe
 constexpr int32_t kX = 8, kY = 8;          // esquina superior izquierda
 constexpr uint32_t kRing = 12;             // buffers: más que presentaciones en vuelo (3 reales + 3 de LSFG)
+// The overlay with its other lines: a box at most this big (scale-2 text, 12 x 20 pixels a character and a line)
+constexpr uint32_t kStatsW = 360, kStatsH = 170;
+constexpr int kStatsLine = 20, kStatsPad = 8, kStatsLines = 8;
+std::atomic<int> g_building{0};  // pipelines in the background threads (shader_queued / shader_done)
 // El panel de ajustes (ver hud.h): un cajón que sale del borde derecho, de un tercio del ancho de la pantalla y toda su
 // altura, con una fila por ajuste.
 constexpr int64_t kPanelSlideNs = 180'000'000;    // lo que tarda en salir o esconderse
@@ -132,7 +138,25 @@ public:
         if (failed_) return;
         const bool bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
         if (!bgra && format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB) return;
-        if (!hidden_ && extent.width >= kX + kW && extent.height >= kY + kH && (!buffers_.empty() || create(buffers_, kW, kH))) {
+        const bool stats = NVN_FLAG("hud_frametime") || NVN_FLAG("hud_cpu") || NVN_FLAG("hud_gpu") || NVN_FLAG("hud_ram") ||
+                           NVN_FLAG("hud_battery") || NVN_FLAG("hud_shaders");
+        if (!hidden_ && stats) {
+            if (extent.width >= kX + kStatsW && extent.height >= kY + kStatsH &&
+                (!stats_buffers_.empty() || create(stats_buffers_, kStatsW, kStatsH))) {
+                sample(now);
+                Buffer& b = stats_buffers_[stats_next_];
+                stats_next_ = (stats_next_ + 1) % kRing;
+                uint32_t bw = 0, bh = 0;
+                draw_stats(reinterpret_cast<Rgba*>(b.data), bgra, &bw, &bh);
+                VkBufferImageCopy region{};
+                region.bufferRowLength = kStatsW;
+                region.bufferImageHeight = kStatsH;
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageOffset = {kX, kY, 0};
+                region.imageExtent = {bw, bh, 1};
+                vkCmdCopyBufferToImage(cmd, b.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            }
+        } else if (!hidden_ && extent.width >= kX + kW && extent.height >= kY + kH && (!buffers_.empty() || create(buffers_, kW, kH))) {
             Buffer& b = buffers_[next_];
             next_ = (next_ + 1) % kRing;
             draw(reinterpret_cast<Rgba*>(b.data), bgra);
@@ -406,6 +430,173 @@ private:
         return false;
     }
 
+    // A small text file's first bytes (sysfs, /proc), or false if it can't be read from the app
+    static bool read_file(const char* path, char* out, size_t size) {
+        const int fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return false;
+        const ssize_t n = read(fd, out, size - 1);
+        close(fd);
+        if (n <= 0) return false;
+        out[n] = 0;
+        return true;
+    }
+    // The GPU's busy %, from wherever this phone's driver puts it: Adreno's two kgsl files, or the one many Mali and
+    // PowerVR kernels have. -1 where none of them can be read (most phones keep them from apps on newer Android).
+    int gpu_busy() {
+        static const char* const kPaths[] = {"/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage",
+                                             "/sys/class/kgsl/kgsl-3d0/gpubusy", "/sys/kernel/gpu/gpu_busy"};
+        char buf[64];
+        for (int k = gpu_source_ >= 0 ? gpu_source_ : 0; k < 3; k++) {
+            if (gpu_source_ == -1) break;
+            if (!read_file(kPaths[k], buf, sizeof buf)) {
+                if (gpu_source_ >= 0) return -1;  // (it was readable a moment ago: a hiccup)
+                continue;
+            }
+            int value = -1;
+            if (k == 1) {  // "busy total": cycles in the last sample window
+                unsigned long long busy = 0, total = 0;
+                if (sscanf(buf, "%llu %llu", &busy, &total) == 2) value = total ? static_cast<int>(busy * 100 / total) : 0;
+            } else {
+                value = atoi(buf);
+            }
+            if (value < 0) continue;
+            if (gpu_source_ < 0) NVN_LOG("hud: GPU load from %s\n", kPaths[k]);
+            gpu_source_ = k;
+            return std::min(value, 100);
+        }
+        if (gpu_source_ == -2) NVN_LOG("hud: this phone doesn't let apps read the GPU load\n");
+        gpu_source_ = -1;
+        return -1;
+    }
+    // Everything the lines show, twice a second (a few small reads: nothing next to a frame)
+    void sample(int64_t now) {
+        if (sampled_at_ && now - sampled_at_ < 500'000'000) return;
+        char buf[512];
+        uint64_t ticks = 0;
+        if (read_file("/proc/self/stat", buf, sizeof buf)) {
+            // (after the name in brackets: state, then 10 fields, then utime and stime)
+            if (const char* p = strrchr(buf, ')')) {
+                unsigned long ut = 0, st = 0;
+                if (sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut, &st) == 2) ticks = ut + st;
+            }
+        }
+        if (sampled_at_ && ticks >= cpu_ticks_) {
+            static const double hz = static_cast<double>(sysconf(_SC_CLK_TCK));
+            static const double cores = static_cast<double>(std::max(1L, sysconf(_SC_NPROCESSORS_CONF)));
+            const double busy = static_cast<double>(ticks - cpu_ticks_) / hz, wall = (now - sampled_at_) / 1e9;
+            cpu_ = static_cast<int>(std::min(100.0, 100.0 * busy / (wall * cores)) + 0.5);
+        }
+        cpu_ticks_ = ticks;
+        sampled_at_ = now;
+        if (NVN_FLAG("hud_gpu")) gpu_ = gpu_busy();
+        if (read_file("/proc/self/statm", buf, sizeof buf)) {
+            unsigned long size = 0, resident = 0;
+            if (sscanf(buf, "%lu %lu", &size, &resident) == 2)
+                ram_app_ = static_cast<float>(resident * static_cast<double>(getpagesize()) / 1073741824.0);
+        }
+        if (read_file("/proc/meminfo", buf, sizeof buf)) {
+            unsigned long total = 0, available = 0;
+            if (const char* t = strstr(buf, "MemTotal:")) sscanf(t + 9, "%lu", &total);
+            if (const char* a = strstr(buf, "MemAvailable:")) sscanf(a + 13, "%lu", &available);
+            if (total) ram_total_ = total / 1048576.0f, ram_used_ = (total - std::min(total, available)) / 1048576.0f;
+        }
+        battery_ = read_file("/sys/class/power_supply/battery/capacity", buf, sizeof buf) ? atoi(buf) : -1;
+        if (read_file("/sys/class/power_supply/battery/temp", buf, sizeof buf)) {
+            const long t = atol(buf);  // (tenths of a degree; a few kernels give thousandths)
+            battery_temp_ = t > 2000 ? t / 1000.0f : t / 10.0f;
+        } else {
+            battery_temp_ = -1.0f;
+        }
+        // The game's frames: their average length over the last half second or so, and the 1 % low (the fps of the
+        // slowest 1 % of the last 300)
+        if (!intervals_.empty()) {
+            const size_t n = std::min<size_t>(intervals_.size(), 15);
+            double sum = 0;
+            for (size_t k = intervals_.size() - n; k < intervals_.size(); k++) sum += intervals_[k];
+            frame_ms_ = static_cast<float>(sum / n);
+            std::vector<double> sorted(intervals_.begin(), intervals_.end());
+            const size_t at = sorted.size() - 1 - sorted.size() / 100;
+            std::nth_element(sorted.begin(), sorted.begin() + at, sorted.end());
+            low_fps_ = sorted[at] > 0 ? static_cast<float>(1000.0 / sorted[at]) : 0.0f;
+        }
+    }
+    // The box: the FPS (in its colour) and each line that's on. bw, bh: the part of the buffer drawn.
+    void draw_stats(Rgba* px, bool bgra, uint32_t* bw, uint32_t* bh) {
+        if (last_real_ - text_at_ > 250000000 || !text_at_) {
+            text_at_ = last_real_;
+            shown_ = static_cast<int>(reals_.size() + generated_.size());
+        }
+        struct Line {
+            char text[40];
+            Rgba color;
+        };
+        Line lines[kStatsLines];
+        int n = 0;
+        const int target = generated_.empty() ? 30 : 60;
+        const Rgba fps_color = shown_ >= target - 1 ? kGood : shown_ >= target * 5 / 6 ? kWarn : kBad;
+        if (generated_.empty()) snprintf(lines[n].text, sizeof lines[n].text, "%d FPS", std::min(shown_, 999));
+        else snprintf(lines[n].text, sizeof lines[n].text, "%d FPS  %d REAL", std::min(shown_, 999),
+                      static_cast<int>(reals_.size()));
+        lines[n++].color = fps_color;
+        if (NVN_FLAG("hud_frametime")) {
+            snprintf(lines[n].text, sizeof lines[n].text, "%.1f MS  1%% LOW %.0f", frame_ms_, low_fps_);
+            lines[n++].color = kText;
+        }
+        if (NVN_FLAG("hud_cpu")) {
+            if (cpu_ >= 0) snprintf(lines[n].text, sizeof lines[n].text, "CPU %d%%", cpu_);
+            else snprintf(lines[n].text, sizeof lines[n].text, "CPU --");
+            lines[n++].color = cpu_ >= 85 ? kWarn : kText;
+        }
+        if (NVN_FLAG("hud_gpu")) {
+            if (gpu_ >= 0) snprintf(lines[n].text, sizeof lines[n].text, "GPU %d%%", gpu_);
+            else snprintf(lines[n].text, sizeof lines[n].text, "GPU N/A");
+            lines[n++].color = gpu_ >= 95 ? kWarn : gpu_ < 0 ? kDim : kText;
+        }
+        if (NVN_FLAG("hud_ram")) {
+            snprintf(lines[n].text, sizeof lines[n].text, "RAM %.1f GB  %.1f/%.1f", ram_app_, ram_used_, ram_total_);
+            lines[n++].color = ram_total_ > 0 && ram_used_ > ram_total_ * 0.9f ? kWarn : kText;
+        }
+        if (NVN_FLAG("hud_battery")) {
+            char pct[12] = "--", temp[16] = "";
+            if (battery_ >= 0) snprintf(pct, sizeof pct, "%d%%", battery_);
+            if (battery_temp_ > 0) snprintf(temp, sizeof temp, "  %.1f C", battery_temp_);
+            snprintf(lines[n].text, sizeof lines[n].text, "BAT %s%s", pct, temp);
+            lines[n++].color = battery_temp_ >= 45.0f ? kBad : battery_temp_ >= 40.0f ? kWarn : kText;
+        }
+        if (NVN_FLAG("hud_shaders")) {
+            const int building = g_building.load(std::memory_order_relaxed);
+            snprintf(lines[n].text, sizeof lines[n].text, "SHADERS %d", std::max(building, 0));
+            lines[n++].color = building > 0 ? kWarn : kDim;
+        }
+        size_t longest = 0;
+        for (int k = 0; k < n; k++) longest = std::max(longest, strlen(lines[k].text));
+        const int w = std::min<int>(kStatsW, static_cast<int>(longest) * 12 - 2 + 2 * kStatsPad);
+        const int h = std::min<int>(kStatsH, n * kStatsLine + 2 * kStatsPad - 6);
+        const auto put = [&](int x, int y, Rgba c) {
+            if (x < 0 || y < 0 || x >= w || y >= h) return;
+            px[y * static_cast<int>(kStatsW) + x] = bgra ? Rgba{c.b, c.g, c.r, c.a} : c;
+        };
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) put(x, y, kBack);
+        for (int k = 0; k < n; k++) {
+            int x = kStatsPad;
+            const int y = kStatsPad + k * kStatsLine;
+            for (const char* s = lines[k].text; *s; s++, x += 12) {
+                const Glyph* g = nullptr;
+                for (const Glyph& f : kFont)
+                    if (f.c == *s) g = &f;
+                if (!g) continue;  // (a space)
+                for (int r = 0; r < 7; r++)
+                    for (int b = 0; b < 5; b++)
+                        if (g->rows[r] & (0x10 >> b))
+                            for (int yy = 0; yy < 2; yy++)
+                                for (int xx = 0; xx < 2; xx++) put(x + b * 2 + xx, y + r * 2 + yy, lines[k].color);
+            }
+        }
+        *bw = static_cast<uint32_t>(w);
+        *bh = static_cast<uint32_t>(h);
+    }
+
     void draw(Rgba* px, bool bgra) {
         const auto put = [&](int x, int y, Rgba c) {
             if (x < 0 || y < 0 || x >= static_cast<int>(kW) || y >= static_cast<int>(kH)) return;
@@ -442,8 +633,14 @@ private:
         text((static_cast<int>(kW) - width) / 2, 3, 3, line, color);
     }
 
-    std::vector<Buffer> buffers_, panel_buffers_;
-    uint32_t next_ = 0, panel_next_ = 0;
+    std::vector<Buffer> buffers_, panel_buffers_, stats_buffers_;
+    uint32_t next_ = 0, panel_next_ = 0, stats_next_ = 0;
+    // What the overlay's lines show, read twice a second (sample)
+    int64_t sampled_at_ = 0;
+    uint64_t cpu_ticks_ = 0;  // the process's user + system time, in clock ticks, at sampled_at_
+    int cpu_ = -1, gpu_ = -1, battery_ = -1, gpu_source_ = -2;  // % (-1: can't be read here); gpu_source_ -2: not looked yet
+    float battery_temp_ = -1.0f, ram_app_ = 0.0f, ram_used_ = 0.0f, ram_total_ = 0.0f;  // °C, GB
+    float frame_ms_ = 0.0f, low_fps_ = 0.0f;
     bool failed_ = false;
     bool hidden_ = false, flag_ = false, flag_seen_ = false;  // the counter off; what no_fps said last
     bool panel_open_ = false, touch_seen_ = false, gesture_seen_ = false;
@@ -467,6 +664,8 @@ Hud g_hud;
 }  // namespace
 
 void real_frame(int64_t now_ns) { g_hud.real_frame(now_ns); }
+void shader_queued() { g_building.fetch_add(1, std::memory_order_relaxed); }
+void shader_done() { g_building.fetch_sub(1, std::memory_order_relaxed); }
 void generated_frame() { g_hud.generated_frame(); }
 void record(VkCommandBuffer cmd, VkImage image, VkExtent2D extent, VkFormat format) {
     g_hud.record(cmd, image, extent, format);

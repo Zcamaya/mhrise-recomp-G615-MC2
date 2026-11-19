@@ -1,109 +1,95 @@
 #version 450
-// Built-in frame generation, 6: the picture between A and B. The field is a vector per 16x16 pixels, too coarse to
-// cross an edge with, so each pixel may pick its own: of the four nearest blocks' vectors and no motion, one whose A at
-// x - d and B at x + d match clearly better than the field's own (its bilinear mix) on a 3x3 of pixels around x, then a
-// half pixel step, again only if it's clearly better. "Clearly": on a busy texture (stones, grass) many vectors fit
-// about as well, and a pixel picking a different one from its neighbour, and again a frame later, is what shimmers.
-// The samples are bicubic (Catmull-Rom), not bilinear: a made picture softer than the real ones around it flickers
-// between sharp and soft at the refresh rate on every texture. A and B are averaged where they agree, B's sample is
-// taken alone where they don't (something uncovered or covered), both by how well the 3x3 matched, not one pixel; a
-// pixel the same in both frames (the HUD, still scenery) keeps B's own; where no block matched (a cut, a flash), B.
+// Built-in frame generation, 5: the picture halfway between A and B, from the two flows (A to B and B to A, half the
+// picture's size, in its texels). Each pixel x follows each flow back to where it was: in A at a, with a + F(a) / 2 = x
+// (a few fixed-point steps from a = x), and in B at b, with b + G(b) / 2 = x. A vector the other flow doesn't send back
+// (F(a) + G(a + F(a)) far from zero: the forward-backward check) is something that one of the frames doesn't see: covered
+// or uncovered. Of the two ways, the one that both checks out and matches better; its two samples averaged where they
+// agree, else the sample from the frame where it was measured (that one does see it). Bicubic samples, so the made
+// picture is as sharp as the real ones. A pixel the same in both frames (the HUD, still scenery) keeps B's own; where
+// nothing matches at all (a cut, a flash), B.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D frame_a;
 layout(binding = 1) uniform sampler2D frame_b;
-layout(binding = 2, rgba32f) uniform readonly image2D field;
-layout(binding = 3, rgba8) uniform writeonly image2D dst;
-// size: the picture; src_size: the field; inv_src: 1 / the picture; pad: pixels per field texel's luma texel (4)
+layout(binding = 2, rgba32f) uniform readonly image2D flow_ab;
+layout(binding = 3, rgba32f) uniform readonly image2D flow_ba;
+layout(binding = 4, rgba8) uniform writeonly image2D dst;
+// size: the picture; src_size: the flows; inv_src: 1 / the picture
 layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int pad; } p;
 
-const vec3 kLuma = vec3(0.299, 0.587, 0.114);
-
-vec4 field_at(ivec2 c) { return imageLoad(field, clamp(c, ivec2(0), p.src_size - 1)); }
-
-float lum_a(vec2 at) { return dot(textureLod(frame_a, at * p.inv_src, 0.0).rgb, kLuma); }
-float lum_b(vec2 at) { return dot(textureLod(frame_b, at * p.inv_src, 0.0).rgb, kLuma); }
-
-// How badly d fits at x: A at x - d against B at x + d on 3x3 pixels two apart
-float cost_of(vec2 x, vec2 d) {
-    float cost = 0.0;
-    for (int j = -1; j <= 1; j++)
-        for (int i = -1; i <= 1; i++) {
-            vec2 at = x + vec2(i, j) * 2.0;
-            cost += abs(lum_a(at - d) - lum_b(at + d));
-        }
-    return cost;
+// A flow at pixel position x (pixel centres on .5), in pixels: its texel k covers pixels 2k and 2k + 1
+vec2 flow_at(bool forward, vec2 x) {
+    vec2 c = x * 0.5 - 0.5, f = floor(c), t = c - f;
+    ivec2 k = ivec2(f), last = p.src_size - 1;
+    ivec2 k00 = clamp(k, ivec2(0), last), k11 = clamp(k + 1, ivec2(0), last);
+    ivec2 k10 = ivec2(k11.x, k00.y), k01 = ivec2(k00.x, k11.y);
+    vec2 v00, v10, v01, v11;
+    if (forward) {
+        v00 = imageLoad(flow_ab, k00).xy; v10 = imageLoad(flow_ab, k10).xy;
+        v01 = imageLoad(flow_ab, k01).xy; v11 = imageLoad(flow_ab, k11).xy;
+    } else {
+        v00 = imageLoad(flow_ba, k00).xy; v10 = imageLoad(flow_ba, k10).xy;
+        v01 = imageLoad(flow_ba, k01).xy; v11 = imageLoad(flow_ba, k11).xy;
+    }
+    return mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y) * 2.0;
 }
 
-// Catmull-Rom at pos (in pixels) from nine bilinear reads: the middle two texels of each axis share one read
-vec3 bicubic(sampler2D t, vec2 pos) {
-    vec2 tc = pos - 0.5, f = fract(tc), p1 = floor(tc) + 0.5;
+vec3 bilinear(sampler2D s, vec2 x) { return textureLod(s, x * p.inv_src, 0.0).rgb; }
+
+// Catmull-Rom at x (pixel centres on .5) from nine bilinear reads: the middle two texels of each axis share one read
+vec3 bicubic(sampler2D s, vec2 x) {
+    vec2 tc = x - 0.5, f = fract(tc), p1 = floor(tc) + 0.5;
     vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
     vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
     vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
     vec2 w3 = f * f * (-0.5 + 0.5 * f);
     vec2 w12 = w1 + w2;
-    vec2 t0 = (p1 - 1.0) * p.inv_src, t12 = (p1 + w2 / w12) * p.inv_src, t3 = (p1 + 2.0) * p.inv_src;
-    vec3 c = textureLod(t, vec2(t0.x, t0.y), 0.0).rgb * w0.x * w0.y + textureLod(t, vec2(t12.x, t0.y), 0.0).rgb * w12.x * w0.y +
-             textureLod(t, vec2(t3.x, t0.y), 0.0).rgb * w3.x * w0.y + textureLod(t, vec2(t0.x, t12.y), 0.0).rgb * w0.x * w12.y +
-             textureLod(t, vec2(t12.x, t12.y), 0.0).rgb * w12.x * w12.y + textureLod(t, vec2(t3.x, t12.y), 0.0).rgb * w3.x * w12.y +
-             textureLod(t, vec2(t0.x, t3.y), 0.0).rgb * w0.x * w3.y + textureLod(t, vec2(t12.x, t3.y), 0.0).rgb * w12.x * w3.y +
-             textureLod(t, vec2(t3.x, t3.y), 0.0).rgb * w3.x * w3.y;
+    vec2 a = (p1 - 1.0) * p.inv_src, m = (p1 + w2 / w12) * p.inv_src, b = (p1 + 2.0) * p.inv_src;
+    vec3 c = textureLod(s, vec2(a.x, a.y), 0.0).rgb * w0.x * w0.y + textureLod(s, vec2(m.x, a.y), 0.0).rgb * w12.x * w0.y +
+             textureLod(s, vec2(b.x, a.y), 0.0).rgb * w3.x * w0.y + textureLod(s, vec2(a.x, m.y), 0.0).rgb * w0.x * w12.y +
+             textureLod(s, vec2(m.x, m.y), 0.0).rgb * w12.x * w12.y + textureLod(s, vec2(b.x, m.y), 0.0).rgb * w3.x * w12.y +
+             textureLod(s, vec2(a.x, b.y), 0.0).rgb * w0.x * w3.y + textureLod(s, vec2(m.x, b.y), 0.0).rgb * w12.x * w3.y +
+             textureLod(s, vec2(b.x, b.y), 0.0).rgb * w3.x * w3.y;
     return clamp(c, 0.0, 1.0);
 }
+
+float most(vec3 v) { return max(v.r, max(v.g, v.b)); }
 
 void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (q.x >= p.size.x || q.y >= p.size.y) return;
     vec2 x = vec2(q) + 0.5;
     vec3 a0 = texelFetch(frame_a, q, 0).rgb, b0 = texelFetch(frame_b, q, 0).rgb;
-    vec3 diff = abs(a0 - b0);
-    float still = max(diff.r, max(diff.g, diff.b));
+    float still = most(abs(a0 - b0));
     if (still < 0.006) {
         imageStore(dst, q, vec4(b0, 1.0));
         return;
     }
-    // (a field texel is a 4x4 block of luma texels, 16x16 pixels: its middle at 8 + 16 i)
-    float block = float(p.pad * 4);
-    vec2 f = x / block - 0.5;
-    ivec2 i = ivec2(floor(f));
-    vec2 t = f - vec2(i);
-    vec4 v00 = field_at(i), v10 = field_at(i + ivec2(1, 0)), v01 = field_at(i + ivec2(0, 1)), v11 = field_at(i + ivec2(1, 1));
-    if (min(min(v00.z, v10.z), min(v01.z, v11.z)) > 2.5) {  // (no block near matched: a cut or a flash)
-        imageStore(dst, q, vec4(b0, 1.0));
-        return;
-    }
-    float px = float(p.pad);  // (luma texels to pixels)
-    vec2 d = mix(mix(v00.xy, v10.xy, t.x), mix(v01.xy, v11.xy, t.x), t.y) * px;
-    float best = cost_of(x, d);
-    // (another one only if it's clearly better: a tenth, and a little more on a flat patch where all are near 0)
-    vec2 cands[5] = vec2[5](v00.xy * px, v10.xy * px, v01.xy * px, v11.xy * px, vec2(0.0));
-    vec2 chosen = d;
-    float chosen_cost = best;
-    for (int k = 0; k < 5; k++) {
-        if (distance(cands[k], d) < 0.5) continue;  // (about the field's own: nothing to gain)
-        float c = cost_of(x, cands[k]);
-        if (c < chosen_cost * 0.9 - 0.02) {
-            chosen_cost = c;
-            chosen = cands[k];
-        }
-    }
-    // (half a pixel each way here is a whole pixel between A and B)
-    const vec2 steps[4] = vec2[4](vec2(0.5, 0.0), vec2(-0.5, 0.0), vec2(0.0, 0.5), vec2(0.0, -0.5));
-    vec2 centre = chosen;
+    // Where it was in A, and that vector checked against the other flow
+    vec2 pa = x, f = vec2(0.0);
     for (int k = 0; k < 4; k++) {
-        vec2 e = centre + steps[k];
-        float c = cost_of(x, e);
-        if (c < chosen_cost * 0.9 - 0.02) {
-            chosen_cost = c;
-            chosen = e;
-        }
+        f = flow_at(true, pa);
+        pa = x - 0.5 * f;
     }
-    vec3 a = bicubic(frame_a, x - chosen);
-    vec3 b = bicubic(frame_b, x + chosen);
-    vec3 e3 = abs(a - b);
-    float err = max(e3.r, max(e3.g, e3.b));
-    // (no hard switches: each would flicker along its edge)
-    float alone = smoothstep(0.035, 0.10, max(chosen_cost / 9.0, 0.6 * err));
-    vec3 made = mix((a + b) * 0.5, b, alone);
-    imageStore(dst, q, vec4(mix(b0, made, smoothstep(0.006, 0.02, still)), 1.0));
+    float back_f = length(f + flow_at(false, pa + f));
+    // Where it was in B
+    vec2 pb = x, g = vec2(0.0);
+    for (int k = 0; k < 4; k++) {
+        g = flow_at(false, pb);
+        pb = x - 0.5 * g;
+    }
+    float back_g = length(g + flow_at(true, pb + g));
+    bool ok_f = back_f < 1.0 + 0.1 * length(f), ok_g = back_g < 1.0 + 0.1 * length(g);
+    float err_f = most(abs(bilinear(frame_a, pa) - bilinear(frame_b, x + 0.5 * f)));
+    float err_g = most(abs(bilinear(frame_a, x + 0.5 * g) - bilinear(frame_b, pb)));
+    vec3 outc;
+    if (min(err_f, err_g) > 0.35 && !ok_f && !ok_g) {
+        outc = b0;  // (nothing lines up: a cut or a flash)
+    } else if (err_f + (ok_f ? 0.0 : 0.5) <= err_g + (ok_g ? 0.0 : 0.5)) {
+        vec3 a = bicubic(frame_a, pa), b = bicubic(frame_b, x + 0.5 * f);
+        outc = ok_f ? mix((a + b) * 0.5, a, smoothstep(0.03, 0.10, err_f)) : a;
+    } else {
+        vec3 a = bicubic(frame_a, x + 0.5 * g), b = bicubic(frame_b, pb);
+        outc = ok_g ? mix((a + b) * 0.5, b, smoothstep(0.03, 0.10, err_g)) : b;
+    }
+    imageStore(dst, q, vec4(mix(b0, outc, smoothstep(0.006, 0.02, still)), 1.0));
 }

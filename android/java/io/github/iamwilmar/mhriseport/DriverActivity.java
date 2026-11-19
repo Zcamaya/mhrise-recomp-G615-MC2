@@ -271,6 +271,21 @@ public final class DriverActivity extends Activity {
                 dll.delete();
                 build();
             });
+            if (!own && folder != null) {
+                // LSFG's flow scale: how finely it follows motion. Lower is lighter but softer and smears more.
+                File half = new File(folder, "lsfg_flow_50"), full = new File(folder, "lsfg_flow_100");
+                int level = full.exists() ? 2 : half.exists() ? 1 : 0;
+                String[] names = {"Light (flow 25 %)", "Balanced (flow 50 %)", "Sharp (flow 100 %)"};
+                entry("Quality", names[level] + ". How finely Lossless Scaling follows motion: higher is sharper with "
+                        + "less smearing, and heavier on the GPU. Tap for " + names[(level + 1) % 3] + ".", level > 0, () -> {
+                    deleteTree(half);
+                    deleteTree(full);
+                    int next = (level + 1) % 3;
+                    if (next == 1 && !half.mkdirs()) say("Couldn't write to the game folder.", true);
+                    if (next == 2 && !full.mkdirs()) say("Couldn't write to the game folder.", true);
+                    build();
+                }, null);
+            }
         }
         TextView add = button(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll", false);
         add.setOnClickListener(v -> pickDll());

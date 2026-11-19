@@ -13,7 +13,8 @@
 // nvn::present por frame real), así que su lógica sigue a 30.
 //
 // Interruptores (flags.h): <datos>/lsfg enciende; <datos>/lsfg_no_guard quita la guarda de carga;
-// <datos>/lsfg_flow_100 usa el flujo óptico a resolución completa (por defecto 0.5); <datos>/lsfg_fp32 fuerza
+// <datos>/lsfg_flow_50 / lsfg_flow_100 el flujo óptico a la mitad / entero (por defecto un cuarto: Quality en la pantalla
+// del driver); <datos>/lsfg_fp32 fuerza
 // los shaders FP32 (se mira al compilar, una vez por sesión).
 
 #include "nnsdk/nvn/lsfg/framegen.h"

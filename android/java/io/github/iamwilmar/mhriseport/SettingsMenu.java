@@ -231,6 +231,19 @@ final class SettingsMenu {
                 });
         flag("FPS counter", "The number in the corner.", "no_fps",
                 true);
+
+        header("Performance overlay");
+        note("More lines under the FPS counter, each on its own. With any of them on, the counter becomes a small box "
+                + "that also shows how many of the fps are real when frame generation is on. All apply at once.");
+        flag("Frame time", "How long the game's frames take (ms), and the 1 % low: the fps of its slowest frames, "
+                + "which is what you feel as stutter.", "hud_frametime", false);
+        flag("CPU usage", "How much of the phone's CPU the game uses, all cores together.", "hud_cpu", false);
+        flag("GPU usage", "How busy the GPU is. Only where the phone lets apps read it (many Adreno phones do; most "
+                + "others show N/A).", "hud_gpu", false);
+        flag("Memory", "The game's own RAM, then the phone's used / total.", "hud_ram", false);
+        flag("Battery", "Charge and temperature (yellow from 40 °C, red from 45 °C).", "hud_battery", false);
+        flag("Shaders building", "Pipelines being made in the background right now. Above 0, a new effect or area is "
+                + "being prepared: short hitches then are that.", "hud_shaders", false);
     }
 
     private void buildGraphics() {
@@ -1451,7 +1464,7 @@ final class SettingsMenu {
     private static final String[] SWITCHES = {
         "60fps", "adreno_turbo", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
-        "fps_45", "gpu_occlusion", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
+        "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
         "model_detail_lowest", "model_detail_min", "no_adpf", "no_af", "no_affinity", "no_ao", "no_async_shaders", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",

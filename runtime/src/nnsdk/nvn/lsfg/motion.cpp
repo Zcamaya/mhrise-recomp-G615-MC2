@@ -10,15 +10,15 @@ namespace nvn::lsfg {
 
 namespace {
 
-#if defined(HAVE_fg_luma_SPV) && defined(HAVE_fg_down_SPV) && defined(HAVE_fg_search_SPV) && defined(HAVE_fg_refine_SPV) && \
-    defined(HAVE_fg_median_SPV) && defined(HAVE_fg_warp_SPV)
+#if defined(HAVE_fg_luma_SPV) && defined(HAVE_fg_down_SPV) && defined(HAVE_fg_patch_SPV) && defined(HAVE_fg_densify_SPV) && \
+    defined(HAVE_fg_warp_SPV)
 #define FG_SHADERS 1
 #else
 #define FG_SHADERS 0
 #endif
 
 // The push constants every pass has (shaders/fg_*.comp): its output's size, its source's size, 1 / the picture's size,
-// a flag and one more value (refine: the coarser field's size; warp: pixels per luma texel)
+// a flag and one more value (patch: the coarser flow's size, packed)
 struct Push {
     int32_t size[2], src_size[2];
     float inv[2];
@@ -78,7 +78,6 @@ bool Motion::create(VkExtent2D extent, VkFormat format, std::string* why) {
     }
     extent_ = extent;
     format_ = format;
-    made_ = 0;
     if (!build_pipelines(why) || !build_images(why) || !build_sets(why)) {
         destroy();
         return false;
@@ -124,10 +123,9 @@ bool Motion::build_pipelines(std::string* why) {
     const Def defs[kPasses] = {
         {k_fg_luma_spv, sizeof k_fg_luma_spv, {T, S}},
         {k_fg_down_spv, sizeof k_fg_down_spv, {S, S}},
-        {k_fg_search_spv, sizeof k_fg_search_spv, {S, S, S}},
-        {k_fg_refine_spv, sizeof k_fg_refine_spv, {S, S, S, S, S}},
-        {k_fg_median_spv, sizeof k_fg_median_spv, {S, S}},
-        {k_fg_warp_spv, sizeof k_fg_warp_spv, {T, T, S, S}},
+        {k_fg_patch_spv, sizeof k_fg_patch_spv, {S, S, S, S}},
+        {k_fg_densify_spv, sizeof k_fg_densify_spv, {S, S, S, S}},
+        {k_fg_warp_spv, sizeof k_fg_warp_spv, {T, T, S, S, S}},
     };
     for (int k = 0; k < kPasses; k++) {
         Pipeline& p = passes_[k];
@@ -183,16 +181,17 @@ bool Motion::build_images(std::string* why) {
     for (Image& f : frames_)
         add(f, extent_, format_, view, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             srgb ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0);
-    const VkExtent2D l1 = div(extent_, 4), l2 = div(l1, 2), l3 = div(l2, 2);
-    for (int i = 0; i < 2; i++) {
-        add(lum1_[i], l1, kLumaFormat, kLumaFormat, kWork);
-        add(lum2_[i], l2, kLumaFormat, kLumaFormat, kWork);
-        add(lum3_[i], l3, kLumaFormat, kLumaFormat, kWork);
+    // The levels: half the picture, then halves, while both sides keep at least 16 texels (two patches)
+    levels_ = 0;
+    for (VkExtent2D e = div(extent_, 2); levels_ < kLevels && e.width >= 16 && e.height >= 16; e = div(e, 2)) {
+        for (int i = 0; i < 2; i++) add(lum_[i][levels_], e, kLumaFormat, kLumaFormat, kWork);
+        for (int w = 0; w < 2; w++) {
+            add(patches_[w][levels_], grid(e), kFieldFormat, kFieldFormat, kWork);
+            add(flows_[w][levels_], e, kFieldFormat, kFieldFormat, kWork);
+        }
+        levels_++;
     }
-    add(field3_, div(l3, 4), kFieldFormat, kFieldFormat, kWork);
-    add(field2_, div(l2, 4), kFieldFormat, kFieldFormat, kWork);
-    add(field1_, div(l1, 4), kFieldFormat, kFieldFormat, kWork);
-    add(field_, div(l1, 4), kFieldFormat, kFieldFormat, kWork);
+    if (!levels_) return *why = "the picture is too small", false;
     // (the window's own format with a UNORM view for the shader when it's an sRGB one: the blit to the swapchain then
     // converts the made picture as it does the real one)
     add(output_, extent_, srgb ? VK_FORMAT_R8G8B8A8_SRGB : kOut, kOut,
@@ -262,7 +261,7 @@ bool Motion::build_images(std::string* why) {
 
 bool Motion::build_sets(std::string* why) {
     VkContext* c = vk();
-    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 4},
+    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 4},  // (at most 4 in a set)
                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 2}};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.maxSets = kSets;
@@ -292,26 +291,29 @@ bool Motion::build_sets(std::string* why) {
         }
     };
     infos.reserve(kSets * 5);
-    const Pass kinds[kSetKinds] = {kLuma, kDown, kDown, kSearch, kRefine, kRefine, kWarp};
-    for (int k = 0; k < kSetKinds; k++)
-        for (int p = 0; p < 2; p++)
-            if (!make(kinds[k], &sets_[k][p])) return *why = "vkAllocateDescriptorSets", false;
-    if (!make(kMedian, &median_set_)) return *why = "vkAllocateDescriptorSets", false;
     for (int p = 0; p < 2; p++) {  // p: B's parity; A is the other
         const int a = 1 - p;
-        write(sets_[kSetLuma][p], {{&frames_[p], true}, {&lum1_[p], false}});
-        write(sets_[kSetDown1][p], {{&lum1_[p], false}, {&lum2_[p], false}});
-        write(sets_[kSetDown2][p], {{&lum2_[p], false}, {&lum3_[p], false}});
-        write(sets_[kSetSearch][p], {{&lum3_[a], false}, {&lum3_[p], false}, {&field3_, false}});
-        // (refine's last field: the median's, which is the last picture's until this one's median runs; only the 1/4
-        // level reads it, the 1/8 one has it bound for the layout)
-        write(sets_[kSetRefine2][p], {{&field3_, false}, {&lum2_[a], false}, {&lum2_[p], false}, {&field2_, false},
-                                      {&field_, false}});
-        write(sets_[kSetRefine1][p], {{&field2_, false}, {&lum1_[a], false}, {&lum1_[p], false}, {&field1_, false},
-                                      {&field_, false}});
-        write(sets_[kSetWarp][p], {{&frames_[a], true}, {&frames_[p], true}, {&field_, false}, {&output_, false}});
+        if (!make(kLuma, &luma_set_[p]) || !make(kWarp, &warp_set_[p])) return *why = "vkAllocateDescriptorSets", false;
+        write(luma_set_[p], {{&frames_[p], true}, {&lum_[p][0], false}});
+        write(warp_set_[p], {{&frames_[a], true}, {&frames_[p], true}, {&flows_[0][0], false}, {&flows_[1][0], false},
+                             {&output_, false}});
+        for (int l = 0; l < levels_; l++) {
+            if (l > 0) {
+                if (!make(kDown, &down_set_[p][l])) return *why = "vkAllocateDescriptorSets", false;
+                write(down_set_[p][l], {{&lum_[p][l - 1], false}, {&lum_[p][l], false}});
+            }
+            for (int w = 0; w < 2; w++) {  // w 0: A to B (I0 = A, I1 = B); 1: B to A
+                const Image& i0 = lum_[w == 0 ? a : p][l];
+                const Image& i1 = lum_[w == 0 ? p : a][l];
+                // (the coarsest has no coarser flow: its own is bound for the layout and the flag says not to read it)
+                const Image& coarse = flows_[w][l + 1 < levels_ ? l + 1 : l];
+                if (!make(kPatch, &patch_set_[p][w][l]) || !make(kDensify, &dense_set_[p][w][l]))
+                    return *why = "vkAllocateDescriptorSets", false;
+                write(patch_set_[p][w][l], {{&i0, false}, {&i1, false}, {&coarse, false}, {&patches_[w][l], false}});
+                write(dense_set_[p][w][l], {{&patches_[w][l], false}, {&i0, false}, {&i1, false}, {&flows_[w][l], false}});
+            }
+        }
     }
-    write(median_set_, {{&field1_, false}, {&field_, false}});
     for (size_t k = 0; k < writes.size(); k++) writes[k].pImageInfo = &infos[k];  // (infos no longer grows)
     vkUpdateDescriptorSets(c->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     return true;
@@ -335,8 +337,13 @@ void Motion::record_init(VkCommandBuffer cmd) {
     initialized_ = true;
 }
 
+VkExtent2D Motion::grid(VkExtent2D level) {
+    // Patches of 8 every 4 texels; the last one of a row or column ends at the edge (fg_patch clamps its origin)
+    return {(std::max(level.width, 8u) - 8 + 3) / 4 + 1, (std::max(level.height, 8u) - 8 + 3) / 4 + 1};
+}
+
 void Motion::dispatch(VkCommandBuffer cmd, Pass pass, VkDescriptorSet set, VkExtent2D size, VkExtent2D src, int flags,
-                      int extra) const {
+                      int extra, bool groups) const {
     const Pipeline& p = passes_[pass];
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, 1, &set, 0, nullptr);
@@ -346,32 +353,35 @@ void Motion::dispatch(VkCommandBuffer cmd, Pass pass, VkDescriptorSet set, VkExt
               flags,
               extra};
     vkCmdPushConstants(cmd, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, &push);
-    vkCmdDispatch(cmd, (size.width + 7) / 8, (size.height + 7) / 8, 1);
+    if (groups) vkCmdDispatch(cmd, size.width, size.height, 1);
+    else vkCmdDispatch(cmd, (size.width + 7) / 8, (size.height + 7) / 8, 1);
 }
 
 void Motion::record_shared(VkCommandBuffer cmd, uint64_t n) const {
     const int p = static_cast<int>(n % 2);
-    dispatch(cmd, kLuma, sets_[kSetLuma][p], lum1_[p].extent, extent_, 0, 0);
-    compute_barrier(cmd);
-    dispatch(cmd, kDown, sets_[kSetDown1][p], lum2_[p].extent, lum1_[p].extent, 0, 0);
-    compute_barrier(cmd);
-    dispatch(cmd, kDown, sets_[kSetDown2][p], lum3_[p].extent, lum2_[p].extent, 0, 0);
+    dispatch(cmd, kLuma, luma_set_[p], lum_[p][0].extent, extent_, 0, 0);
+    for (int l = 1; l < levels_; l++) {
+        compute_barrier(cmd);
+        dispatch(cmd, kDown, down_set_[p][l], lum_[p][l].extent, lum_[p][l - 1].extent, 0, 0);
+    }
 }
 
 void Motion::record_generate(VkCommandBuffer cmd, uint64_t n) const {
     const int p = static_cast<int>(n % 2);
     auto packed = [](VkExtent2D e) { return static_cast<int>(e.width | (e.height << 16)); };
     compute_barrier(cmd);  // (this frame's levels, from record_shared)
-    dispatch(cmd, kSearch, sets_[kSetSearch][p], field3_.extent, lum3_[p].extent, 0, 0);
-    compute_barrier(cmd);
-    dispatch(cmd, kRefine, sets_[kSetRefine2][p], field2_.extent, lum2_[p].extent, 0, packed(field3_.extent));
-    compute_barrier(cmd);
-    // (the last field only once there is one: the first made picture has nothing before it)
-    dispatch(cmd, kRefine, sets_[kSetRefine1][p], field1_.extent, lum1_[p].extent, made_++ ? 3 : 1, packed(field2_.extent));
-    compute_barrier(cmd);
-    dispatch(cmd, kMedian, median_set_, field_.extent, field_.extent, 0, 0);
-    compute_barrier(cmd);
-    dispatch(cmd, kWarp, sets_[kSetWarp][p], extent_, field_.extent, 0, 4);
+    for (int l = levels_ - 1; l >= 0; l--) {
+        const bool coarsest = l == levels_ - 1;
+        const VkExtent2D e = lum_[p][l].extent;
+        // flags 1: start from the coarser level's flow; 2: search whole texels first (the coarsest)
+        for (int w = 0; w < 2; w++)
+            dispatch(cmd, kPatch, patch_set_[p][w][l], grid(e), e, coarsest ? 2 : 1,
+                     coarsest ? 0 : packed(flows_[w][l + 1].extent), true);
+        compute_barrier(cmd);
+        for (int w = 0; w < 2; w++) dispatch(cmd, kDensify, dense_set_[p][w][l], e, grid(e), 0, 0);
+        compute_barrier(cmd);
+    }
+    dispatch(cmd, kWarp, warp_set_[p], extent_, flows_[0][0].extent, 0, 0);
 }
 
 }  // namespace nvn::lsfg

@@ -3,19 +3,19 @@
 // formats every driver has: R32F, RGBA32F, RGBA8). What framegen.cpp uses when there's no DLL, or when Lossless's
 // chain can't be built on this GPU (an old driver), and the menu's choice for it.
 //
-// Per real frame n (record_shared): its luma at 1/4, 1/8 and 1/16 of the picture, kept for the next pair. The picture
-// between n - 1 (A) and n (B) (record_generate):
-//   1. at 1/16, a vector per 4x4 texels (64x64 pixels) by a full search of +-3 texels: what's at p in the picture
-//      between was at p - d in A and is at p + d in B;
-//   2. at 1/8 and 1/4, each block takes the best of its coarser neighbours' vectors (doubled), their average and no
-//      motion (and at 1/4 its own from the last picture made, so the field stays steady), then the best one texel step
-//      around it; at 1/4 a parabola puts it below a texel;
-//   3. a 3x3 median of the field;
-//   4. each pixel may pick its own vector (of its four nearest blocks' and none, then a half pixel step, only if one
-//      matches A at x - d and B at x + d clearly better than the field's mix), so edges stay sharp without busy
-//      textures shimmering; bicubic samples, so the made picture is as sharp as the real ones; A and B averaged where
-//      they agree, else B's sample alone; a pixel the same in A and B (the HUD, still scenery) keeps B's, and where no block
-//      matched (a cut, a flash) B is shown.
+// Dense optical flow by inverse search (DIS: Kroeger, Timofte, Dai and Van Gool, "Fast Optical Flow using Dense Inverse
+// Search", ECCV 2016), both ways, and a warp that knows what's covered and uncovered:
+//   per real frame n (record_shared): its luma at 1/2, 1/4, 1/8 and 1/16 of the picture, kept for the next pair;
+//   for the picture between n - 1 (A) and n (B) (record_generate), from the coarsest level to the finest, A to B and
+//   B to A:
+//     1. patches of 8x8 texels every 4 (fg_patch): each starts from the best of the coarser level's motion around it
+//        and none (on the coarsest, the best whole-texel offset within +-4), then a few steps of Lucas-Kanade against
+//        the template's own gradients (the inverse search) put it below a texel;
+//     2. a vector per texel (fg_densify): the patches that cover it, each weighted by how well it fits right there;
+//   then each pixel of the picture between (fg_warp) follows both fields back to where it was in A and in B; a vector
+//   that the other field doesn't send back (forward-backward check) marks something covered or uncovered, and the
+//   colour comes from the frame that sees it. Where both agree, A and B averaged (bicubic samples, as sharp as the real
+//   frames); a pixel the same in both (the HUD, still scenery) keeps B's.
 // Shaders: shaders/fg_*.comp (tools/shaders.sh). A build whose spirv.h doesn't have them yet can't make one
 // (available() false): the presenter goes on with LSFG alone.
 
@@ -48,45 +48,48 @@ public:
     void record_generate(VkCommandBuffer cmd, uint64_t n) const override;
     VkExtent2D extent() const override { return extent_; }
     VkFormat format() const override { return format_; }
-    float flow() const override { return 0.25f; }  // (the field's finest level: a quarter of the picture)
+    float flow() const override { return 0.5f; }  // (the finest flow level: half the picture)
     size_t images() const override { return all_.size(); }
     VkDeviceSize bytes() const override { return bytes_; }
     uint32_t sets() const override { return kSets; }
 
 private:
-    enum Pass { kLuma, kDown, kSearch, kRefine, kMedian, kWarp, kPasses };
+    enum Pass { kLuma, kDown, kPatch, kDensify, kWarp, kPasses };
+    static constexpr int kLevels = 4;  // 1/2 .. 1/16 of the picture (fewer if the picture is small)
     struct Pipeline {
         VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
         VkPipelineLayout layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
     };
-    // The sets, each for the parity of B's frame (n % 2): luma, down 1/4 -> 1/8, down 1/8 -> 1/16, search, refine at
-    // 1/8, refine at 1/4, warp; and the median's one
-    enum Set { kSetLuma, kSetDown1, kSetDown2, kSetSearch, kSetRefine2, kSetRefine1, kSetWarp, kSetKinds };
-    static constexpr uint32_t kSets = kSetKinds * 2 + 1;
+    // Per parity of B's frame (n % 2): luma, the downs (level 1 up), and per way (0: A to B, 1: B to A) and level the
+    // patch and densify passes; and the warp
+    static constexpr uint32_t kSets = 2 * (1 + kLevels + 2 * kLevels * 2 + 1);
 
     void add(Image& image, VkExtent2D extent, VkFormat format, VkFormat view_format, VkImageUsageFlags usage,
              VkImageCreateFlags flags = 0);
     bool build_pipelines(std::string* why);
     bool build_images(std::string* why);
     bool build_sets(std::string* why);
+    // size: the output's (a thread each), or with groups the number of 8x8 groups (fg_patch: one per patch)
     void dispatch(VkCommandBuffer cmd, Pass pass, VkDescriptorSet set, VkExtent2D size, VkExtent2D src, int flags,
-                  int extra) const;
+                  int extra, bool groups = false) const;
+    static VkExtent2D grid(VkExtent2D level);  // patches of a level
 
     VkExtent2D extent_{};
     VkFormat format_ = VK_FORMAT_UNDEFINED;
+    int levels_ = kLevels;
     bool initialized_ = false;
     Pipeline passes_[kPasses];
     VkSampler sampler_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet sets_[kSetKinds][2]{}, median_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet luma_set_[2]{}, down_set_[2][kLevels]{}, patch_set_[2][2][kLevels]{}, dense_set_[2][2][kLevels]{},
+        warp_set_[2]{};
     std::vector<Image*> all_;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
     VkDeviceSize bytes_ = 0;
-    mutable uint64_t made_ = 0;  // pictures made (record_generate): the first has no last field to start from
 
-    Image frames_[2], lum1_[2], lum2_[2], lum3_[2];  // the pictures and their luma levels (1/4, 1/8, 1/16), by parity
-    Image field3_, field2_, field1_, field_;         // the vectors at 1/16, 1/8, 1/4 and the median's
+    Image frames_[2], lum_[2][kLevels];             // the pictures and their luma levels, by parity
+    Image patches_[2][kLevels], flows_[2][kLevels];  // by way (A to B, B to A) and level
     Image output_;
 };
 
