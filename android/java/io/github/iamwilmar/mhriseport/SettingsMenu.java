@@ -734,7 +734,7 @@ final class SettingsMenu {
             String help = c == Controls.Ctl.RSTICK
                     ? "Hidden by default: camera swipe turns the camera. Show it to turn the camera with a stick instead."
                     : "Whether this control is on the screen.";
-            toggle(Controls.label(c), help, () -> cfg.shown[k] ? 1 : 0, v -> {
+            toggle(cfg.name(c), help, () -> cfg.shown[k] ? 1 : 0, v -> {
                 cfg.shown[k] = v != 0;
                 if (k == Controls.Ctl.RSTICK.ordinal()) build();  // (the warning above may change)
             });
@@ -750,8 +750,9 @@ final class SettingsMenu {
             final int k = i;
             String value = cfg.combo[k] == 0 ? "None"
                                              : Controls.names(cfg.combo[k]) + (cfg.comboPad[k] != 0
-                                                       ? "  ·  pad: " + Controls.names(cfg.comboPad[k]) : "");
-            row("Combo " + (k + 1), value, "Choose the buttons it presses and, if you like, the controller button that does it.", v -> editCombo(k), false);
+                                                       ? "  ·  pad: " + Controls.names(cfg.comboPad[k]) : "")
+                                                       + (cfg.comboKey[k] != 0 ? "  ·  key: " + Controls.keyName(cfg.comboKey[k]) : "");
+            row(cfg.comboName(k), value, "Choose the buttons it presses and, if you like, the controller button that does it.", v -> editCombo(k), false);
         }
 
     }
@@ -783,6 +784,25 @@ final class SettingsMenu {
             changed();
             build();
         }, false);
+
+        header("Added buttons and combos");
+        note("Any key of a controller or a keyboard can fire one of your added buttons or combos (Combos, and the layout "
+                + "editor's Add): while it's held the game gets all of its buttons. Tap one, then press the key.");
+        boolean any = false;
+        for (int i = 0; i < Controls.COMBOS; i++) {
+            if (cfg.combo[i] == 0) continue;
+            any = true;
+            final int k = i;
+            final String name = cfg.comboName(k);
+            row(name + "  (" + Controls.names(cfg.combo[k]) + ")", cfg.comboKey[k] == 0 ? "None" : Controls.keyName(cfg.comboKey[k]),
+                    "The controller or keyboard key that presses " + Controls.names(cfg.combo[k]) + ".",
+                    v -> captureKey(name, cfg.comboKey[k], key -> {
+                        for (int j = 0; j < Controls.COMBOS; j++)
+                            if (cfg.comboKey[j] == key) cfg.comboKey[j] = 0;  // (one key, one of them)
+                        cfg.comboKey[k] = key;
+                    }), false);
+        }
+        if (!any) note("None yet: make one in Combos, or with Add in Edit layout.");
     }
 
     private static final String[] MAP_NAMES = {"A", "B", "X", "Y", "L", "R", "ZL", "ZR", "+ (Plus)", "− (Minus)",
@@ -792,37 +812,45 @@ final class SettingsMenu {
 
     // Waits for one controller button (or an analog trigger, or a hat direction) and maps it to Controls.BUTTONS[b]
     private void captureKey(int b) {
+        captureKey(MAP_NAMES[b], cfg.mapKey[b], key -> {
+            for (int i = 0; i < cfg.mapKey.length; i++)
+                if (cfg.mapKey[i] == key) cfg.mapKey[i] = 0;  // (one controller button, one Switch button)
+            cfg.mapKey[b] = key;
+        });
+    }
+
+    // The same for anything a key is mapped to: set gets the key pressed, or 0 for Default (none)
+    private void captureKey(String what, int current, IntConsumer set) {
         final Dialog d = new Dialog(activity);
         d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(12), dp(16), dp(14));
         box.setBackground(plate(PANEL, 2, 0));
-        TextView title = text("Map " + MAP_NAMES[b], 20, GOLD, true);
+        TextView title = text("Map " + what, 20, GOLD, true);
         title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
         box.addView(title);
         box.addView(rule(RED, 2));
         box.addView(rule(GREEN, 1));
-        TextView ask = text("Press the controller button for " + MAP_NAMES[b] + ".", 16, CREAM, false);
+        TextView ask = text("Press the controller button or keyboard key for " + what + ".", 16, CREAM, false);
         ask.setPadding(0, dp(12), 0, dp(4));
         box.addView(ask);
-        box.addView(text(cfg.mapKey[b] == 0 ? "Now: its usual button" : "Now: " + Controls.keyName(cfg.mapKey[b]), 14,
-                DIM, false));
+        box.addView(text(current == 0 ? "Now: none of its own" : "Now: " + Controls.keyName(current), 14, DIM, false));
 
         final boolean[] done = {false};
         final IntConsumer take = key -> {
             if (done[0]) return;
             done[0] = true;
-            for (int i = 0; i < cfg.mapKey.length; i++)
-                if (cfg.mapKey[i] == key) cfg.mapKey[i] = 0;  // (one controller button, one Switch button)
-            cfg.mapKey[b] = key;
+            set.accept(key);
             d.dismiss();
             changed();
             build();
         };
         d.setOnKeyListener((dialog, keyCode, ev) -> {
+            // (a controller's, or a physical keyboard's: not the on-screen one's)
             boolean pad = (ev.getSource() & (InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK
-                    | InputDevice.SOURCE_DPAD)) != 0 && ev.getDevice() != null && !ev.getDevice().isVirtual();
+                    | InputDevice.SOURCE_DPAD | InputDevice.SOURCE_KEYBOARD)) != 0 && ev.getDevice() != null
+                    && !ev.getDevice().isVirtual();
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) return false;
             if (!pad) return keyCode != KeyEvent.KEYCODE_BACK;  // (the back gesture still closes it)
             if (ev.getAction() == KeyEvent.ACTION_UP && ev.getRepeatCount() == 0) take.accept(keyCode);
@@ -850,7 +878,7 @@ final class SettingsMenu {
         TextView usual = button("Default", false);
         usual.setOnClickListener(v -> {
             done[0] = true;
-            cfg.mapKey[b] = 0;
+            set.accept(0);
             d.dismiss();
             changed();
             build();
@@ -889,7 +917,7 @@ final class SettingsMenu {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(12), dp(16), dp(14));
         box.setBackground(plate(PANEL, 2, 0));
-        TextView title = text(Controls.label(c), 20, GOLD, true);
+        TextView title = text(cfg.name(c), 20, GOLD, true);
         title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
         box.addView(title);
         box.addView(rule(RED, 2));
@@ -944,6 +972,27 @@ final class SettingsMenu {
                     "Its own: the usual look (a combo of one button looks like that button)."));
             box.addView(pickRow("Icon", Controls.ICONS, () -> cfg.icon[k], v -> cfg.icon[k] = v,
                     "An icon instead of the button's letters."));
+            final TextView edgeValue = text("", 16, GOLD, false);
+            Runnable showEdge = () -> edgeValue.setText(cfg.outline[k] == 0 ? "None" : cfg.outline[k] + " %");
+            showEdge.run();
+            box.addView(rowView("Outline", edgeValue, "The width of the button's bronze edge (0: none)."));
+            SeekBar edge = new SeekBar(activity);
+            edge.setMax(300);
+            edge.setProgress(cfg.outline[k]);
+            edge.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar bar, int value, boolean user) {
+                    if (!user) return;
+                    cfg.outline[k] = value;
+                    showEdge.run();
+                    changed();
+                }
+                @Override public void onStartTrackingTouch(SeekBar bar) {}
+                @Override public void onStopTrackingTouch(SeekBar bar) {}
+            });
+            edge.setPadding(dp(16), dp(10), dp(16), dp(10));
+            goldBar(edge);
+            box.addView(edge);
             box.addView(pickRow("Colour", Controls.COLORS, () -> cfg.color[k], v -> cfg.color[k] = v,
                     "The button's plate. Clear: only its edge, the game showing through."));
             final TextView labelValue = text("", 16, GOLD, false);
@@ -974,6 +1023,11 @@ final class SettingsMenu {
                 activity.pickImage(c, () -> editControl(c));  // (the dialog again, with the picture)
             }));
             box.addView(imageRow);
+            box.addView(pickRow("Picture shape", new String[] {"Cut to the button", "The picture's own"},
+                    () -> cfg.fit[k] ? 1 : 0, v -> cfg.fit[k] = v != 0,
+                    "Cut to the button: the picture fills the button's shape, with its plate and edge. The picture's own: "
+                            + "only the picture, in its proportions, and only where it's drawn takes touches (a "
+                            + "see-through background doesn't)."));
             box.addView(pickRow("Tap to hold", new String[] {"Off", "On"}, () -> cfg.hold[k] ? 1 : 0, v -> cfg.hold[k] = v != 0,
                     "On: a tap presses it and keeps it pressed until the next tap (a small diamond shows it)."));
             if (c.combo()) {
@@ -1005,6 +1059,7 @@ final class SettingsMenu {
                     cfg.color[copy.ordinal()] = cfg.color[k];
                     cfg.alpha[copy.ordinal()] = cfg.alpha[k];
                     cfg.label[copy.ordinal()] = cfg.label[k];
+                    cfg.outline[copy.ordinal()] = cfg.outline[k];
                     d.dismiss();
                     changed();
                 });
@@ -1067,7 +1122,7 @@ final class SettingsMenu {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(12), dp(16), dp(14));
         box.setBackground(plate(PANEL, 2, 0));
-        TextView title = text("Combo " + (k + 1), 20, GOLD, true);
+        TextView title = text(cfg.comboName(k), 20, GOLD, true);
         title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
         box.addView(title);
         box.addView(rule(RED, 2));

@@ -47,11 +47,69 @@ final class TouchPad extends View {
     private android.graphics.Bitmap bitmap(Ctl c) {
         if (bitmapsVersion != cfg.imageVersion) {
             java.util.Arrays.fill(bitmaps, null);
+            java.util.Arrays.fill(shapes, null);
             for (Ctl x : Ctl.values())
-                if (cfg.image[x.ordinal()]) bitmaps[x.ordinal()] = android.graphics.BitmapFactory.decodeFile(cfg.imageFile(x).getPath());
+                if (cfg.image[x.ordinal()]) {
+                    bitmaps[x.ordinal()] = android.graphics.BitmapFactory.decodeFile(cfg.imageFile(x).getPath());
+                    if (bitmaps[x.ordinal()] != null) shapes[x.ordinal()] = Outline.of(bitmaps[x.ordinal()]);
+                }
             bitmapsVersion = cfg.imageVersion;
         }
         return bitmaps[c.ordinal()];
+    }
+
+    // A picture's own shape, for touches: in each row, the first and the last pixel that isn't (nearly) see-through.
+    // Between them counts as inside, so holes in the picture still take the finger. A picture with too little of it
+    // solid (a thin outline, a faint mark) isn't used as a shape: its square's inscribed circle is, as for others.
+    private static final class Outline {
+        int[] left, right;
+        boolean usable;
+
+        static Outline of(android.graphics.Bitmap b) {
+            Outline o = new Outline();
+            int w = b.getWidth(), h = b.getHeight();
+            o.left = new int[h];
+            o.right = new int[h];
+            int[] row = new int[w];
+            long solid = 0;
+            for (int y = 0; y < h; y++) {
+                b.getPixels(row, 0, w, 0, y, w, 1);
+                int l = -1, r = -1;
+                for (int x = 0; x < w; x++)
+                    if ((row[x] >>> 24) >= 40) {
+                        if (l < 0) l = x;
+                        r = x;
+                    }
+                o.left[y] = l;
+                o.right[y] = r;
+                if (l >= 0) solid += r - l + 1;
+            }
+            o.usable = solid >= (long) w * h * 25 / 100;
+            return o;
+        }
+    }
+    private final Outline[] shapes = new Outline[Ctl.values().length];
+
+    // For a picture in its own shape: the touch inside it (true), outside (false), or no shape to go by (null)
+    private Boolean insidePicture(Ctl c, float x, float y) {
+        if (!cfg.image[c.ordinal()] || !cfg.fit[c.ordinal()]) return null;
+        android.graphics.Bitmap b = bitmap(c);
+        Outline o = shapes[c.ordinal()];
+        if (b == null || o == null || !o.usable) return null;
+        glyphs.fitted(b, cx(c), cy(c), radius(c));
+        RectF box = glyphs.fittedBox();
+        float pad = radius(c) * 0.12f;  // (a little past its edge: a thumb isn't a pixel)
+        if (x < box.left - pad || x > box.right + pad || y < box.top - pad || y > box.bottom + pad) return false;
+        int py = Math.max(0, Math.min(b.getHeight() - 1, (int) ((y - box.top) / box.height() * b.getHeight())));
+        int px = (int) ((x - box.left) / box.width() * b.getWidth());
+        int margin = Math.max(1, (int) (pad / box.width() * b.getWidth()));
+        // (the row itself and its neighbours, so a pointed top or bottom isn't missed)
+        for (int dy = -margin; dy <= margin; dy++) {
+            int yy = py + dy;
+            if (yy < 0 || yy >= b.getHeight() || o.left[yy] < 0) continue;
+            if (px >= o.left[yy] - margin && px <= o.right[yy] + margin) return true;
+        }
+        return false;
     }
 
     private static final int MAX_FINGERS = 10;
@@ -138,6 +196,11 @@ final class TouchPad extends View {
             if (pill) dy *= 2.0f;  // (una pastilla: más ancha que alta)
             float d = shape >= 2 && Controls.isButton(c) ? Math.max(Math.abs(dx), Math.abs(dy))  // (a square)
                                                          : (float) Math.hypot(dx, dy);
+            Boolean picture = insidePicture(c, x, y);
+            if (picture != null) {
+                if (!picture) continue;
+                d = Math.min(d, reach * 0.99f);  // (inside its shape: it counts, nearer its middle first)
+            }
             if (d <= reach && d / reach < bestD) {
                 best = c;
                 bestD = d / reach;
@@ -582,14 +645,14 @@ final class TouchPad extends View {
         boolean down = pressed(ctl) || (latched[ctl.ordinal()] && cfg.hold[ctl.ordinal()] && !editing);
         final int k = ctl.ordinal();
         if (Controls.isButton(ctl) && (cfg.shape[k] != 0 || cfg.icon[k] != 0 || cfg.hold[k] || single(ctl) || cfg.color[k] != 0
-                                       || cfg.label[k] != null || cfg.image[k])) {
+                                       || cfg.label[k] != null || cfg.image[k] || cfg.outline[k] != 100)) {
             // (a button with a look of its own; a combo of one button looks like that button; tap to hold shows a dot)
             int shape = cfg.shape[k];
             if (shape == 0) shape = ctl.combo() && !single(ctl) ? 2 : 1;
             String text = cfg.label[k] != null ? cfg.label[k]
                     : ctl.combo() ? Controls.names(cfg.combo[ctl.comboIndex()]) : buttonText(ctl);
             glyphs.custom(c, x, y, r, shape, cfg.icon[k], text, cfg.hold[k], down, a, Controls.COLOR_FILLS[cfg.color[k]],
-                    cfg.image[k] ? bitmap(ctl) : null);
+                    cfg.image[k] ? bitmap(ctl) : null, cfg.outline[k] / 100f, cfg.fit[k]);
             return;
         }
         switch (ctl) {
@@ -679,7 +742,7 @@ final class TouchPad extends View {
     }
 
     private String label(Ctl c) {
-        String name = Controls.label(c);
+        String name = cfg.name(c);
         return c.combo() || name.length() <= 2 ? name : name.toLowerCase(java.util.Locale.ROOT);
     }
 }

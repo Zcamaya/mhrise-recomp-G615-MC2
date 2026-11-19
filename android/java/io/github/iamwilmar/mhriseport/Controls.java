@@ -102,6 +102,8 @@ final class Controls {
     final int[] color = new int[Ctl.values().length];   // COLORS
     final String[] label = new String[Ctl.values().length];  // its own text instead of its letters (null: none)
     final boolean[] image = new boolean[Ctl.values().length];  // a picture of the player's (imageFile) instead of the drawing
+    final int[] outline = new int[Ctl.values().length];  // the edge's width, % of its usual (0: none)
+    final boolean[] fit = new boolean[Ctl.values().length];  // the picture in its own shape (and touched there), not cut to the button's
     private final java.io.File images;  // where those pictures are kept (the app's own files: they stay)
     int imageVersion;  // goes up when a picture changes (TouchPad loads them again)
     boolean grid = false;  // the layout editor's grid: shown, and what's dragged snaps to it
@@ -111,6 +113,8 @@ final class Controls {
     // (0: the usual one). Analog triggers count as L2 / R2 and a hat as the d-pad keys (android_main.cpp).
     final int[] mapKey = new int[BUTTONS.length];
     final long[] comboPad = new long[COMBOS];  // el botón (o los dos) del mando que lo dispara (0: ninguno)
+    // A controller or keyboard key of any kind that fires it too (an Android keycode; 0: none), as the button mapping
+    final int[] comboKey = new int[COMBOS];
     // El mando físico
     int padDeadzone = 12;   // % del recorrido del stick
     int trigger = 35;       // % del recorrido de un gatillo analógico desde el que cuenta como ZL / ZR
@@ -135,9 +139,25 @@ final class Controls {
             shape[c.ordinal()] = icon[c.ordinal()] = color[c.ordinal()] = 0;
             hold[c.ordinal()] = false;
             alpha[c.ordinal()] = 100;
+            outline[c.ordinal()] = 100;
+            fit[c.ordinal()] = false;
             label[c.ordinal()] = null;  // (pictures stay: Remove takes one away)
         }
     }
+
+    // An added button's name: "Button n" for one of a single button, "Combo n" for several, each counted on its own in
+    // the combos' order (an empty one: "Combo n" by its place)
+    String comboName(int i) {
+        if (combo[i] == 0) return "Empty " + (i + 1);
+        boolean single = Long.bitCount(combo[i]) == 1;
+        int n = 0;
+        for (int k = 0; k <= i; k++)
+            if (combo[k] != 0 && (Long.bitCount(combo[k]) == 1) == single) n++;
+        return (single ? "Button " : "Combo ") + n;
+    }
+
+    // A control's name in the menus (combos by comboName)
+    String name(Ctl c) { return c.combo() ? comboName(c.comboIndex()) : label(c); }
 
     // A control's name in the menus
     static String label(Ctl c) {
@@ -149,7 +169,6 @@ final class Controls {
             case MINUS: return "−";
             case PLUS: return "+";
             default:
-                if (c.combo()) return "Combo " + (c.comboIndex() + 1);
                 return c.name();
         }
     }
@@ -171,6 +190,7 @@ final class Controls {
         for (int i = 0; i < COMBOS; i++) {
             combo[i] = prefs.getLong("combo" + i, 0);
             comboPad[i] = prefs.getLong("combo_mando" + i, 0);
+            comboKey[i] = prefs.getInt("combo_key" + i, 0);
         }
         grid = prefs.getBoolean("grid", grid);
         // "LSTICK:0.12,0.46,1,1,0,0,0;..." (x, y, tamaño, se ve, forma, icono, tap to hold): lo que no esté, como viene
@@ -192,6 +212,10 @@ final class Controls {
                 if (v.length >= 9) {
                     alpha[c.ordinal()] = Math.max(10, Math.min(100, Integer.parseInt(v[7])));
                     color[c.ordinal()] = Math.max(0, Math.min(COLORS.length - 1, Integer.parseInt(v[8])));
+                }
+                if (v.length >= 11) {
+                    outline[c.ordinal()] = Math.max(0, Math.min(300, Integer.parseInt(v[9])));
+                    fit[c.ordinal()] = v[10].equals("1");
                 }
             } catch (RuntimeException ignored) {
                 // (un control que ya no existe, o un número roto: queda el de siempre)
@@ -221,7 +245,8 @@ final class Controls {
             layout.append(c.name()).append(':').append(p[0]).append(',').append(p[1]).append(',').append(p[2]).append(',')
                     .append(shown[c.ordinal()] ? '1' : '0').append(',').append(shape[c.ordinal()]).append(',')
                     .append(icon[c.ordinal()]).append(',').append(hold[c.ordinal()] ? '1' : '0').append(',')
-                    .append(alpha[c.ordinal()]).append(',').append(color[c.ordinal()]).append(';');
+                    .append(alpha[c.ordinal()]).append(',').append(color[c.ordinal()]).append(',')
+                    .append(outline[c.ordinal()]).append(',').append(fit[c.ordinal()] ? '1' : '0').append(';');
         }
         SharedPreferences.Editor e = prefs.edit();
         e.putBoolean("tactil", touchOn).putInt("opacidad", opacity).putInt("tamano", size).putInt("vibracion", vibration)
@@ -229,7 +254,8 @@ final class Controls {
                 .putInt("zona_mando", padDeadzone).putInt("gatillo", trigger).putInt("stick_derecho", rightAxes)
                 .putBoolean("camera_swipe", cameraSwipe).putInt("swipe_speed", swipeSpeed).putBoolean("grid", grid)
                 .putString("disposicion", layout.toString()).putInt("layout_version", 2);
-        for (int i = 0; i < COMBOS; i++) e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]);
+        for (int i = 0; i < COMBOS; i++)
+            e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]).putInt("combo_key" + i, comboKey[i]);
         for (Ctl c : Ctl.values()) {
             String l = label[c.ordinal()];
             if (l == null || l.isEmpty()) e.remove("label_" + c.name());
@@ -273,9 +299,10 @@ final class Controls {
             org.json.JSONObject e = new org.json.JSONObject();
             e.put("x", place[k][0]).put("y", place[k][1]).put("scale", place[k][2]).put("shown", shown[k])
                     .put("shape", shape[k]).put("icon", icon[k]).put("hold", hold[k]).put("alpha", alpha[k])
-                    .put("color", color[k]).put("image", image[k]);
+                    .put("color", color[k]).put("image", image[k]).put("outline", outline[k]).put("fit", fit[k]);
             if (label[k] != null) e.put("label", label[k]);
-            if (c.combo()) e.put("buttons", combo[c.comboIndex()]).put("pad", comboPad[c.comboIndex()]);
+            if (c.combo())
+                e.put("buttons", combo[c.comboIndex()]).put("pad", comboPad[c.comboIndex()]).put("key", comboKey[c.comboIndex()]);
             controls.put(c.name(), e);
         }
         o.put("controls", controls);
@@ -316,9 +343,12 @@ final class Controls {
             alpha[k] = clampInt(e.optInt("alpha", 100), 10, 100);
             color[k] = clampInt(e.optInt("color", 0), 0, COLORS.length - 1);
             label[k] = e.has("label") ? e.getString("label") : null;
+            outline[k] = clampInt(e.optInt("outline", 100), 0, 300);
+            fit[k] = e.optBoolean("fit", false);
             if (c.combo()) {
                 combo[c.comboIndex()] = e.optLong("buttons", 0);
                 comboPad[c.comboIndex()] = e.optLong("pad", 0);
+                comboKey[c.comboIndex()] = e.optInt("key", 0);
             }
         }
     }
@@ -373,12 +403,17 @@ final class Controls {
 
     // The button mapping for the loader: pairs (keycode, the buttons it presses)
     long[] padMapping() {
-        long[] out = new long[BUTTONS.length * 2];
+        long[] out = new long[(BUTTONS.length + COMBOS) * 2];
         int n = 0;
         for (int i = 0; i < BUTTONS.length; i++) {
             if (mapKey[i] == 0) continue;
             out[n++] = mapKey[i];
             out[n++] = BUTTONS[i];
+        }
+        for (int i = 0; i < COMBOS; i++) {  // (an added button's or a combo's key: it presses all of its buttons)
+            if (comboKey[i] == 0 || combo[i] == 0) continue;
+            out[n++] = comboKey[i];
+            out[n++] = combo[i];
         }
         return java.util.Arrays.copyOf(out, n);
     }

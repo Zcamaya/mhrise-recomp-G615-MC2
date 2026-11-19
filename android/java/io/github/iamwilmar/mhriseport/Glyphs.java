@@ -223,22 +223,33 @@ final class Glyphs {
     // plateColor: a fill instead of the wine (0: the wine); picture: the player's image, filling the shape (with it the
     // letters and icon aren't drawn; pressed, it's tinted gold)
     void custom(Canvas c, float cx, float cy, float r, int shape, int icon, String text, boolean hold, boolean pressed,
-                int alpha, int plateColor, android.graphics.Bitmap picture) {
-        plate(alpha, pressed, r * 0.07f);
+                int alpha, int plateColor, android.graphics.Bitmap picture, float outline, boolean ownShape) {
+        plate(alpha, pressed, r * 0.07f * outline);
         if (plateColor != 0 && !pressed) fill.setColor(withAlpha(plateColor, alpha * 9 / 10));
         float round = shape == 1 ? r : shape == 2 ? r * 0.38f : r * 0.08f;
         box.set(cx - r, cy - r, cx + r, cy + r);
-        if (plateColor != 0 || pressed || picture == null) c.drawRoundRect(box, round, round, fill);
-        if (picture != null) {  // (clipped to the shape)
-            path.reset();
-            path.addRoundRect(box, round, round, Path.Direction.CW);
-            c.save();
-            c.clipPath(path);
-            imagePaint.setAlpha(pressed ? alpha * 6 / 10 : alpha);
+        if (picture != null && ownShape) {
+            // (the picture alone, in its own shape and proportions inside the button's square: no plate, no edge; pressed
+            // it darkens)
+            fitted(picture, cx, cy, r);
+            imagePaint.setAlpha(alpha);
+            imagePaint.setColorFilter(pressed ? new android.graphics.PorterDuffColorFilter(0x90281010,
+                    android.graphics.PorterDuff.Mode.SRC_ATOP) : null);
             c.drawBitmap(picture, null, box, imagePaint);
-            c.restore();
+            imagePaint.setColorFilter(null);
+        } else {
+            if (plateColor != 0 || pressed || picture == null) c.drawRoundRect(box, round, round, fill);
+            if (picture != null) {  // (clipped to the shape)
+                path.reset();
+                path.addRoundRect(box, round, round, Path.Direction.CW);
+                c.save();
+                c.clipPath(path);
+                imagePaint.setAlpha(pressed ? alpha * 6 / 10 : alpha);
+                c.drawBitmap(picture, null, box, imagePaint);
+                c.restore();
+            }
+            if (outline > 0) c.drawRoundRect(box, round, round, edge);
         }
-        c.drawRoundRect(box, round, round, edge);
         int color = inkColor(alpha, pressed);
         if (picture != null) {
             // (the picture is the label)
@@ -260,6 +271,13 @@ final class Glyphs {
             c.drawPath(path, ink);
         }
     }
+
+    // Where a picture in its own shape goes: as large as fits a 2r square, its proportions kept, centred (in box)
+    void fitted(android.graphics.Bitmap picture, float cx, float cy, float r) {
+        float w = picture.getWidth(), h = picture.getHeight(), k = 2 * r / Math.max(w, h);
+        box.set(cx - w * k / 2, cy - h * k / 2, cx + w * k / 2, cy + h * k / 2);
+    }
+    RectF fittedBox() { return box; }
 
     // The icons: plain shapes drawn with paths, s half their size
     private void icon(Canvas c, float cx, float cy, float s, int icon, int color) {

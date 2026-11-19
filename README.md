@@ -125,13 +125,16 @@ may stutter while its shaders are translated and compiled; they are cached for t
   - *Edit layout:* drag each control where you want it, change its size or hide it from the bar at the top, or put the
     traditional layout back. *Edit* opens the chosen control: a size slider and, for a button, its shape (circle,
     rounded square, square), an icon instead of its letters, and *Tap to hold* (a tap keeps it pressed until the next
-    tap), its own opacity, a plate colour, your own label, and a picture of yours instead of its drawing (any image:
-    the app keeps a 256-pixel copy). *Add* makes a new button and *Copy as a new button* another of a console button;
+    tap), its own opacity and outline width, a plate colour, your own label, and a picture of yours instead of its
+    drawing (any image: the app keeps a 256-pixel copy), either cut to the button's shape or in its own shape, where
+    only the picture itself takes touches. *Add* makes a new button and *Copy as a new button* another of a console button;
     both are combos, so a controller button can fire them too. *Grid* shows a grid and snaps what you drag to it.
   - *Export layout* / *Import layout:* the whole touch layout in a `.zip` (`layout.json` and the pictures), to keep or
     to share; places are fractions of the screen, so it fits another phone.
   - *Combos:* up to eight. Each presses several buttons at once (A+X, say), from its own button on the screen and, if you
-    choose one, from a controller button or a pair of them (L3, −+R…). A combo of one button looks like that button.
+    choose one, from a controller button or a pair of them (L3, −+R…). One of a single button is called *Button n* and
+    looks like that button; one of several, *Combo n*. Under *Controller → Added buttons and combos* each can also get
+    any key of a controller or a keyboard.
   - *Controller:* the sticks' dead zone, how far an analog trigger travels before it is ZL / ZR, and where the right stick
     is read from. *By controller* picks Z/RZ or RX/RY from the axes each pad says it has, with triggers on LTRIGGER /
     RTRIGGER, BRAKE / GAS or Z/RZ, so Xbox, DualSense and generic pads all work. The log says what it chose for each pad.
