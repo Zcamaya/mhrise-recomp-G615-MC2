@@ -89,6 +89,8 @@ struct Texture {
     // Último frame del ejecutor en que fue render target, y si también lo fue en uno de los dos anteriores (se redibuja
     // cada frame: un draw que no se dibuje uno de ellos sale en el siguiente; ver las pipelines en segundo plano).
     uint64_t rt_frame = 0;
+    uint64_t gpu_write_frame = 0;  // last executor frame the GPU wrote it (any way)
+    uint32_t returned = 0;         // times its level 0 went back to its memory (linear: the CPU reads it, executor.cpp)
     bool rt_recurring = false;
     bool storage_image = false;  // la imagen se creó con STORAGE: se puede enlazar como imagen (ejecutor)
     bool uploaded = false;

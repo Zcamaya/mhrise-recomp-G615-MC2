@@ -2121,10 +2121,26 @@ private:
     // el primer draw de cada cascada, píxel 08ab44f0a529a808): en la cascada 0 los árboles solo salían en rectángulos.
     // Una línea por espejo y tipo de escritura, siempre (es una búsqueda en un map de ~50); de los de menos de 16 MB, 32.
     void note_gpu_write_vs_mirrors(uint64_t address, uint64_t size, const char* what);
-    void note_texture_gpu_write(const Texture& t, const char* what) {
+    void note_texture_gpu_write(Texture& t, const char* what) {
         if (t.storage && !mirrors_.empty())
             note_gpu_write_vs_mirrors(reinterpret_cast<uintptr_t>(t.storage), t.layout.total_size(), what);
+        t.gpu_write_frame = frame_;
+        if (t.layout.linear && t.storage && t.returned < kReturnLinearMax &&
+            std::find(linear_written_.begin(), linear_written_.end(), &t) == linear_written_.end()) {
+            linear_written_.push_back(&t);
+            static int logged = 0;
+            if (logged++ < 16)
+                NVN_LOG("linear texture %dx%d format 0x%x written by the GPU (%s): goes back to its memory at %p\n",
+                        t.desc.width, t.desc.height, t.desc.format, what, static_cast<void*>(t.storage));
+        }
     }
+    // Linear textures the GPU wrote in this submit. On the Switch a linear texture is how the CPU reads a picture back
+    // (the photo mode copies the frame into one and encodes it from its memory); here what the GPU writes stays in the
+    // Vulkan image, so the photos came out black. Their level 0 goes back to the memory at the end of the submit. One that
+    // keeps being written (more than kReturnLinearMax times) stops: that one isn't for the CPU.
+    std::vector<Texture*> linear_written_;
+    static constexpr uint32_t kReturnLinearMax = 600;
+    void return_linear_textures();
     uint64_t mirror_bytes_ = 0, prof_mirror_bytes_ = 0, prof_mirrors_direct_ = 0, prof_direct_bytes_ = 0;
     // may_upload = false (con el render pass ya empezado): solo uno revisado en este envío.
     const Mirror* mirror(uint64_t address, uint64_t size, VkDeviceSize* offset, bool may_upload = true);
@@ -3564,6 +3580,7 @@ void Executor::run(const std::vector<const CommandList*>& lists) {
             apply(lists[cur_list_]->commands[cur_index_]);
     run_lists_ = nullptr;
     finish();
+    if (!linear_written_.empty()) return_linear_textures();
     const uint64_t run_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     prof_run_us_ += run_ns / 1000;
     frame_run_ns_ += run_ns;
@@ -11863,12 +11880,60 @@ void Executor::dump_frame(Texture* presented) {
             it = frame_ - it->second.frame > 2 ? culled_draws_.erase(it) : std::next(it);
 }
 
+void Executor::return_linear_textures() {
+    struct Copy {
+        Texture* t;
+        Staging::Alloc a;
+        uint32_t row;
+    };
+    std::vector<Copy> copies;
+    begin();
+    for (Texture* t : linear_written_) {
+        const FormatInfo* f = format_info(t->desc.format);
+        if (!t->image || !t->storage || !f || f->block != 1 || f->bytes != t->layout.bytes_per_block || t->bcn || t->astc ||
+            !(t->aspect & VK_IMAGE_ASPECT_COLOR_BIT) || t->layout.levels.empty() || t->desc.samples > 1)
+            continue;
+        const LevelLayout& l = t->layout.levels[0];
+        const uint32_t row = l.width * f->bytes;
+        if (t->layout.stride < row || VkDeviceSize{row} * l.height > kStagingChunk) continue;
+        flush_clears(t);
+        Staging::Alloc a = staging_->alloc(VkDeviceSize{row} * l.height, 16);
+        if (!a.data) continue;
+        copies.push_back({t, a, row});
+    }
+    linear_written_.clear();
+    if (copies.empty()) {
+        finish();
+        return;
+    }
+    barrier();
+    for (const Copy& c : copies) {
+        VkBufferImageCopy r{};
+        r.bufferOffset = c.a.offset;
+        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        r.imageExtent = {c.t->layout.levels[0].width, c.t->layout.levels[0].height, 1};
+        note_gpu_work();
+        vkCmdCopyImageToBuffer(cmd_, c.t->image, VK_IMAGE_LAYOUT_GENERAL, c.a.buffer, 1, &r);
+    }
+    finish(true);  // (the CPU reads it once its sync is signalled: it has to be there by then)
+    for (const Copy& c : copies) {
+        Texture& t = *c.t;
+        const LevelLayout& l = t.layout.levels[0];
+        uint8_t* dst = t.storage + l.offset;
+        nnsdk::watch::before_kernel_write(dst, size_t{t.layout.stride} * l.height);
+        for (uint32_t y = 0; y < l.height; y++) memcpy(dst + size_t{y} * t.layout.stride, c.a.data + size_t{y} * c.row, c.row);
+        if (++t.returned == kReturnLinearMax)
+            NVN_LOG("linear texture %dx%d went back to its memory %u times: no more (it isn't for the CPU)\n", t.desc.width,
+                    t.desc.height, t.returned);
+    }
+}
+
 // What holds a range of the game's memory on our side: a GPU buffer (overlay) and whether it goes back to the memory,
 // or a texture's storage. For the album (album.cpp): a photo that comes out black says from where it was read.
 std::string Executor::describe_memory(uint64_t address, uint64_t size) {
     std::lock_guard lock(g_mutex);
     std::string out;
-    char line[256];
+    char line[384];
     for (auto it = overlays_.upper_bound(address + size); it != overlays_.begin();) {
         --it;
         const Overlay& o = it->second;
@@ -11880,6 +11945,15 @@ std::string Executor::describe_memory(uint64_t address, uint64_t size) {
     }
     const auto* p = reinterpret_cast<const uint8_t*>(address);
     g_textures.find_if([&](const void*, Texture& t) {
+        // And what the GPU wrote lately at that size or smaller, linear or not: where a photo could be read from
+        if (t.storage && t.gpu_write_frame + 300 > frame_ && t.desc.width >= 174 && t.desc.width <= 1280 &&
+            t.desc.height >= 174 && t.desc.height <= 960 && (t.desc.width == 1280 || t.desc.width == t.desc.height)) {
+            snprintf(line, sizeof line, "\n  lately written by the GPU: %dx%d format 0x%x %s at %p (frame %llu of %llu, back to "
+                     "memory %u times)", t.desc.width, t.desc.height, t.desc.format, t.layout.linear ? "linear" : "block-linear",
+                     static_cast<void*>(t.storage), static_cast<unsigned long long>(t.gpu_write_frame),
+                     static_cast<unsigned long long>(frame_), t.returned);
+            out += line;
+        }
         if (t.storage && p < t.storage + t.layout.total_size() && t.storage < p + size) {
             snprintf(line, sizeof line, " texture %dx%d format 0x%x %s%s at +%lld", t.desc.width, t.desc.height,
                      t.desc.format, t.layout.linear ? "linear" : "block-linear", t.gpu_written ? ", written by the GPU" : "",
