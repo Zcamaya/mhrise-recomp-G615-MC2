@@ -31,7 +31,8 @@ final class Controls {
     // Los controles en pantalla. Cada uno: dónde está su centro (fracción del ancho y del alto de la pantalla), su tamaño
     // (1: el suyo) y si se ve.
     enum Ctl {
-        LSTICK, RSTICK, DPAD, A, B, X, Y, L, R, ZL, ZR, MINUS, PLUS, L3, R3, MENU, COMBO1, COMBO2, COMBO3, COMBO4;
+        LSTICK, RSTICK, DPAD, A, B, X, Y, L, R, ZL, ZR, MINUS, PLUS, L3, R3, MENU, COMBO1, COMBO2, COMBO3, COMBO4,
+        COMBO5, COMBO6, COMBO7, COMBO8;
 
         boolean combo() { return ordinal() >= COMBO1.ordinal(); }
         int comboIndex() { return ordinal() - COMBO1.ordinal(); }
@@ -61,9 +62,23 @@ final class Controls {
         {0.69f, 0.56f, 1}, // COMBO2
         {0.62f, 0.36f, 1}, // COMBO3
         {0.62f, 0.56f, 1}, // COMBO4
+        {0.55f, 0.36f, 1}, // COMBO5
+        {0.55f, 0.56f, 1}, // COMBO6
+        {0.48f, 0.36f, 1}, // COMBO7
+        {0.48f, 0.56f, 1}, // COMBO8
     };
 
-    static final int COMBOS = 4;
+    // Combos are also the layout editor's added buttons (Add, or Copy as a new button): every button on the screen
+    // that isn't one of the console's is a combo, so a controller button can always fire it too.
+    static final int COMBOS = 8;
+
+    // A button's look in the layout editor: its shape (0 its own) and an icon instead of its letters (0 none)
+    static final String[] SHAPES = {"Its own", "Circle", "Rounded square", "Square"};
+    // Plate colours a button can have instead of the game's wine (0), and their fills
+    static final String[] COLORS = {"Wine (the game's)", "Black", "Crimson", "Navy", "Forest", "Purple", "Slate", "Clear"};
+    static final int[] COLOR_FILLS = {0, 0xFF101010, 0xFF8A1420, 0xFF14285A, 0xFF1E4A22, 0xFF4A1E5A, 0xFF3C4650, 0x01000000};  // (clear: no plate, the edge only)
+    static final String[] ICONS = {"None (letters)", "Arrow up", "Arrow down", "Arrow left", "Arrow right", "Star",
+            "Diamond", "Shield", "Blade", "Crosshair", "Dash"};
     // Los botones del mando que pueden disparar un combo, en el orden en que el menú los recorre (0: ninguno).
     static final long[] PAD_TRIGGERS = {0, LSTICK, RSTICK, LSTICK | RSTICK, MINUS, PLUS, MINUS | PLUS, L | R, ZL | ZR, L | ZL,
                                         R | ZR, MINUS | L, MINUS | R, PLUS | L, PLUS | R};
@@ -80,6 +95,16 @@ final class Controls {
     int swipeSpeed = 100;       // %: how far the camera turns for a drag
     final float[][] place = new float[Ctl.values().length][3];
     final boolean[] shown = new boolean[Ctl.values().length];
+    final int[] shape = new int[Ctl.values().length];  // SHAPES
+    final int[] icon = new int[Ctl.values().length];   // ICONS
+    final boolean[] hold = new boolean[Ctl.values().length];  // tap to hold: a tap presses it, the next tap lets go
+    final int[] alpha = new int[Ctl.values().length];   // % of the overall opacity (100: as the others)
+    final int[] color = new int[Ctl.values().length];   // COLORS
+    final String[] label = new String[Ctl.values().length];  // its own text instead of its letters (null: none)
+    final boolean[] image = new boolean[Ctl.values().length];  // a picture of the player's (imageFile) instead of the drawing
+    private final java.io.File images;  // where those pictures are kept (the app's own files: they stay)
+    int imageVersion;  // goes up when a picture changes (TouchPad loads them again)
+    boolean grid = false;  // the layout editor's grid: shown, and what's dragged snaps to it
     // Los combos
     final long[] combo = new long[COMBOS];     // los botones que pulsa (0: ninguno, y no sale en pantalla)
     // Button mapping: the controller key (an Android keycode) that presses each of BUTTONS instead of its own
@@ -95,6 +120,7 @@ final class Controls {
 
     Controls(Context context) {
         prefs = context.getSharedPreferences("controles", Context.MODE_PRIVATE);
+        images = new java.io.File(context.getFilesDir(), "touch_images");
         resetLayout();
         load();
     }
@@ -106,6 +132,10 @@ final class Controls {
         for (Ctl c : Ctl.values()) {
             place[c.ordinal()] = HOME[c.ordinal()].clone();
             shown[c.ordinal()] = shownByDefault(c);
+            shape[c.ordinal()] = icon[c.ordinal()] = color[c.ordinal()] = 0;
+            hold[c.ordinal()] = false;
+            alpha[c.ordinal()] = 100;
+            label[c.ordinal()] = null;  // (pictures stay: Remove takes one away)
         }
     }
 
@@ -142,7 +172,8 @@ final class Controls {
             combo[i] = prefs.getLong("combo" + i, 0);
             comboPad[i] = prefs.getLong("combo_mando" + i, 0);
         }
-        // "LSTICK:0.12,0.46,1,1;..." (x, y, tamaño, se ve): lo que no esté, como viene
+        grid = prefs.getBoolean("grid", grid);
+        // "LSTICK:0.12,0.46,1,1,0,0,0;..." (x, y, tamaño, se ve, forma, icono, tap to hold): lo que no esté, como viene
         for (String item : prefs.getString("disposicion", "").split(";")) {
             String[] kv = item.split(":");
             if (kv.length != 2) continue;
@@ -153,9 +184,22 @@ final class Controls {
                 place[c.ordinal()][1] = Float.parseFloat(v[1]);
                 place[c.ordinal()][2] = Float.parseFloat(v[2]);
                 shown[c.ordinal()] = v.length < 4 || !v[3].equals("0");
+                if (v.length >= 7) {  // (look and tap to hold: layouts from before them have neither)
+                    shape[c.ordinal()] = Math.max(0, Math.min(SHAPES.length - 1, Integer.parseInt(v[4])));
+                    icon[c.ordinal()] = Math.max(0, Math.min(ICONS.length - 1, Integer.parseInt(v[5])));
+                    hold[c.ordinal()] = v[6].equals("1");
+                }
+                if (v.length >= 9) {
+                    alpha[c.ordinal()] = Math.max(10, Math.min(100, Integer.parseInt(v[7])));
+                    color[c.ordinal()] = Math.max(0, Math.min(COLORS.length - 1, Integer.parseInt(v[8])));
+                }
             } catch (RuntimeException ignored) {
                 // (un control que ya no existe, o un número roto: queda el de siempre)
             }
+        }
+        for (Ctl c : Ctl.values()) {
+            label[c.ordinal()] = prefs.getString("label_" + c.name(), null);
+            image[c.ordinal()] = new java.io.File(images, c.name() + ".png").isFile();
         }
         // Layouts saved before camera swipe had the right stick on: hide it once, like a new install
         if (prefs.getInt("layout_version", 1) < 2) shown[Ctl.RSTICK.ordinal()] = false;
@@ -175,17 +219,141 @@ final class Controls {
         for (Ctl c : Ctl.values()) {
             float[] p = place[c.ordinal()];
             layout.append(c.name()).append(':').append(p[0]).append(',').append(p[1]).append(',').append(p[2]).append(',')
-                    .append(shown[c.ordinal()] ? '1' : '0').append(';');
+                    .append(shown[c.ordinal()] ? '1' : '0').append(',').append(shape[c.ordinal()]).append(',')
+                    .append(icon[c.ordinal()]).append(',').append(hold[c.ordinal()] ? '1' : '0').append(',')
+                    .append(alpha[c.ordinal()]).append(',').append(color[c.ordinal()]).append(';');
         }
         SharedPreferences.Editor e = prefs.edit();
         e.putBoolean("tactil", touchOn).putInt("opacidad", opacity).putInt("tamano", size).putInt("vibracion", vibration)
                 .putBoolean("deslizar", slide).putInt("zona_tactil", touchDeadzone).putBoolean("toque_stick", stickPress)
                 .putInt("zona_mando", padDeadzone).putInt("gatillo", trigger).putInt("stick_derecho", rightAxes)
-                .putBoolean("camera_swipe", cameraSwipe).putInt("swipe_speed", swipeSpeed)
+                .putBoolean("camera_swipe", cameraSwipe).putInt("swipe_speed", swipeSpeed).putBoolean("grid", grid)
                 .putString("disposicion", layout.toString()).putInt("layout_version", 2);
         for (int i = 0; i < COMBOS; i++) e.putLong("combo" + i, combo[i]).putLong("combo_mando" + i, comboPad[i]);
+        for (Ctl c : Ctl.values()) {
+            String l = label[c.ordinal()];
+            if (l == null || l.isEmpty()) e.remove("label_" + c.name());
+            else e.putString("label_" + c.name(), l);
+        }
         for (int i = 0; i < BUTTONS.length; i++) e.putInt("map_key" + i, mapKey[i]);
         return e;
+    }
+
+    // A control's picture (a PNG the app made from the player's image, at most 256 pixels a side)
+    java.io.File imageFile(Ctl c) { return new java.io.File(images, c.name() + ".png"); }
+
+    void setImage(Ctl c, android.graphics.Bitmap bitmap) throws java.io.IOException {
+        images.mkdirs();
+        java.io.File tmp = new java.io.File(images, c.name() + ".png.new");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+            if (!bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)) throw new java.io.IOException("PNG");
+        }
+        if (!tmp.renameTo(imageFile(c))) throw new java.io.IOException("rename");
+        image[c.ordinal()] = true;
+        imageVersion++;
+    }
+
+    void clearImage(Ctl c) {
+        imageFile(c).delete();
+        image[c.ordinal()] = false;
+        imageVersion++;
+    }
+
+    // ---- export / import (a .zip: layout.json and the pictures) ---------------------------------------------------------
+
+    // Everything about the touch controls: what shows, where, how it looks, the combos and their controller buttons
+    org.json.JSONObject toJson() throws org.json.JSONException {
+        org.json.JSONObject o = new org.json.JSONObject();
+        o.put("format", "mhrise-touch-layout").put("version", 1);
+        o.put("opacity", opacity).put("size", size).put("slide", slide).put("stickPress", stickPress)
+                .put("cameraSwipe", cameraSwipe).put("swipeSpeed", swipeSpeed).put("touchDeadzone", touchDeadzone);
+        org.json.JSONObject controls = new org.json.JSONObject();
+        for (Ctl c : Ctl.values()) {
+            int k = c.ordinal();
+            org.json.JSONObject e = new org.json.JSONObject();
+            e.put("x", place[k][0]).put("y", place[k][1]).put("scale", place[k][2]).put("shown", shown[k])
+                    .put("shape", shape[k]).put("icon", icon[k]).put("hold", hold[k]).put("alpha", alpha[k])
+                    .put("color", color[k]).put("image", image[k]);
+            if (label[k] != null) e.put("label", label[k]);
+            if (c.combo()) e.put("buttons", combo[c.comboIndex()]).put("pad", comboPad[c.comboIndex()]);
+            controls.put(c.name(), e);
+        }
+        o.put("controls", controls);
+        return o;
+    }
+
+    // After an import put the pictures in place (or took them away)
+    void rescanImages() {
+        for (Ctl c : Ctl.values()) image[c.ordinal()] = imageFile(c).isFile();
+        imageVersion++;
+    }
+
+    java.io.File imagesDir() { return images; }
+
+    // What toJson wrote (another phone's too: places are fractions of the screen). Unknown controls are skipped and
+    // missing ones keep their place; the pictures are put in place by the caller.
+    void fromJson(org.json.JSONObject o) throws org.json.JSONException {
+        if (!"mhrise-touch-layout".equals(o.optString("format"))) throw new org.json.JSONException("not a layout");
+        opacity = clampInt(o.optInt("opacity", opacity), 20, 100);
+        size = clampInt(o.optInt("size", size), 60, 160);
+        slide = o.optBoolean("slide", slide);
+        stickPress = o.optBoolean("stickPress", stickPress);
+        cameraSwipe = o.optBoolean("cameraSwipe", cameraSwipe);
+        swipeSpeed = clampInt(o.optInt("swipeSpeed", swipeSpeed), 25, 300);
+        touchDeadzone = clampInt(o.optInt("touchDeadzone", touchDeadzone), 0, 50);
+        org.json.JSONObject controls = o.getJSONObject("controls");
+        for (Ctl c : Ctl.values()) {
+            org.json.JSONObject e = controls.optJSONObject(c.name());
+            if (e == null) continue;
+            int k = c.ordinal();
+            place[k][0] = (float) Math.max(0.02, Math.min(0.98, e.optDouble("x", place[k][0])));
+            place[k][1] = (float) Math.max(0.03, Math.min(0.97, e.optDouble("y", place[k][1])));
+            place[k][2] = (float) Math.max(0.5, Math.min(2.5, e.optDouble("scale", place[k][2])));
+            shown[k] = e.optBoolean("shown", shown[k]);
+            shape[k] = clampInt(e.optInt("shape", 0), 0, SHAPES.length - 1);
+            icon[k] = clampInt(e.optInt("icon", 0), 0, ICONS.length - 1);
+            hold[k] = e.optBoolean("hold", false);
+            alpha[k] = clampInt(e.optInt("alpha", 100), 10, 100);
+            color[k] = clampInt(e.optInt("color", 0), 0, COLORS.length - 1);
+            label[k] = e.has("label") ? e.getString("label") : null;
+            if (c.combo()) {
+                combo[c.comboIndex()] = e.optLong("buttons", 0);
+                comboPad[c.comboIndex()] = e.optLong("pad", 0);
+            }
+        }
+    }
+
+    private static int clampInt(int v, int lo, int hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    // The console buttons a touch button presses (0: a stick, the d-pad, the menu, or an empty combo)
+    long buttons(Ctl c) {
+        switch (c) {
+            case A: return A;
+            case B: return B;
+            case X: return X;
+            case Y: return Y;
+            case L: return L;
+            case R: return R;
+            case ZL: return ZL;
+            case ZR: return ZR;
+            case MINUS: return MINUS;
+            case PLUS: return PLUS;
+            case L3: return LSTICK;
+            case R3: return RSTICK;
+            default: return c.combo() ? combo[c.comboIndex()] : 0;
+        }
+    }
+
+    // A button whose look and tap to hold can be changed (not the sticks, the d-pad or the menu)
+    static boolean isButton(Ctl c) {
+        return c != null && c != Ctl.LSTICK && c != Ctl.RSTICK && c != Ctl.DPAD && c != Ctl.MENU;
+    }
+
+    // The first combo with no buttons (-1: all taken)
+    int freeCombo() {
+        for (int i = 0; i < COMBOS; i++)
+            if (combo[i] == 0) return i;
+        return -1;
     }
 
     // Los combos del mando para el loader: pares (botones del mando, botones que pulsa), los de dos botones primero

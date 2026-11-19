@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "nnsdk/nvn/lsfg/dll.h"
+#include "nnsdk/nvn/lsfg/generator.h"
 #include "nnsdk/nvn/vk.h"
 
 namespace nvn::lsfg {
@@ -47,22 +48,12 @@ private:
     std::map<uint32_t, Pass> passes_;
 };
 
-struct Image {
-    VkImage image = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    VkExtent2D extent{};
-    VkFormat format = VK_FORMAT_UNDEFINED, view_format = VK_FORMAT_UNDEFINED;
-    VkImageUsageFlags usage = 0;
-    VkImageCreateFlags flags = 0;
-    VkDeviceSize offset = 0;
-};
-
-class Chain {
+class Chain final : public Generator {
 public:
     Chain() = default;
     Chain(const Chain&) = delete;
     Chain& operator=(const Chain&) = delete;
-    ~Chain() { destroy(); }
+    ~Chain() override { destroy(); }
 
     // Para una ventana de ese tamaño y formato y una escala del flujo óptico (0.5 o 1.0). Todo en una reserva de
     // memoria. false con el motivo (y nada creado) si falla.
@@ -70,21 +61,22 @@ public:
     void destroy();
 
     // La primera vez que se graba: todas las imágenes a GENERAL y la imagen vacía a cero.
-    bool initialized() const { return initialized_; }
-    void record_init(VkCommandBuffer cmd);
+    const char* name() const override { return "LSFG"; }
+    bool initialized() const override { return initialized_; }
+    void record_init(VkCommandBuffer cmd) override;
     // Frame real n: su copia va en input(n). Las pasadas compartidas (mipmaps, alpha, beta) piden la copia de n;
     // la generación, además, las compartidas de n, n-1 y n-2. Deja G(n-1, n) en output().
-    const Image& input(uint64_t n) const { return frames_[n % 2]; }
-    const Image& output() const { return output_; }
-    void record_shared(VkCommandBuffer cmd, uint64_t n) const;
-    void record_generate(VkCommandBuffer cmd, uint64_t n) const;
+    const Image& input(uint64_t n) const override { return frames_[n % 2]; }
+    const Image& output() const override { return output_; }
+    void record_shared(VkCommandBuffer cmd, uint64_t n) const override;
+    void record_generate(VkCommandBuffer cmd, uint64_t n) const override;
 
-    VkExtent2D extent() const { return extent_; }
-    VkFormat format() const { return format_; }
-    float flow() const { return flow_; }
-    size_t images() const { return all_.size(); }
-    VkDeviceSize bytes() const { return bytes_; }
-    uint32_t sets() const { return set_count_; }
+    VkExtent2D extent() const override { return extent_; }
+    VkFormat format() const override { return format_; }
+    float flow() const override { return flow_; }
+    size_t images() const override { return all_.size(); }
+    VkDeviceSize bytes() const override { return bytes_; }
+    uint32_t sets() const override { return set_count_; }
 
 private:
     struct Alpha {

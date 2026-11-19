@@ -1,6 +1,6 @@
 // nn::ldn (Local Play) over IP. The phone has no radio that speaks the Switch's protocol, so a network the game creates
 // is a TCP service instead, reached two ways:
-//  - through hub servers, the ones MHGU for Android uses (server/ in its repository): a created network is listed
+//  - through hub servers (the protocol of MHGU for Android's server/): a created network is listed
 //    there for players with the same matchmaking key, the game's Scan shows the listed ones, and Connect joins one
 //    through the server, which splices the player's connection to one the host opens for it. Nobody forwards a port.
 //    Hubs are listed under this port's own link protocol (kLinkProtocol), so MH Rise only ever sees MH Rise hubs.
@@ -11,7 +11,7 @@
 // loopback helper (ldn_net.h).
 //
 // Settings (the game folder, written by the app's Multiplayer settings): hub_servers (one host[:port] per line;
-// missing: the two default servers; "off": none), hub_key (the matchmaking key: only its SHA-256 is sent), hub_hosts,
+// "#" in front: kept in the list but not used; missing: the default server; "off": none), hub_key (the matchmaking key: only its SHA-256 is sent), hub_hosts,
 // hub_port. Read when a network is created or searched for.
 //
 // Server control frames: u32 size (of what follows), u8 type, payload, little endian. The first one has a header:
@@ -138,7 +138,9 @@ constexpr uint16_t kServerProtocol = 1;
 constexpr uint16_t kLinkProtocol = 0x5201;  // 'R', 1: MH Rise's hubs, apart from MHGU's (2, 3) and MH4U's (0x4D01)
 constexpr uint16_t kLinkVersion = 1;
 constexpr uint16_t kDefaultPort = 39510;
-constexpr const char* kDefaultServers[] = {"hunterhubid-gu-hub.duckdns.org", "morerokk-mhgurecomp-ldnserver.duckdns.org"};
+// (Not the MHGU hub servers: their owners asked for MH Rise hubs to stay off them.)
+constexpr const char* kDefaultServers[] = {"meoli.viewdns.net"};
+constexpr const char* kRetiredServer = "morerokk-mhgurecomp-ldnserver.duckdns.org";  // never used, even if listed
 
 struct Endpoint {
     std::string host;
@@ -180,7 +182,10 @@ std::vector<Endpoint> hub_servers() {
         for (const char* s : kDefaultServers) lines.push_back(s);
     for (const std::string& l : lines) {
         if (l == "off") return {};
-        if (!l.empty() && l[0] != '#') out.push_back(parse_endpoint(l));
+        if (l.empty() || l[0] == '#') continue;
+        Endpoint e = parse_endpoint(l);
+        if (e.host == kRetiredServer) continue;  // (an older list saved with it)
+        out.push_back(e);
     }
     return out;
 }

@@ -2,6 +2,9 @@ package io.github.iamwilmar.mhriseport;
 
 import android.app.NativeActivity;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.widget.Toast;
 import android.graphics.PixelFormat;
 import android.os.Bundle;
 import android.os.VibrationEffect;
@@ -254,5 +257,85 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     public void layoutChanged() {
         controls.save();
+    }
+
+    // ---- pictures for buttons, and layout files (the system's file picker answers in onActivityResult) ----------------
+
+    private static final int PICK_IMAGE = 41, EXPORT_LAYOUT = 42, IMPORT_LAYOUT = 43;
+    private Controls.Ctl imageFor;      // the control a picked image goes to
+    private Runnable afterPick;         // the menu or the editor's dialog, shown again
+
+    void pickImage(Controls.Ctl c, Runnable after) {
+        imageFor = c;
+        afterPick = after;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        start(i, PICK_IMAGE);
+    }
+
+    void exportLayout() {
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip")
+                .putExtra(Intent.EXTRA_TITLE, "mhrise-touch-layout.zip");
+        start(i, EXPORT_LAYOUT);
+    }
+
+    void importLayout() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
+                        "application/octet-stream"});
+        start(i, IMPORT_LAYOUT);
+    }
+
+    private void start(Intent i, int request) {
+        pad.releaseAll();
+        try {
+            startActivityForResult(i, request);
+        } catch (android.content.ActivityNotFoundException e) {
+            Toast.makeText(this, "No file picker on this phone", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
+        if (request == PICK_IMAGE) {
+            if (uri != null && imageFor != null) {
+                try {
+                    controls.setImage(imageFor, LayoutFiles.readImage(getContentResolver(), uri));
+                } catch (java.io.IOException | RuntimeException e) {
+                    Toast.makeText(this, "Couldn't use that image: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+                refresh();
+            }
+            Runnable after = afterPick;
+            imageFor = null;
+            afterPick = null;
+            if (after != null) after.run();
+        } else if ((request == EXPORT_LAYOUT || request == IMPORT_LAYOUT) && uri != null) {
+            try {
+                if (request == EXPORT_LAYOUT) {
+                    LayoutFiles.export(controls, getContentResolver(), uri);
+                    Toast.makeText(this, "Layout exported", Toast.LENGTH_SHORT).show();
+                } else {
+                    LayoutFiles.importFrom(controls, getContentResolver(), uri);
+                    controls.saveNow();
+                    refresh();
+                    Toast.makeText(this, "Layout imported", Toast.LENGTH_SHORT).show();
+                }
+            } catch (java.io.IOException | RuntimeException e) {
+                Toast.makeText(this, (request == EXPORT_LAYOUT ? "Export failed: " : "Import failed: ") + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    @Override
+    public void editControl(Controls.Ctl c) {
+        new SettingsMenu(this, controls).editControl(c);
+    }
+
+    @Override
+    public void addButton(int k) {
+        new SettingsMenu(this, controls).editCombo(k);
     }
 }

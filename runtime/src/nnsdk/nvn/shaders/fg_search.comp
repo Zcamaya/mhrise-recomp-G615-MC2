@@ -1,0 +1,41 @@
+#version 450
+// Built-in frame generation, 3: the motion of each 4x4 block of the coarsest luma level, by a full search. The picture
+// between the two frames is what's wanted, so a block's vector d says where its content was in the earlier frame (at -d)
+// and where it is in the later one (at +d): the cost of d is how much A at p - d and B at p + d differ over the block.
+// A small cost per texel of motion keeps flat areas (sky, water) still. Out: (d.x, d.y, cost, 0).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, r32f) uniform readonly image2D lum_a;
+layout(binding = 1, r32f) uniform readonly image2D lum_b;
+layout(binding = 2, rgba32f) uniform writeonly image2D field;
+layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int pad; } p;
+
+const int R = 3;  // texels each way at 1/16: up to 48 pixels of the picture between, 96 of a game frame
+
+float load(bool a, ivec2 at) {
+    at = clamp(at, ivec2(0), p.src_size - 1);
+    return a ? imageLoad(lum_a, at).r : imageLoad(lum_b, at).r;
+}
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= p.size.x || q.y >= p.size.y) return;
+    ivec2 base = q * 4;
+    float best = 1e9;
+    ivec2 bestd = ivec2(0);
+    for (int dy = -R; dy <= R; dy++)
+        for (int dx = -R; dx <= R; dx++) {
+            ivec2 d = ivec2(dx, dy);
+            float cost = 0.0;
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++) {
+                    ivec2 at = base + ivec2(x, y);
+                    cost += abs(load(true, at - d) - load(false, at + d));
+                }
+            cost += 0.02 * float(abs(dx) + abs(dy));
+            if (cost < best) {
+                best = cost;
+                bestd = d;
+            }
+        }
+    imageStore(field, q, vec4(vec2(bestd), best, 0.0));
+}

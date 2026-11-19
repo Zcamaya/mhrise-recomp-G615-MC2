@@ -17,6 +17,7 @@ final class Glyphs {
     private final Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
+    private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF box = new RectF();
 
     Glyphs() {
@@ -215,6 +216,136 @@ final class Glyphs {
         c.drawCircle(x, y, knob * 0.62f, edge);  // (el agarre de goma de la seta)
         ink.setColor(inkColor(alpha, pressed));
         c.drawCircle(x, y, knob * 0.12f, ink);
+    }
+
+    // A button with the look chosen in the layout editor: shape 1 a circle, 2 a rounded square, 3 a square; an icon
+    // (Controls.ICONS, 0 none) or its text; hold (tap to hold) a small diamond at the top right
+    // plateColor: a fill instead of the wine (0: the wine); picture: the player's image, filling the shape (with it the
+    // letters and icon aren't drawn; pressed, it's tinted gold)
+    void custom(Canvas c, float cx, float cy, float r, int shape, int icon, String text, boolean hold, boolean pressed,
+                int alpha, int plateColor, android.graphics.Bitmap picture) {
+        plate(alpha, pressed, r * 0.07f);
+        if (plateColor != 0 && !pressed) fill.setColor(withAlpha(plateColor, alpha * 9 / 10));
+        float round = shape == 1 ? r : shape == 2 ? r * 0.38f : r * 0.08f;
+        box.set(cx - r, cy - r, cx + r, cy + r);
+        if (plateColor != 0 || pressed || picture == null) c.drawRoundRect(box, round, round, fill);
+        if (picture != null) {  // (clipped to the shape)
+            path.reset();
+            path.addRoundRect(box, round, round, Path.Direction.CW);
+            c.save();
+            c.clipPath(path);
+            imagePaint.setAlpha(pressed ? alpha * 6 / 10 : alpha);
+            c.drawBitmap(picture, null, box, imagePaint);
+            c.restore();
+        }
+        c.drawRoundRect(box, round, round, edge);
+        int color = inkColor(alpha, pressed);
+        if (picture != null) {
+            // (the picture is the label)
+        } else if (icon > 0) {
+            icon(c, cx, cy, r * 0.55f, icon, color);
+        } else {
+            float size = r * (text.length() <= 2 ? 0.95f : text.length() <= 4 ? 0.62f : text.length() <= 7 ? 0.44f : 0.32f);
+            label(c, text, cx, cy, size, color);
+        }
+        if (hold) {
+            float mx = cx + r * 0.62f, my = cy - r * 0.62f, d = r * 0.16f;
+            path.reset();
+            path.moveTo(mx, my - d);
+            path.lineTo(mx + d, my);
+            path.lineTo(mx, my + d);
+            path.lineTo(mx - d, my);
+            path.close();
+            ink.setColor(color);
+            c.drawPath(path, ink);
+        }
+    }
+
+    // The icons: plain shapes drawn with paths, s half their size
+    private void icon(Canvas c, float cx, float cy, float s, int icon, int color) {
+        ink.setColor(color);
+        edge.setColor(color);
+        edge.setStrokeWidth(s * 0.16f);
+        path.reset();
+        switch (icon) {
+            case 1: case 2: case 3: case 4: {  // arrows: up, down, left, right
+                float sx = icon == 3 ? -1 : icon == 4 ? 1 : 0, sy = icon == 1 ? -1 : icon == 2 ? 1 : 0;
+                // (the head from the tip back to the middle, the shaft from there to the far end)
+                path.moveTo(cx + sx * s, cy + sy * s);
+                path.lineTo(cx + sy * s * 0.8f, cy + sx * s * 0.8f);
+                path.lineTo(cx - sy * s * 0.8f, cy - sx * s * 0.8f);
+                path.close();
+                c.drawPath(path, ink);
+                float half = s * 0.22f;
+                float ax = cx - sx * s * 0.9f, ay = cy - sy * s * 0.9f;  // (the shaft's far end)
+                box.set(Math.min(ax, cx) - (sx == 0 ? half : 0), Math.min(ay, cy) - (sy == 0 ? half : 0),
+                        Math.max(ax, cx) + (sx == 0 ? half : 0), Math.max(ay, cy) + (sy == 0 ? half : 0));
+                c.drawRect(box, ink);
+                break;
+            }
+            case 5:  // a five-pointed star
+                for (int i = 0; i < 10; i++) {
+                    double a = -Math.PI / 2 + Math.PI * i / 5;
+                    float rr = i % 2 == 0 ? s : s * 0.42f;
+                    float x = cx + (float) Math.cos(a) * rr, y = cy + (float) Math.sin(a) * rr;
+                    if (i == 0) path.moveTo(x, y);
+                    else path.lineTo(x, y);
+                }
+                path.close();
+                c.drawPath(path, ink);
+                break;
+            case 6:  // a diamond
+                path.moveTo(cx, cy - s);
+                path.lineTo(cx + s * 0.75f, cy);
+                path.lineTo(cx, cy + s);
+                path.lineTo(cx - s * 0.75f, cy);
+                path.close();
+                c.drawPath(path, ink);
+                break;
+            case 7:  // a shield: flat top, pointed bottom
+                path.moveTo(cx - s * 0.8f, cy - s * 0.8f);
+                path.lineTo(cx + s * 0.8f, cy - s * 0.8f);
+                path.lineTo(cx + s * 0.8f, cy);
+                path.quadTo(cx + s * 0.7f, cy + s * 0.65f, cx, cy + s);
+                path.quadTo(cx - s * 0.7f, cy + s * 0.65f, cx - s * 0.8f, cy);
+                path.close();
+                c.drawPath(path, edge);
+                break;
+            case 8:  // a blade pointing up, with its guard and grip
+                path.moveTo(cx, cy - s);
+                path.lineTo(cx + s * 0.2f, cy - s * 0.7f);
+                path.lineTo(cx + s * 0.2f, cy + s * 0.35f);
+                path.lineTo(cx - s * 0.2f, cy + s * 0.35f);
+                path.lineTo(cx - s * 0.2f, cy - s * 0.7f);
+                path.close();
+                c.drawPath(path, ink);
+                box.set(cx - s * 0.6f, cy + s * 0.35f, cx + s * 0.6f, cy + s * 0.5f);
+                c.drawRect(box, ink);
+                box.set(cx - s * 0.12f, cy + s * 0.5f, cx + s * 0.12f, cy + s);
+                c.drawRect(box, ink);
+                break;
+            case 9:  // a crosshair
+                c.drawCircle(cx, cy, s * 0.62f, edge);
+                box.set(cx - s, cy - s * 0.07f, cx - s * 0.3f, cy + s * 0.07f);
+                c.drawRect(box, ink);
+                box.set(cx + s * 0.3f, cy - s * 0.07f, cx + s, cy + s * 0.07f);
+                c.drawRect(box, ink);
+                box.set(cx - s * 0.07f, cy - s, cx + s * 0.07f, cy - s * 0.3f);
+                c.drawRect(box, ink);
+                box.set(cx - s * 0.07f, cy + s * 0.3f, cx + s * 0.07f, cy + s);
+                c.drawRect(box, ink);
+                break;
+            default:  // a dash: two chevrons to the right
+                for (int k = 0; k < 2; k++) {
+                    float ox = cx - s * 0.45f + k * s * 0.7f;
+                    path.reset();
+                    path.moveTo(ox - s * 0.3f, cy - s * 0.75f);
+                    path.lineTo(ox + s * 0.35f, cy);
+                    path.lineTo(ox - s * 0.3f, cy + s * 0.75f);
+                    c.drawPath(path, edge);
+                }
+                break;
+        }
     }
 
     // Un combo: dos aros que se cruzan, y debajo los botones que pulsa ("A+X")

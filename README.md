@@ -123,9 +123,15 @@ may stutter while its shaders are translated and compiled; they are cached for t
     zone, the tap for L3 / R3, camera swipe and its speed, and *Show / hide buttons*: a switch per control (turn the
     right stick on there, and camera swipe off, to turn the camera with a stick).
   - *Edit layout:* drag each control where you want it, change its size or hide it from the bar at the top, or put the
-    traditional layout back.
-  - *Combos:* up to four. Each presses several buttons at once (A+X, say), from its own button on the screen and, if you
-    choose one, from a controller button or a pair of them (L3, −+R…).
+    traditional layout back. *Edit* opens the chosen control: a size slider and, for a button, its shape (circle,
+    rounded square, square), an icon instead of its letters, and *Tap to hold* (a tap keeps it pressed until the next
+    tap), its own opacity, a plate colour, your own label, and a picture of yours instead of its drawing (any image:
+    the app keeps a 256-pixel copy). *Add* makes a new button and *Copy as a new button* another of a console button;
+    both are combos, so a controller button can fire them too. *Grid* shows a grid and snaps what you drag to it.
+  - *Export layout* / *Import layout:* the whole touch layout in a `.zip` (`layout.json` and the pictures), to keep or
+    to share; places are fractions of the screen, so it fits another phone.
+  - *Combos:* up to eight. Each presses several buttons at once (A+X, say), from its own button on the screen and, if you
+    choose one, from a controller button or a pair of them (L3, −+R…). A combo of one button looks like that button.
   - *Controller:* the sticks' dead zone, how far an analog trigger travels before it is ZL / ZR, and where the right stick
     is read from. *By controller* picks Z/RZ or RX/RY from the axes each pad says it has, with triggers on LTRIGGER /
     RTRIGGER, BRAKE / GAS or Z/RZ, so Xbox, DualSense and generic pads all work. The log says what it chose for each pad.
@@ -146,6 +152,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | Name | Effect |
 |---|---|
 | `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam): import it from the GPU driver screen (it's copied into the app), or copy it into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. Read at start-up. |
+| `lsfg/motion.*`, `shaders/fg_*.comp` | The built-in frame generator: no Lossless.dll, plain Vulkan 1.1 compute (a luma pyramid, block motion search refined to a quarter of the picture, a median-filtered field, and a warp of both frames that keeps still pixels such as the HUD unwarped). Used when there's no DLL or Lossless's chain can't run on the GPU, or always with `fg_builtin` (GPU driver screen → Frame generation → Generator). Turned on with `lsfg`, as before. |
 | `resolution_240`, `resolution_360`, `resolution_432`, `resolution_480`, `resolution_576`, `resolution_648`, `resolution_720` | Base resolution of the 3D scene: 427x240 (the lowest, for the weakest GPUs; FSR helps the upscale), 640x360, 768x432, 854x480 (lower, for weak GPUs), 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). In docked mode, the same ratios of the docked scene. Live. |
 | `aspect_4_3`, `aspect_21_9`, `aspect_16_10`, `aspect_stretch` | Aspect ratio, like Eden's: the picture in the largest rectangle of that shape on the screen, centred, black around it. None of them: 16:9, the game's own (black bars at the sides on a long phone). `aspect_stretch` fills the screen. Display → Aspect ratio. Live. |
 | `dock_mode` | Docked mode: the game believes it's on the dock (1080p TV picture, about twice the pixels, and the controls as player 1's Pro Controller). For strong GPUs. Read at start-up. |
@@ -201,8 +208,8 @@ with adb); changing that setting in the menu moves it into the ini.
 
 ## Multiplayer (Local Play over the internet)
 
-The game's **Local Play** works over the internet through the same hub servers MHGU for Android uses
-(`hunterhubid-gu-hub.duckdns.org` and `morerokk-mhgurecomp-ldnserver.duckdns.org` by default, port 39510). Create a hub
+The game's **Local Play** works over the internet through hub servers (`meoli.viewdns.net` by default, port 39510; the
+MHGU hub servers aren't used, at their owners' request). Create a hub
 in Local Play and it's listed there; search for hubs and the ones listed show up. Nobody needs to forward a port: the
 server connects the players and passes their traffic. Only MH Rise hubs are listed for MH Rise (the server keeps each
 game's hubs apart), so this isn't crossplay with MHGU.
@@ -212,7 +219,7 @@ Settings, under **Multiplayer** in the settings panel (saved as text files in th
 | Setting | File | |
 |---|---|---|
 | Matchmaking key | `hub_key` | Players with the same key only see each other's hubs; empty, public. Only its SHA-256 is sent. |
-| Hub servers | `hub_servers` | One `host[:port]` per line. Missing: the two defaults. `off`: none. |
+| Hub servers | `hub_servers` | One `host[:port]` per line; `#` in front keeps it in the list switched off. Missing: the default. `off`: none. |
 | Search hosts | `hub_hosts` | Other phones' `IP[:port]`, asked directly for their hub (same Wi-Fi, or a forwarded port). |
 | Port | `hub_port` | The TCP port a created hub listens on for direct joins (default 39510, 0 off). |
 

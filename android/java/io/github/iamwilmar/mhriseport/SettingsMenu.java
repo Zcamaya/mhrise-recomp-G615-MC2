@@ -2,6 +2,7 @@ package io.github.iamwilmar.mhriseport;
 
 import android.app.Dialog;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -17,6 +18,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 
 import java.io.File;
@@ -361,11 +363,12 @@ final class SettingsMenu {
     }
 
     // Local Play over the internet (runtime/src/nnsdk/ldn.cpp): hubs created in the game's Local Play are listed on the
-    // hub servers (the ones MHGU for Android uses), and the game's hub search shows theirs. Saved as plain text files in
-    // the game folder: hub_servers (one per line, "off" for none), hub_key, hub_hosts and hub_port. Read when a hub is
-    // created or searched for, so changes apply without a restart.
-    private static final String[] DEFAULT_SERVERS = {"hunterhubid-gu-hub.duckdns.org",
-            "morerokk-mhgurecomp-ldnserver.duckdns.org"};
+    // hub servers, and the game's hub search shows theirs. Saved as plain text files in the game folder: hub_servers (one
+    // per line, "#" in front for one switched off, "off" for none), hub_key, hub_hosts and hub_port. Read when a hub is
+    // created or searched for, so changes apply without a restart. Not the MHGU hub servers: their owners asked for
+    // MH Rise hubs to stay off them.
+    private static final String[] DEFAULT_SERVERS = {"meoli.viewdns.net"};
+    private static final String RETIRED_SERVER = "morerokk-mhgurecomp-ldnserver.duckdns.org";
 
     private List<String> lines(String name) {
         List<String> out = new ArrayList<>();
@@ -394,6 +397,7 @@ final class SettingsMenu {
         List<String> l = lines("hub_servers");
         if (l.isEmpty()) return new ArrayList<>(Arrays.asList(DEFAULT_SERVERS));
         if (l.size() == 1 && l.get(0).equals("off")) return new ArrayList<>();
+        l.removeIf(x -> x.replace("#", "").trim().startsWith(RETIRED_SERVER));  // (an older list saved with it)
         return l;
     }
 
@@ -421,26 +425,34 @@ final class SettingsMenu {
         header("Hub servers");
         List<String> list = servers();
         if (list.isEmpty()) note("No hub servers: only the search hosts below.");
+        else note("Tap a server to switch it on or off, or to remove it. Hubs are listed on, and searched for in, every "
+                + "server that's on.");
         for (int i = 0; i < list.size(); i++) {
             final int k = i;
-            row(list.get(i), "Remove", "Tap to remove this server.", v -> {
-                List<String> l = servers();
-                if (k < l.size()) l.remove(k);
-                writeLines("hub_servers", l.isEmpty() ? Arrays.asList("off") : l);
-                build();
-            }, false);
+            final boolean on = !list.get(i).startsWith("#");
+            final String name = on ? list.get(i) : list.get(i).substring(1).trim();
+            row(name, (on ? "On" : "Off") + "  ▾", "On: hubs are listed and searched for here. Off: kept in the list, "
+                    + "not used.", v -> dropDown(name, new String[] {"On", "Off", "Remove"}, on ? 0 : 1, pick -> {
+                        List<String> l = servers();
+                        if (k >= l.size()) return;
+                        if (pick == 2) l.remove(k);
+                        else l.set(k, pick == 0 ? name : "#" + name);
+                        writeLines("hub_servers", l.isEmpty() ? Arrays.asList("off") : l);
+                        build();
+                    }), false);
         }
         action("Add hub server", "A hub server's address: name or IP, and :port if it isn't 39510.",
                 () -> ask("Add hub server", "host or host:port", "", 128, text -> {
-                    if (text.isEmpty()) return;
+                    if (text.isEmpty() || text.startsWith("#")) return;
                     List<String> l = servers();
-                    if (!l.contains(text)) l.add(text);
+                    if (!l.contains(text) && !l.contains("#" + text)) l.add(text);
                     writeLines("hub_servers", l);
                 }));
-        action("Restore the default servers", "The two MHGU for Android hub servers.", () -> {
-            new File(folder, "hub_servers").delete();
-            build();
-        });
+        action("Restore the default server", "Back to the list it comes with: " + String.join(", ", DEFAULT_SERVERS) + ".",
+                () -> {
+                    new File(folder, "hub_servers").delete();
+                    build();
+                });
 
         header("Direct connections");
         List<String> hosts = lines("hub_hosts");
@@ -550,7 +562,7 @@ final class SettingsMenu {
         header("Driver workarounds");
         if (gpu.adreno()) {
             note("Render pass shortcuts: for flicker that only shows without Turnip's system memory rendering. Turn "
-                    + "one off at a time to find which one it is. Each costs a little speed. Applies at once.");
+                    + "on one switch at a time to find which one it is. Each costs a little speed. Applies at once.");
             flag("No clears in the pass",
                     "A clear the game asks for is done on its own, not folded into the start of the next render pass.",
                     "no_deferred_clear", false);
@@ -577,13 +589,17 @@ final class SettingsMenu {
         note("Settings for the GPU driver itself, as NAME=value, set before it starts (on the next start). Mesa's drivers "
                 + "read them: Turnip (TU_DEBUG, FD_DEV_FEATURES) and PanVK (PANVK_DEBUG). The phone's own drivers "
                 + "ignore them.");
-        envToken("Turnip: no LRZ", "TU_DEBUG=nolrz. Turns off Turnip's low-resolution depth test, which culls whole "
-                + "blocks of the screen. Try it if blocks of the picture flash black.", "TU_DEBUG", "nolrz");
-        envToken("Turnip: system memory rendering", "TU_DEBUG=sysmem. Draws straight to memory instead of in the "
-                + "GPU's on-chip tiles. Slower; for flicker or flashing on new Adreno GPUs.", "TU_DEBUG", "sysmem");
-        envToken("Turnip: no UBWC", "TU_DEBUG=noubwc. No compression on any image.", "TU_DEBUG", "noubwc");
-        envToken("Turnip: UBWC flag hint", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1. Reported to stop screen "
-                + "flicker with some Adreno 8xx Turnip builds.", "FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1");
+        if (turnip(activity)) {  // (Turnip's own variables, only while a Turnip driver is the one chosen)
+            envToken("Turnip: no LRZ", "TU_DEBUG=nolrz. Turns off Turnip's low-resolution depth test, which culls whole "
+                    + "blocks of the screen. Try it if blocks of the picture flash black.", "TU_DEBUG", "nolrz");
+            envToken("Turnip: system memory rendering", "TU_DEBUG=sysmem. Draws straight to memory instead of in the "
+                    + "GPU's on-chip tiles. Slower; for flicker or flashing on new Adreno GPUs.", "TU_DEBUG", "sysmem");
+            envToken("Turnip: no UBWC", "TU_DEBUG=noubwc. No compression on any image.", "TU_DEBUG", "noubwc");
+            envToken("Turnip: UBWC flag hint", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1. Reported to stop screen "
+                    + "flicker with some Adreno 8xx Turnip builds.", "FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1");
+        } else {
+            note("Turnip's switches show here while a Turnip driver is chosen (Graphics → GPU driver).");
+        }
         List<String> env = ini.env();
         for (int i = 0; i < env.size(); i++) {
             final int k = i;
@@ -603,6 +619,18 @@ final class SettingsMenu {
     }
 
     // ---- driver environment ("env.NAME" lines of mhr.ini, read by vk.cpp at start-up) -----------------------------------
+
+    // Is the driver chosen in DriverActivity a Turnip (Mesa's freedreno library, or a folder named for it)?
+    static boolean turnip(android.content.Context c) {
+        try {
+            List<String> l = Files.readAllLines(new File(new File(c.getFilesDir(), "drivers"), "elegido").toPath());
+            if (l.size() < 2) return false;
+            String folder = l.get(0).toLowerCase(java.util.Locale.ROOT), library = l.get(1).toLowerCase(java.util.Locale.ROOT);
+            return library.contains("freedreno") || folder.contains("turnip");
+        } catch (IOException | RuntimeException e) {
+            return false;  // (the system's driver)
+        }
+    }
 
     private String envValue(String name) {
         for (String l : ini.env())
@@ -677,6 +705,16 @@ final class SettingsMenu {
                     dialog.dismiss();
                     activity.startEditing();
                 });
+        action("Export layout", "Saves the whole touch layout to a file: where each control is, its look and pictures, "
+                + "and the combos with their controller buttons. To keep it, or give it to someone.", () -> {
+                    dialog.dismiss();
+                    activity.exportLayout();
+                });
+        action("Import layout", "Replaces the touch layout with one from an exported file (from this phone or another: "
+                + "places follow the screen).", () -> {
+                    dialog.dismiss();
+                    activity.importLayout();
+                });
         action("Reset layout",
                 "The traditional layout, every control in its place and at its size.",
                 () -> {
@@ -705,7 +743,9 @@ final class SettingsMenu {
 
     private void buildCombos() {
         header("Combos");
-        note("A combo presses several buttons at once: with its button on the screen, or with one (or two) of the controller's.");
+        note("A combo presses several buttons at once: with its button on the screen, or with one (or two) of the controller's. "
+                + "The layout editor's Add and Copy as a new button make combos too, so every added button can be fired "
+                + "from a controller.");
         for (int i = 0; i < Controls.COMBOS; i++) {
             final int k = i;
             String value = cfg.combo[k] == 0 ? "None"
@@ -837,9 +877,190 @@ final class SettingsMenu {
         box.requestFocus();
     }
 
+    // ---- the layout editor's Edit: one control -------------------------------------------------------------------------
+
+    // Its size (a slider), and for a button its shape, an icon, tap to hold, and a combo's buttons or a copy of a
+    // console button as a new one (a combo of that button alone, so a controller button can fire it too)
+    void editControl(Controls.Ctl c) {
+        final int k = c.ordinal();
+        final Dialog d = new Dialog(activity);
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(12), dp(16), dp(14));
+        box.setBackground(plate(PANEL, 2, 0));
+        TextView title = text(Controls.label(c), 20, GOLD, true);
+        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
+        box.addView(title);
+        box.addView(rule(RED, 2));
+        box.addView(rule(GREEN, 1));
+
+        final TextView sizeValue = text("", 16, GOLD, false);
+        Runnable showSize = () -> sizeValue.setText(Math.round(cfg.place[k][2] * 100) + " %");
+        showSize.run();
+        box.addView(rowView("Size", sizeValue, "This control's size, on top of the size of all of them (Touch controls)."));
+        SeekBar size = new SeekBar(activity);
+        size.setMax(200);  // (50 % to 250 %)
+        size.setProgress(Math.round(cfg.place[k][2] * 100) - 50);
+        size.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int value, boolean user) {
+                if (!user) return;
+                cfg.place[k][2] = (value + 50) / 100f;
+                showSize.run();
+                changed();
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) {}
+        });
+        size.setPadding(dp(16), dp(10), dp(16), dp(10));
+        goldBar(size);
+        box.addView(size);
+
+        final TextView alphaValue = text("", 16, GOLD, false);
+        Runnable showAlpha = () -> alphaValue.setText(cfg.alpha[k] + " %");
+        showAlpha.run();
+        box.addView(rowView("Opacity", alphaValue, "This control's opacity, as a share of the opacity of all of them."));
+        SeekBar alpha = new SeekBar(activity);
+        alpha.setMax(90);  // (10 % to 100 %)
+        alpha.setProgress(cfg.alpha[k] - 10);
+        alpha.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int value, boolean user) {
+                if (!user) return;
+                cfg.alpha[k] = value + 10;
+                showAlpha.run();
+                changed();
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) {}
+        });
+        alpha.setPadding(dp(16), dp(10), dp(16), dp(10));
+        goldBar(alpha);
+        box.addView(alpha);
+
+        if (Controls.isButton(c)) {
+            box.addView(pickRow("Shape", Controls.SHAPES, () -> cfg.shape[k], v -> cfg.shape[k] = v,
+                    "Its own: the usual look (a combo of one button looks like that button)."));
+            box.addView(pickRow("Icon", Controls.ICONS, () -> cfg.icon[k], v -> cfg.icon[k] = v,
+                    "An icon instead of the button's letters."));
+            box.addView(pickRow("Colour", Controls.COLORS, () -> cfg.color[k], v -> cfg.color[k] = v,
+                    "The button's plate. Clear: only its edge, the game showing through."));
+            final TextView labelValue = text("", 16, GOLD, false);
+            Runnable showLabel = () -> labelValue.setText(cfg.label[k] == null ? "Its own" : cfg.label[k]);
+            showLabel.run();
+            LinearLayout labelRow = rowView("Label", labelValue, "Your own text on it instead of its letters (empty: its own).");
+            labelRow.setOnClickListener(v -> new TextPrompt(activity).show("Label", "Empty for its own",
+                    cfg.label[k] == null ? "" : cfg.label[k], "", 0, 12, false, false, text -> {
+                        if (text == null) return;
+                        cfg.label[k] = text.trim().isEmpty() ? null : text.trim();
+                        showLabel.run();
+                        changed();
+                    }));
+            box.addView(labelRow);
+            final TextView imageValue = text(cfg.image[k] ? "Yours  ▾" : "None  ▾", 16, GOLD, false);
+            LinearLayout imageRow = rowView("Picture", imageValue,
+                    "An image of yours on the button instead of its drawing, kept with the layout (and in exported "
+                            + "layouts). Pressed, it darkens.");
+            imageRow.setOnClickListener(v -> dropDown("Picture", cfg.image[k] ? new String[] {"Choose another…", "Remove"}
+                                                                                : new String[] {"Choose an image…"}, -1, i -> {
+                if (i == 1) {
+                    cfg.clearImage(c);
+                    imageValue.setText("None  ▾");
+                    changed();
+                    return;
+                }
+                d.dismiss();
+                activity.pickImage(c, () -> editControl(c));  // (the dialog again, with the picture)
+            }));
+            box.addView(imageRow);
+            box.addView(pickRow("Tap to hold", new String[] {"Off", "On"}, () -> cfg.hold[k] ? 1 : 0, v -> cfg.hold[k] = v != 0,
+                    "On: a tap presses it and keeps it pressed until the next tap (a small diamond shows it)."));
+            if (c.combo()) {
+                LinearLayout r = rowView("Buttons and controller button", text("›", 16, GOLD, false),
+                        "What it presses, and the controller button that does the same.");
+                r.setOnClickListener(v -> {
+                    d.dismiss();
+                    editCombo(c.comboIndex());
+                });
+                box.addView(r);
+            } else {
+                LinearLayout r = rowView("Copy as a new button", text("›", 16, GOLD, false),
+                        "Adds another " + Controls.label(c) + " button (a combo of it alone: Settings → Combos, where a "
+                                + "controller button can fire it too).");
+                r.setOnClickListener(v -> {
+                    int j = cfg.freeCombo();
+                    if (j < 0) return;
+                    Controls.Ctl copy = Controls.Ctl.values()[Controls.Ctl.COMBO1.ordinal() + j];
+                    cfg.combo[j] = cfg.buttons(c);
+                    cfg.comboPad[j] = 0;
+                    float[] p = cfg.place[copy.ordinal()];
+                    p[0] = Math.min(0.95f, cfg.place[k][0] + 0.06f);
+                    p[1] = cfg.place[k][1];
+                    p[2] = cfg.place[k][2];
+                    cfg.shown[copy.ordinal()] = true;
+                    cfg.shape[copy.ordinal()] = cfg.shape[k];
+                    cfg.icon[copy.ordinal()] = cfg.icon[k];
+                    cfg.hold[copy.ordinal()] = cfg.hold[k];
+                    cfg.color[copy.ordinal()] = cfg.color[k];
+                    cfg.alpha[copy.ordinal()] = cfg.alpha[k];
+                    cfg.label[copy.ordinal()] = cfg.label[k];
+                    d.dismiss();
+                    changed();
+                });
+                box.addView(r);
+            }
+        }
+
+        TextView ok = button("Done", true);
+        ok.setOnClickListener(v -> d.dismiss());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        lp.setMargins(dp(4), dp(10), dp(4), 0);
+        box.addView(ok, lp);
+        ScrollView sv = new ScrollView(activity);
+        sv.addView(box);
+        d.setContentView(sv);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            DisplayMetrics m = activity.getResources().getDisplayMetrics();
+            w.setLayout(Math.min(dp(560), (int) (m.widthPixels * 0.8f)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        d.show();
+    }
+
+    private void goldBar(SeekBar bar) {
+        bar.setProgressTintList(ColorStateList.valueOf(GOLD));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(EDGE));
+        bar.setThumbTintList(ColorStateList.valueOf(GOLD));
+    }
+
+    // A row in a dialog: its value, and a tap opens the drop-down (two options: flips)
+    private LinearLayout pickRow(String title, String[] options, IntSupplier get, IntConsumer set, String help) {
+        final TextView value = text("", 16, GOLD, false);
+        final boolean many = options.length > 2;
+        Runnable show = () -> value.setText(options[get.getAsInt()] + (many ? "  ▾" : ""));
+        show.run();
+        LinearLayout r = rowView(title, value, help);
+        r.setOnClickListener(v -> {
+            if (!many) {
+                set.accept(1 - get.getAsInt());
+                show.run();
+                changed();
+                return;
+            }
+            dropDown(title, options, get.getAsInt(), i -> {
+                set.accept(i);
+                show.run();
+                changed();
+            });
+        });
+        return r;
+    }
+
     // ---- combo editor ---------------------------------------------------------------------------------------------------
 
-    private void editCombo(int k) {
+    void editCombo(int k) {
         final Dialog d = new Dialog(activity);
         d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout box = new LinearLayout(activity);

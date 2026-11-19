@@ -29,6 +29,10 @@ final class TouchPad extends View {
         // A control was moved, resized, hidden or reset while editing: saved right away (leaving the editor any other
         // way than Done, or the app being closed, would lose it otherwise)
         void layoutChanged();
+        // The editor's Edit: a button's size, shape, icon and tap to hold (and a combo's buttons)
+        void editControl(Ctl c);
+        // The editor's Add: a new button (combo k, already placed in the middle); its buttons are chosen first
+        void addButton(int k);
     }
 
     private final Controls cfg;
@@ -36,6 +40,19 @@ final class TouchPad extends View {
     private final Glyphs glyphs = new Glyphs();
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG), barText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
+    // The player's pictures for the controls (Controls.image), loaded once per imageVersion
+    private final android.graphics.Bitmap[] bitmaps = new android.graphics.Bitmap[Ctl.values().length];
+    private int bitmapsVersion = -1;
+
+    private android.graphics.Bitmap bitmap(Ctl c) {
+        if (bitmapsVersion != cfg.imageVersion) {
+            java.util.Arrays.fill(bitmaps, null);
+            for (Ctl x : Ctl.values())
+                if (cfg.image[x.ordinal()]) bitmaps[x.ordinal()] = android.graphics.BitmapFactory.decodeFile(cfg.imageFile(x).getPath());
+            bitmapsVersion = cfg.imageVersion;
+        }
+        return bitmaps[c.ordinal()];
+    }
 
     private static final int MAX_FINGERS = 10;
     private static final class Finger {
@@ -61,6 +78,7 @@ final class TouchPad extends View {
     };
     private final Finger[] fingers = new Finger[MAX_FINGERS];
     private long pulse;  // L3 / R3 de un toque corto en un stick, unos instantes
+    private final boolean[] latched = new boolean[Ctl.values().length];  // tap to hold: pressed until tapped again
     private float lx, ly, rx, ry;
     private int sticksOn;
     private long lastButtons = -1;
@@ -114,9 +132,12 @@ final class TouchPad extends View {
         for (Ctl c : Ctl.values()) {
             if (!active(c) || (!editing && !cfg.shown[c.ordinal()])) continue;
             float r = radius(c), dx = x - cx(c), dy = y - cy(c);
-            float reach = c == Ctl.LSTICK || c == Ctl.RSTICK ? r * 1.35f : c == Ctl.L || c == Ctl.R ? r * 1.15f : r * 1.25f;
-            if (c == Ctl.L || c == Ctl.R) dy *= 2.0f;  // (una pastilla: más ancha que alta)
-            float d = (float) Math.hypot(dx, dy);
+            final int shape = cfg.shape[c.ordinal()];
+            final boolean pill = (c == Ctl.L || c == Ctl.R) && shape == 0;
+            float reach = c == Ctl.LSTICK || c == Ctl.RSTICK ? r * 1.35f : pill ? r * 1.15f : r * 1.25f;
+            if (pill) dy *= 2.0f;  // (una pastilla: más ancha que alta)
+            float d = shape >= 2 && Controls.isButton(c) ? Math.max(Math.abs(dx), Math.abs(dy))  // (a square)
+                                                         : (float) Math.hypot(dx, dy);
             if (d <= reach && d / reach < bestD) {
                 best = c;
                 bestD = d / reach;
@@ -125,24 +146,6 @@ final class TouchPad extends View {
         return best;
     }
 
-    private static long buttonOf(Ctl c, Controls cfg) {
-        switch (c) {
-            case A: return Controls.A;
-            case B: return Controls.B;
-            case X: return Controls.X;
-            case Y: return Controls.Y;
-            case L: return Controls.L;
-            case R: return Controls.R;
-            case ZL: return Controls.ZL;
-            case ZR: return Controls.ZR;
-            case MINUS: return Controls.MINUS;
-            case PLUS: return Controls.PLUS;
-            case L3: return Controls.LSTICK;
-            case R3: return Controls.RSTICK;
-            case COMBO1: case COMBO2: case COMBO3: case COMBO4: return cfg.combo[c.comboIndex()];
-            default: return 0;
-        }
-    }
     private static boolean isButton(Ctl c) {
         return c != null && c != Ctl.LSTICK && c != Ctl.RSTICK && c != Ctl.MENU;
     }
@@ -212,8 +215,14 @@ final class TouchPad extends View {
                     if (editing) {
                         if (f.ctl != null) {
                             float[] p = cfg.place[f.ctl.ordinal()];
-                            p[0] = clamp((f.x + f.dx) / getWidth(), 0.02f, 0.98f);
-                            p[1] = clamp((f.y + f.dy) / getHeight(), 0.03f, 0.97f);
+                            float px = f.x + f.dx, py = f.y + f.dy;
+                            if (cfg.grid) {  // (the center on the grid's nearest crossing)
+                                float g = gridStep();
+                                px = Math.round(px / g) * g;
+                                py = Math.round(py / g) * g;
+                            }
+                            p[0] = clamp(px / getWidth(), 0.02f, 0.98f);
+                            p[1] = clamp(py / getHeight(), 0.03f, 0.97f);
                         }
                     } else if (f.camera) {
                         swipe(f, e.getEventTime());
@@ -295,7 +304,15 @@ final class TouchPad extends View {
             return;
         }
         if (c == Ctl.MENU) return;  // (al soltarlo)
-        f.mask = buttonOf(c, cfg);
+        if (cfg.hold[c.ordinal()]) {  // (tap to hold: each new touch flips it; the finger itself presses nothing)
+            f.mask = 0;
+            if (first) {
+                latched[c.ordinal()] = !latched[c.ordinal()];
+                host.tick();
+            }
+            return;
+        }
+        f.mask = cfg.buttons(c);
         if (first || f.mask != 0) host.tick();
     }
 
@@ -400,6 +417,9 @@ final class TouchPad extends View {
     // Lo que tocan los dedos, al loader (solo si cambió)
     private void update() {
         long buttons = pulse;
+        if (!editing)
+            for (Ctl c : Ctl.values())
+                if (latched[c.ordinal()] && cfg.hold[c.ordinal()] && active(c)) buttons |= cfg.buttons(c);
         int on = 0;
         for (Finger f : fingers) {
             if (f.id < 0 || f.ctl == null || editing) continue;
@@ -432,16 +452,21 @@ final class TouchPad extends View {
         }
         removeCallbacks(cameraStop);
         pulse = 0;
+        java.util.Arrays.fill(latched, false);
         lx = ly = rx = ry = 0;
         update();
     }
 
     // ---- la barra del modo edición ------------------------------------------------------------------------------------
 
-    private static final int BAR_SMALLER = 0, BAR_BIGGER = 1, BAR_HIDE = 2, BAR_RESET = 3, BAR_DONE = 4, BAR_ITEMS = 5;
+    private static final int BAR_SMALLER = 0, BAR_BIGGER = 1, BAR_EDIT = 2, BAR_ADD = 3, BAR_HIDE = 4, BAR_GRID = 5,
+            BAR_RESET = 6, BAR_DONE = 7, BAR_ITEMS = 8;
+
+    // The grid's step: a fortieth of the screen's height
+    private float gridStep() { return getHeight() / 40f; }
 
     private RectF barItem(int i) {
-        float h = getHeight() * 0.085f, w = getHeight() * 0.22f, gap = h * 0.2f;
+        float h = getHeight() * 0.085f, w = getHeight() * 0.17f, gap = h * 0.3f;
         float total = BAR_ITEMS * w + (BAR_ITEMS - 1) * gap;
         float x = (getWidth() - total) / 2 + i * (w + gap), y = getHeight() * 0.18f;
         return new RectF(x, y, x + w, y + h);
@@ -450,7 +475,10 @@ final class TouchPad extends View {
         switch (i) {
             case BAR_SMALLER: return "−";
             case BAR_BIGGER: return "+";
+            case BAR_EDIT: return "Edit";
+            case BAR_ADD: return "Add";
             case BAR_HIDE: return selected != null && !cfg.shown[selected.ordinal()] ? "Show" : "Hide";
+            case BAR_GRID: return cfg.grid ? "Grid ✓" : "Grid";
             case BAR_RESET: return "Reset";
             default: return "Done";
         }
@@ -465,11 +493,33 @@ final class TouchPad extends View {
                 case BAR_BIGGER:
                     if (selected != null) {
                         float[] p = cfg.place[selected.ordinal()];
-                        p[2] = clamp(p[2] + (i == BAR_BIGGER ? 0.1f : -0.1f), 0.5f, 2.0f);
+                        p[2] = clamp(p[2] + (i == BAR_BIGGER ? 0.1f : -0.1f), 0.5f, 2.5f);
                     }
                     break;
+                case BAR_EDIT:
+                    if (selected != null) host.editControl(selected);
+                    break;
+                case BAR_ADD: {
+                    int k = cfg.freeCombo();
+                    if (k < 0) {
+                        hint = "All " + Controls.COMBOS + " added buttons are in use: clear one in Settings → Combos.";
+                        break;
+                    }
+                    Ctl c = Ctl.values()[Ctl.COMBO1.ordinal() + k];
+                    float[] p = cfg.place[c.ordinal()];
+                    p[0] = 0.5f;
+                    p[1] = 0.5f;
+                    p[2] = 1;
+                    cfg.shown[c.ordinal()] = true;
+                    selected = c;
+                    host.addButton(k);
+                    break;
+                }
                 case BAR_HIDE:
                     if (selected != null && selected != Ctl.MENU) cfg.shown[selected.ordinal()] = !cfg.shown[selected.ordinal()];
+                    break;
+                case BAR_GRID:
+                    cfg.grid = !cfg.grid;
                     break;
                 case BAR_RESET:
                     cfg.resetLayout();
@@ -480,22 +530,38 @@ final class TouchPad extends View {
                     host.editDone();
                     break;
             }
+            if (i != BAR_ADD) hint = null;
             if (editing) host.layoutChanged();
             host.tick();
+            invalidate();
             return true;
         }
         return false;
     }
+    private String hint;  // a message under the bar instead of the usual one (until the next tap on the bar)
 
     // ---- dibujo -------------------------------------------------------------------------------------------------------
 
     @Override
     protected void onDraw(Canvas c) {
         int alpha = Math.round(255 * cfg.opacity / 100f);
+        if (editing && cfg.grid) {  // (faint lines, a stronger one every fifth)
+            float g = gridStep();
+            int n = 0;
+            for (float gx = 0; gx <= getWidth(); gx += g, n++) {
+                barPaint.setColor(n % 5 == 0 ? 0x50C49646 : 0x24C49646);
+                c.drawRect(gx, 0, gx + 1, getHeight(), barPaint);
+            }
+            n = 0;
+            for (float gy = 0; gy <= getHeight(); gy += g, n++) {
+                barPaint.setColor(n % 5 == 0 ? 0x50C49646 : 0x24C49646);
+                c.drawRect(0, gy, getWidth(), gy + 1, barPaint);
+            }
+        }
         for (Ctl ctl : Ctl.values()) {
             if (!active(ctl)) continue;
-            int a = alpha;
-            if (editing && !cfg.shown[ctl.ordinal()]) a = alpha / 3;  // (escondido: se ve tenue, para poder enseñarlo)
+            int a = alpha * cfg.alpha[ctl.ordinal()] / 100;
+            if (editing && !cfg.shown[ctl.ordinal()]) a = a / 3;  // (escondido: se ve tenue, para poder enseñarlo)
             if (editing && ctl == selected) a = 255;
             draw(c, ctl, a);
             if (editing && ctl == selected) {  // (el elegido: un marco dorado de puntos)
@@ -513,7 +579,19 @@ final class TouchPad extends View {
 
     private void draw(Canvas c, Ctl ctl, int a) {
         float x = cx(ctl), y = cy(ctl), r = radius(ctl);
-        boolean down = pressed(ctl);
+        boolean down = pressed(ctl) || (latched[ctl.ordinal()] && cfg.hold[ctl.ordinal()] && !editing);
+        final int k = ctl.ordinal();
+        if (Controls.isButton(ctl) && (cfg.shape[k] != 0 || cfg.icon[k] != 0 || cfg.hold[k] || single(ctl) || cfg.color[k] != 0
+                                       || cfg.label[k] != null || cfg.image[k])) {
+            // (a button with a look of its own; a combo of one button looks like that button; tap to hold shows a dot)
+            int shape = cfg.shape[k];
+            if (shape == 0) shape = ctl.combo() && !single(ctl) ? 2 : 1;
+            String text = cfg.label[k] != null ? cfg.label[k]
+                    : ctl.combo() ? Controls.names(cfg.combo[ctl.comboIndex()]) : buttonText(ctl);
+            glyphs.custom(c, x, y, r, shape, cfg.icon[k], text, cfg.hold[k], down, a, Controls.COLOR_FILLS[cfg.color[k]],
+                    cfg.image[k] ? bitmap(ctl) : null);
+            return;
+        }
         switch (ctl) {
             case LSTICK:
                 glyphs.stick(c, x, y, r, lx, ly, (sticksOn & 1) != 0, (pulse & Controls.LSTICK) != 0, a);
@@ -554,6 +632,16 @@ final class TouchPad extends View {
         }
     }
 
+    private boolean single(Ctl ctl) { return ctl.combo() && Long.bitCount(cfg.combo[ctl.comboIndex()]) == 1; }
+
+    private static String buttonText(Ctl c) {
+        switch (c) {
+            case MINUS: return "−";
+            case PLUS: return "+";
+            default: return c.name();
+        }
+    }
+
     private boolean pressed(Ctl ctl) {
         for (Finger f : fingers) if (f.id >= 0 && f.ctl == ctl && !editing) return ctl != Ctl.MENU || !f.moved;
         return false;
@@ -565,7 +653,7 @@ final class TouchPad extends View {
     }
 
     private void drawBar(Canvas c) {
-        barText.setTextSize(getHeight() * 0.04f);
+        barText.setTextSize(getHeight() * 0.034f);
         barText.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.SERIF, android.graphics.Typeface.BOLD));
         for (int i = 0; i < BAR_ITEMS; i++) {
             RectF b = barItem(i);
@@ -583,8 +671,9 @@ final class TouchPad extends View {
         // debajo, qué hacer
         barText.setTextSize(getHeight() * 0.03f);
         barText.setColor(Glyphs.CREAM);
-        String hint = selected == null ? "Drag a control to move it; tap it to choose it."
-                : "Chosen: " + label(selected);
+        String hint = this.hint != null ? this.hint
+                : selected == null ? "Drag a control to move it; tap it to choose it, then Edit for its size and look."
+                                   : "Chosen: " + label(selected);
         rect.set(barItem(0).left, barItem(0).bottom, barItem(BAR_ITEMS - 1).right, barItem(0).bottom + getHeight() * 0.06f);
         c.drawText(hint, rect.centerX(), rect.centerY() + getHeight() * 0.012f, barText);
     }

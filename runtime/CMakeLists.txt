@@ -45,6 +45,7 @@ add_library(nnsdk SHARED
   src/nnsdk/nvn/lsfg/chain.cpp
   src/nnsdk/nvn/lsfg/dll.cpp
   src/nnsdk/nvn/lsfg/framegen.cpp
+  src/nnsdk/nvn/lsfg/motion.cpp
   src/nnsdk/nvn/state.cpp
   src/nnsdk/nvn/procs.cpp
   src/nnsdk/nvn/program.cpp

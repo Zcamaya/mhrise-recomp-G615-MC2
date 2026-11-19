@@ -234,32 +234,45 @@ public final class DriverActivity extends Activity {
         }
     }
 
+    // Frame generation: Lossless Scaling's LSFG with the player's Lossless.dll, or the port's own generator (no DLL,
+    // any Vulkan 1.1 GPU: runtime/src/nnsdk/nvn/lsfg/motion.h). The game uses LSFG when there's a DLL and it runs on
+    // this GPU, the built-in one otherwise, or always with the fg_builtin switch (a folder in the game folder, as lsfg).
     private void buildLossless() {
-        header("Lossless Scaling");
-        note("Frame generation (LSFG 2x) shows about twice the game's fps using Lossless.dll from your own copy of "
-                + "Lossless Scaling (Steam, Windows: it's in the program's folder). It isn't included with the app. Takes "
-                + "effect the next time the game starts.");
+        header("Frame generation");
+        note("Shows about twice the game's fps (30 → 60) by making a picture between each two of the game's. With your own "
+                + "Lossless.dll (from Lossless Scaling, Steam, Windows: in the program's folder; not included with the "
+                + "app) it uses Lossless Scaling's frame generation; without it, or where that can't run, the port's own. "
+                + "Takes effect the next time the game starts.");
         File dll = losslessDll();
         File folder = gameFolder();
         File toggle = folder != null ? new File(folder, "lsfg") : null;
+        File builtin = folder != null ? new File(folder, "fg_builtin") : null;
+        boolean on = toggle != null && toggle.exists();
+        boolean own = !dll.isFile() || (builtin != null && builtin.exists());
+        entry("Frame generation", (on ? "On" : "Off") + " · " + (own ? "built-in" : "Lossless Scaling") + ". Tap to turn it "
+                + (on ? "off." : "on."), on, () -> {
+            if (toggle == null) {
+                say("Choose the game folder first.", true);
+                return;
+            }
+            if (toggle.exists()) deleteTree(toggle);
+            else if (!toggle.mkdirs()) say("Couldn't write to the game folder.", true);
+            build();
+        }, null);
         if (dll.isFile()) {
-            boolean on = toggle != null && toggle.exists();
             String size = String.format(java.util.Locale.ROOT, "%.1f MB", dll.length() / 1048576.0);
-            entry("Frame generation", (on ? "On" : "Off") + " · Lossless.dll imported (" + size + "). Tap to turn it "
-                    + (on ? "off." : "on."), on, () -> {
-                if (toggle == null) {
-                    say("Choose the game folder first.", true);
-                    return;
-                }
-                if (toggle.exists()) deleteTree(toggle);
-                else if (!toggle.mkdirs()) say("Couldn't write to the game folder.", true);
+            entry("Generator", (own ? "Built-in" : "Lossless Scaling") + " · Lossless.dll imported (" + size + "). Tap for the "
+                    + (own ? "Lossless Scaling one (sharper, heavier)." : "built-in one (lighter, any GPU)."), !own, () -> {
+                if (builtin == null) return;
+                if (builtin.exists()) deleteTree(builtin);
+                else if (!builtin.mkdirs()) say("Couldn't write to the game folder.", true);
                 build();
             }, () -> {
                 dll.delete();
                 build();
             });
         }
-        TextView add = button(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll", !dll.isFile());
+        TextView add = button(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll", false);
         add.setOnClickListener(v -> pickDll());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
         lp.topMargin = dp(10);

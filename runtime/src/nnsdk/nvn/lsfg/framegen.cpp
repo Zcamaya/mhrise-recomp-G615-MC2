@@ -39,6 +39,7 @@
 #include "nnsdk/nvn/hud.h"
 #include "nnsdk/nvn/lsfg/chain.h"
 #include "nnsdk/nvn/lsfg/dll.h"
+#include "nnsdk/nvn/lsfg/motion.h"
 #include "nnsdk/nvn/nvn.h"
 #include "nnsdk/nvn/objects.h"
 
@@ -76,7 +77,7 @@ struct Slot {
     VkSemaphore acquired = VK_NULL_HANDLE, rendered = VK_NULL_HANDLE;
     VkFence done = VK_NULL_HANDLE;
     bool pending = false, timed = false;
-    const Chain* chain = nullptr;  // la cadena que usa este envío (no se suelta hasta que acabe)
+    const Generator* chain = nullptr;  // la cadena que usa este envío (no se suelta hasta que acabe)
 };
 
 class FrameGen {
@@ -105,7 +106,7 @@ private:
     bool compile(std::string* why, bool* missing);
     bool guard(double dt, Clock::time_point now, bool enabled);
     void log_stats(Clock::time_point now);
-    bool record_lsfg(int index, const Texture& t, uint64_t n, bool generate);
+    bool record_lsfg(int index, const Texture& t, const VkRect2D& crop, uint64_t n, bool generate);
     bool record_blit(Slot& s, const Window& w, uint32_t image);
 
     enum class State { Off, Waiting, Ready, Failed };
@@ -115,17 +116,21 @@ private:
     // Hilo de fondo: compila (la primera vez) y monta una cadena; el hilo que presenta recoge el resultado.
     struct Job {
         std::mutex m;
-        bool busy = false, done = false, fatal = false, missing = false;
-        Chain* chain = nullptr;  // sin unique_ptr: un resultado sin recoger no se destruye al salir del proceso
+        bool busy = false, done = false, fatal = false, missing = false, fell_back = false;
+        Generator* chain = nullptr;  // sin unique_ptr: un resultado sin recoger no se destruye al salir del proceso
         std::string why;
         double ms = 0;
     } job_;
     Pipelines pipelines_;     // los escribe solo el hilo de fondo, antes de la primera cadena
     bool compiled_ = false;   // ídem; se lee con el trabajo ya terminado
     const char* variant_ = "";
+    // The built-in generator (motion.h) instead of LSFG: chosen (<datos>/fg_builtin), or LSFG couldn't run here (no DLL,
+    // or its chain can't be built on this GPU), which holds until the game restarts
+    bool lsfg_unusable_ = false;
+    bool want_builtin() const { return lsfg_unusable_ || NVN_FLAG("fg_builtin"); }
 
-    Chain* chain_ = nullptr;    // la que se usa
-    Chain* retired_ = nullptr;  // apagada o reconstruida: se suelta cuando la GPU acaba sus envíos
+    Generator* chain_ = nullptr;    // la que se usa
+    Generator* retired_ = nullptr;  // apagada o reconstruida: se suelta cuando la GPU acaba sus envíos
     VkCommandPool pool_ = VK_NULL_HANDLE;
     VkQueryPool queries_ = VK_NULL_HANDLE;
     uint64_t timestamp_mask_ = 0;
@@ -157,6 +162,9 @@ uint32_t FrameGen::swapchain_images(const VkSurfaceCapabilitiesKHR& caps) {
     if (!dll.empty()) {
         n = 4;
         NVN_LOG("lsfg: hay %s: swapchain de 4 imágenes (el frame generado y el real van seguidos)\n", dll.c_str());
+    } else if (Motion::available()) {  // (the built-in generator needs no DLL: it can be turned on any time)
+        n = 4;
+        NVN_LOG("lsfg: sin Lossless.dll, generador propio disponible: swapchain de 4 imágenes\n");
     }
     return caps.maxImageCount ? std::min(n, caps.maxImageCount) : n;
 }
@@ -276,24 +284,42 @@ void FrameGen::start_job(VkExtent2D extent, VkFormat format, float flow) {
         job_.busy = true;
         job_.done = false;
     }
-    const bool need_compile = !compiled_;
+    const bool builtin = want_builtin();
+    const bool need_compile = !compiled_ && !builtin;
     state_ = State::Waiting;
     if (need_compile) NVN_LOG("lsfg: compilando los shaders en segundo plano (hasta entonces, sin generar)\n");
-    std::thread([this, extent, format, flow, need_compile] {
+    std::thread([this, extent, format, flow, need_compile, builtin] {
         pthread_setname_np(pthread_self(), "NvnLsfg");
         const Clock::time_point t0 = Clock::now();
         std::string why;
-        bool fatal = false, missing = false;
-        std::unique_ptr<Chain> chain;
-        if (need_compile && !compile(&why, &missing)) {
-            fatal = !missing;
-        } else {
-            chain = std::make_unique<Chain>();
-            if (!chain->create(pipelines_, extent, format, flow, &why)) chain.reset();
+        bool fatal = false, missing = false, fell_back = false;
+        std::unique_ptr<Generator> chain;
+        if (!builtin) {
+            if (need_compile && !compile(&why, &missing)) {
+                fatal = !missing;
+            } else {
+                auto lsfg = std::make_unique<Chain>();
+                if (lsfg->create(pipelines_, extent, format, flow, &why)) chain = std::move(lsfg);
+                else fatal = true;
+            }
+        }
+        // Without LSFG (none chosen, no DLL, or it can't run here): the built-in one, on any Vulkan 1.1 GPU
+        if (!chain && Motion::available()) {
+            auto own = std::make_unique<Motion>();
+            std::string reason;
+            if (own->create(extent, format, &reason)) {
+                if (!builtin) NVN_LOG("lsfg: LSFG no va (%s): uso el generador propio\n", why.c_str());
+                chain = std::move(own);
+                fell_back = !builtin;
+                fatal = missing = false;
+            } else {
+                why += (why.empty() ? "" : "; ") + std::string("generador propio: ") + reason;
+            }
         }
         std::lock_guard lock(job_.m);
         job_.fatal = fatal;
         job_.missing = missing;
+        job_.fell_back = fell_back;
         job_.chain = chain.release();
         job_.why = why;
         job_.ms = ms_between(t0, Clock::now());
@@ -302,9 +328,9 @@ void FrameGen::start_job(VkExtent2D extent, VkFormat format, float flow) {
 }
 
 void FrameGen::poll_job() {
-    std::unique_ptr<Chain> chain;
+    std::unique_ptr<Generator> chain;
     std::string why;
-    bool fatal, missing;
+    bool fatal, missing, fell_back;
     double took;
     {
         std::lock_guard lock(job_.m);
@@ -315,8 +341,10 @@ void FrameGen::poll_job() {
         why = job_.why;
         fatal = job_.fatal;
         missing = job_.missing;
+        fell_back = job_.fell_back;
         took = job_.ms;
     }
+    if (fell_back) lsfg_unusable_ = true;  // (no more tries with LSFG this session)
     if (missing) {  // sin DLL: se reintenta al apagar y volver a encender
         NVN_LOG("lsfg: %s; se reintenta al quitar y volver a poner <datos>/lsfg\n", why.c_str());
         missing_dll_ = true;
@@ -325,8 +353,9 @@ void FrameGen::poll_job() {
     }
     if (fatal) return disable(why);
     if (!chain) return disable("no se pudo montar la cadena: " + why);
-    NVN_LOG("lsfg: cadena %ux%u (formato %d), flujo %.2f, %s: %zu imágenes, %.1f MB, %u descriptor sets; %.0f ms\n",
-            chain->extent().width, chain->extent().height, chain->format(), chain->flow(), variant_, chain->images(),
+    NVN_LOG("lsfg: cadena %s %ux%u (formato %d), flujo %.2f, %s: %zu imágenes, %.1f MB, %u descriptor sets; %.0f ms\n",
+            chain->name(), chain->extent().width, chain->extent().height, chain->format(), chain->flow(),
+            chain->name()[0] == 'L' ? variant_ : "Vulkan 1.1", chain->images(),
             chain->bytes() / 1048576.0, chain->sets(), took);
     chain_ = chain.release();
     state_ = State::Ready;
@@ -461,7 +490,7 @@ void FrameGen::log_stats(Clock::time_point now) {
     gpu_n_ = 0;
 }
 
-bool FrameGen::record_lsfg(int index, const Texture& t, uint64_t n, bool generate) {
+bool FrameGen::record_lsfg(int index, const Texture& t, const VkRect2D& crop, uint64_t n, bool generate) {
     Slot& s = slots_[index];
     VkCommandBuffer cmd = s.cmd;
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -484,15 +513,21 @@ bool FrameGen::record_lsfg(int index, const Texture& t, uint64_t n, bool generat
     }
     if (!chain_->initialized()) chain_->record_init(cmd);
     const Image& in = chain_->input(n);
-    if (in.extent.width == static_cast<uint32_t>(t.desc.width) && in.extent.height == static_cast<uint32_t>(t.desc.height)) {
+    // Only the window's crop, as window.cpp presents it: in handheld mode MH Rise draws its 1280x720 picture in the corner
+    // of a 1920x1080 texture, and the whole texture made every generated frame show the picture at two thirds of the
+    // screen, in turn with the real ones at full size (the picture shrinking and growing at 30 Hz).
+    if (in.extent.width == crop.extent.width && in.extent.height == crop.extent.height) {
         VkImageCopy region{};
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.srcOffset = {crop.offset.x, crop.offset.y, 0};
         region.extent = {in.extent.width, in.extent.height, 1};
         vkCmdCopyImage(cmd, t.image, VK_IMAGE_LAYOUT_GENERAL, in.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
-    } else {  // lsfg_medium: la cadena es más pequeña que la textura de la ventana
+    } else {  // lsfg_medium: la cadena es más pequeña que el recorte
         VkImageBlit region{};
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.srcOffsets[1] = {t.desc.width, t.desc.height, 1};
+        region.srcOffsets[0] = {crop.offset.x, crop.offset.y, 0};
+        region.srcOffsets[1] = {crop.offset.x + static_cast<int32_t>(crop.extent.width),
+                                crop.offset.y + static_cast<int32_t>(crop.extent.height), 1};
         region.dstOffsets[1] = {static_cast<int32_t>(in.extent.width), static_cast<int32_t>(in.extent.height), 1};
         vkCmdBlitImage(cmd, t.image, VK_IMAGE_LAYOUT_GENERAL, in.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region, VK_FILTER_LINEAR);
     }
@@ -611,10 +646,18 @@ void FrameGen::present(Window& w, Texture* t) {
         warm_ = 0;
         return;
     }
-    const VkExtent2D extent{static_cast<uint32_t>(t->desc.width) * (reduced ? 3 : 4) / 4,
-                            static_cast<uint32_t>(t->desc.height) * (reduced ? 3 : 4) / 4};
+    // The part of the texture that's shown (the window's crop; none: all of it), within the texture
+    VkRect2D crop{};
+    crop.offset.x = std::clamp(w.crop.offset.x, 0, t->desc.width - 1);
+    crop.offset.y = std::clamp(w.crop.offset.y, 0, t->desc.height - 1);
+    crop.extent.width = w.crop.extent.width ? std::min<uint32_t>(w.crop.extent.width, t->desc.width - crop.offset.x)
+                                            : static_cast<uint32_t>(t->desc.width - crop.offset.x);
+    crop.extent.height = w.crop.extent.height ? std::min<uint32_t>(w.crop.extent.height, t->desc.height - crop.offset.y)
+                                              : static_cast<uint32_t>(t->desc.height - crop.offset.y);
+    const VkExtent2D extent{crop.extent.width * (reduced ? 3 : 4) / 4, crop.extent.height * (reduced ? 3 : 4) / 4};
+    const bool own = chain_ && chain_->name()[0] == 'b';  // (the built-in one)
     if (!chain_ || chain_->extent().width != extent.width || chain_->extent().height != extent.height ||
-        chain_->format() != t->vk_format || chain_->flow() != flow) {
+        chain_->format() != t->vk_format || own != want_builtin() || (!own && chain_->flow() != flow)) {
         if (chain_) retire();
         if (!chain_ && !retired_) start_job(extent, t->vk_format, flow);
         warm_ = 0;
@@ -677,7 +720,7 @@ void FrameGen::present(Window& w, Texture* t) {
         warming_++;
     }
     // Sin imagen se graba igual la copia y lo compartido: la historia sigue llena para el frame siguiente.
-    if (!record_lsfg(index, *t, n, generate) || (generate && !record_blit(s, w, image))) return;
+    if (!record_lsfg(index, *t, crop, n, generate) || (generate && !record_blit(s, w, image))) return;
 
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si[2] = {{VK_STRUCTURE_TYPE_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_SUBMIT_INFO}};

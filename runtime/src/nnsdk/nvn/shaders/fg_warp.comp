@@ -1,0 +1,49 @@
+#version 450
+// Built-in frame generation, 6: the picture between A and B. Each pixel's vector d (the field bilinear, in pixels)
+// takes A at x - d and B at x + d, and their average where they agree. Where they don't (something uncovered or
+// covered), the median of the two and the plain blend at x. A pixel the same in both frames (the HUD, still scenery)
+// keeps B's own; one whose match is poor everywhere (a cut, a flash, smoke) takes B: a cut shows B twice.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D frame_a;
+layout(binding = 1) uniform sampler2D frame_b;
+layout(binding = 2, rgba32f) uniform readonly image2D field;
+layout(binding = 3, rgba8) uniform writeonly image2D dst;
+// size: the picture; src_size: the field; inv_src: 1 / the picture; pad: pixels per field texel's luma texel (4)
+layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int pad; } p;
+
+vec4 field_at(ivec2 c) { return imageLoad(field, clamp(c, ivec2(0), p.src_size - 1)); }
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= p.size.x || q.y >= p.size.y) return;
+    vec2 x = vec2(q) + 0.5;
+    vec2 uv = x * p.inv_src;
+    vec3 a0 = texelFetch(frame_a, q, 0).rgb, b0 = texelFetch(frame_b, q, 0).rgb;
+    vec3 diff = abs(a0 - b0);
+    if (max(diff.r, max(diff.g, diff.b)) < 0.008) {
+        imageStore(dst, q, vec4(b0, 1.0));
+        return;
+    }
+    // (a field texel is a 4x4 block of luma texels, 16x16 pixels: its middle at 8 + 16 i)
+    float block = float(p.pad * 4);
+    vec2 f = x / block - 0.5;
+    ivec2 i = ivec2(floor(f));
+    vec2 t = f - vec2(i);
+    vec4 v00 = field_at(i), v10 = field_at(i + ivec2(1, 0)), v01 = field_at(i + ivec2(0, 1)), v11 = field_at(i + ivec2(1, 1));
+    vec4 v = mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y);
+    vec2 d = v.xy * float(p.pad);  // (luma texels to pixels)
+    vec3 a = textureLod(frame_a, uv - d * p.inv_src, 0.0).rgb;
+    vec3 b = textureLod(frame_b, uv + d * p.inv_src, 0.0).rgb;
+    vec3 e = abs(a - b);
+    float err = max(e.r, max(e.g, e.b));
+    vec3 outc;
+    if (v.z > 2.5) {
+        outc = b0;  // (no block there matched: a cut or a flash)
+    } else if (err < 0.06) {
+        outc = (a + b) * 0.5;
+    } else {
+        vec3 blend = (a0 + b0) * 0.5;
+        outc = max(min(a, b), min(max(a, b), blend));  // (the median of a, b and the blend)
+    }
+    imageStore(dst, q, vec4(outc, 1.0));
+}
