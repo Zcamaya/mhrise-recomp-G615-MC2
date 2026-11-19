@@ -28,6 +28,12 @@ struct VkContext {
     // VK_EXT_custom_border_color (sin formato) y VK_EXT_sampler_filter_minmax: bordes exactos y reducción MIN/MAX.
     bool custom_border_color = false, filter_minmax = false;
     bool multi_viewport = true;
+    // VK_EXT_extended_dynamic_state on (vk.cpp): cull mode, front face, depth test/write/compare and the stencil test
+    // and ops are set per draw instead of baked into the pipeline (executor.cpp), so far fewer pipelines
+    bool extended_dynamic_state = false;
+    // VK_EXT_vertex_input_dynamic_state on: the vertex attributes' formats and the streams' strides and step rates set
+    // per draw too (executor.cpp)
+    bool vertex_input_dynamic_state = false;
     bool depth_bias_clamp = false;  // the depthBiasClamp feature (without it the clamp of a depth bias must be 0)  // la feature multiViewport (vk.cpp): los shaders que la usan, sin ella si no está
     uint32_t max_custom_border_samplers = 0;
     // VK_KHR_draw_indirect_count: los multi-draw de NVN con el número de draws en la GPU (nulos sin la extensión).

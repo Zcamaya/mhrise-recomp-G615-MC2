@@ -297,7 +297,7 @@ void FrameGen::start_job(VkExtent2D extent, VkFormat format, float flow) {
         if (!chain && Motion::available()) {
             auto own = std::make_unique<Motion>();
             std::string reason;
-            if (own->create(extent, format, &reason)) {
+            if (own->create(extent, format, flow, &reason)) {
                 if (!builtin) NVN_LOG("lsfg: LSFG no va (%s): uso el generador propio\n", why.c_str());
                 chain = std::move(own);
                 fell_back = !builtin;
@@ -603,7 +603,7 @@ void FrameGen::present(Window& w, Texture* t) {
     const VkExtent2D extent{crop.extent.width * (reduced ? 3 : 4) / 4, crop.extent.height * (reduced ? 3 : 4) / 4};
     const bool own = chain_ && chain_->name()[0] == 'b';  // (the built-in one)
     if (!chain_ || chain_->extent().width != extent.width || chain_->extent().height != extent.height ||
-        chain_->format() != t->vk_format || own != want_builtin() || (!own && chain_->flow() != flow)) {
+        chain_->format() != t->vk_format || own != want_builtin() || chain_->flow() != flow) {
         if (chain_) retire();
         if (!chain_ && !retired_) start_job(extent, t->vk_format, flow);
         warm_ = 0;

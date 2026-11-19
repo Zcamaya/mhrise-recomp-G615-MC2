@@ -241,8 +241,14 @@ bool create(VkContext& c, bool system_driver) {
             features.vertexPipelineStoresAndAtomics, features.fragmentStoresAndAtomics);
     // For the settings menu (SettingsMenu: GpuInfo), which shows the options of this GPU only
     if (FILE* g = fopen((nnsdk::ini::data_dir() + "/gpu.txt").c_str(), "w")) {
-        fprintf(g, "vendor 0x%x\nbc %d\nastc %d\nname %s\n", c.props.vendorID, features.textureCompressionBC ? 1 : 0,
-                features.textureCompressionASTC_LDR ? 1 : 0, c.props.deviceName);
+        auto has_ext = [&](const char* name) {
+            for (const VkExtensionProperties& e : exts)
+                if (strcmp(e.extensionName, name) == 0) return 1;
+            return 0;
+        };
+        fprintf(g, "vendor 0x%x\nbc %d\nastc %d\nname %s\neds %d\nvids %d\n", c.props.vendorID,
+                features.textureCompressionBC ? 1 : 0, features.textureCompressionASTC_LDR ? 1 : 0, c.props.deviceName,
+                has_ext(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME), has_ext(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME));
         fclose(g);
     }
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
@@ -281,6 +287,45 @@ bool create(VkContext& c, bool system_driver) {
                     NVN_LOG("robustBufferAccess2: sí\n");
                 }
             }
+    // Extended dynamic state: the rasterizer and depth/stencil state the game changes most often, set per draw. A game
+    // state that differs only in those (cull mode, which face is front, depth test/write/compare, the stencil test and
+    // its ops) shares one pipeline instead of one each: fewer pipelines to build (the hitches when something new shows
+    // up) and fewer to switch between. Off by default (drivers have had bugs with it): <datos>/dynamic_state at start-up
+    // (Settings → Graphics, where the driver has it).
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
+    if (nnsdk::ini::on("dynamic_state"))
+        for (const VkExtensionProperties& e : exts)
+            if (strcmp(e.extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME) == 0) {
+                VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                f2.pNext = &eds;
+                vkGetPhysicalDeviceFeatures2(c.gpu, &f2);
+                if (eds.extendedDynamicState) {
+                    eds.pNext = const_cast<void*>(dci.pNext);
+                    dci.pNext = &eds;
+                    device_ext.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+                    c.extended_dynamic_state = true;
+                }
+            }
+    NVN_LOG("extended dynamic state: %s\n", c.extended_dynamic_state ? "on" : "off");
+    // Vertex input dynamic state: the attributes' formats and the streams' strides and step rates per draw as well, so
+    // a mesh with another vertex layout doesn't make a pipeline of its own. Off by default: <datos>/vertex_input_state at
+    // start-up (Settings → Graphics, where the driver has it).
+    VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT vids{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT};
+    if (nnsdk::ini::on("vertex_input_state"))
+        for (const VkExtensionProperties& e : exts)
+            if (strcmp(e.extensionName, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME) == 0) {
+                VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                f2.pNext = &vids;
+                vkGetPhysicalDeviceFeatures2(c.gpu, &f2);
+                if (vids.vertexInputDynamicState) {
+                    vids.pNext = const_cast<void*>(dci.pNext);
+                    dci.pNext = &vids;
+                    device_ext.push_back(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+                    c.vertex_input_dynamic_state = true;
+                }
+            }
+    NVN_LOG("vertex input dynamic state: %s\n", c.vertex_input_dynamic_state ? "on" : "off");
     // gl_DrawID, gl_BaseVertex y gl_BaseInstance en los shaders traducidos (el DrawID de los multi-draw).
     VkPhysicalDeviceShaderDrawParametersFeatures draw_parameters{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES};
     {

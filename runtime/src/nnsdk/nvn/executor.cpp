@@ -1558,8 +1558,24 @@ private:
         float blend[4];
         uint32_t ref[2], write_mask[2], compare_mask[2];
         float bias[3];
+        // extended dynamic state
+        uint32_t cull, front, depth_test, depth_write, depth_op, stencil_test;
+        uint32_t stencil_ops[2][4];  // per face: fail, pass, depth fail, compare
     };
-    DynamicState bound_dynamic_{};  // el puesto en cmd_ (válido si dynamic_valid_)
+    DynamicState bound_dynamic_{};
+    // With extended dynamic state: the key without what's set per draw
+    static void normalize_dynamic(PipelineKey& key) {
+        key.polygon.cull_face = key.polygon.front_face = 0;
+        memset(&key.depth_stencil, 0, sizeof key.depth_stencil);
+    }
+    // With vertex input dynamic state: the key without the vertex layout (set per draw)
+    static void normalize_vertex_input(PipelineKey& key) {
+        memset(key.attribs, 0, sizeof key.attribs);
+        memset(key.strides, 0, sizeof key.strides);
+        memset(key.divisors, 0, sizeof key.divisors);
+    }
+    // The vertex layout last set with vkCmdSetVertexInputEXT (valid with dynamic_valid_)
+    uint64_t bound_vertex_input_ = 0;  // el puesto en cmd_ (válido si dynamic_valid_)
     VkBuffer bound_vb_buf_[16] = {};  // vertex buffers enlazados en cmd_
     VkDeviceSize bound_vb_off_[16] = {};
     bool dynamic_valid_ = false;
@@ -1683,7 +1699,7 @@ private:
     // los comandos de antes -> el pase): ordena lo grabado antes del final del pase con todo lo que venga, como una barrera
     // completa. <datos>/tight_barriers (en vivo): se salta la que no ordena nada; <datos>/tight_barriers_pass: también
     // la que solo tiene detrás el final de un pase (cortes por barreras de NVN, dispatch tras un pase). Apagadas por
-    // defecto; el perfil cuenta las que se saltarían aunque lo estén.
+    // defecto; el perfil cuenta las que se saltarían aunque no se salten.
     bool gpu_work_ = true, work_after_pass_ = true;
     void note_gpu_work() { gpu_work_ = work_after_pass_ = true; }
     bool skip_redundant_barriers_ = false, pass_end_is_barrier_ = false;  // interruptores (read_flags)
@@ -3447,6 +3463,7 @@ bool Executor::record_overlay_readbacks() {
             barrier_done = true;
         }
         const VkBufferCopy region{o.offset, o.readback_offset, o.size};
+        note_gpu_work();
         vkCmdCopyBuffer(cmd_, o.buffer, o.readback, 1, &region);
         o.readback_submit = current;
         busy_readbacks_[o.readback_data] = o.readback_arena;
@@ -3561,6 +3578,9 @@ void Executor::read_flags() {
     low_table_ = !NVN_FLAG("no_low_table");
     separate_tables_ = !NVN_FLAG("no_split_tables");
     scan_per_pass_ = NVN_FLAG("inspect_per_pass");
+    // A full barrier with nothing recorded since the last one orders nothing; the driver still drains the GPU and
+    // flushes its caches for it (on Turnip, a wait for idle each). About half of the ~250 a frame in MH Rise are those.
+    // Off by default (Settings → Performance → Skip empty GPU barriers: <datos>/tight_barriers).
     skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
     recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
@@ -4325,6 +4345,7 @@ bool Executor::bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer b
                                         static_cast<uint32_t>(kind)};
             vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, bc_layout_, 0, 1, &set, 0, nullptr);
             vkCmdPushConstants(cmd_, bc_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
+            note_gpu_work();
             vkCmdDispatch(cmd_, (static_cast<uint32_t>(pitch / 4) + 7) / 8, (rows + 7) / 8, 1);
             any = true;
             VkBufferImageCopy r{};
@@ -6641,10 +6662,19 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     cb.pAttachments = blends.data();
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE,
-                            VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_DEPTH_BIAS};
+                            VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_DEPTH_BIAS,
+                            // extended dynamic state (only counted with it on)
+                            VK_DYNAMIC_STATE_CULL_MODE_EXT, VK_DYNAMIC_STATE_FRONT_FACE_EXT,
+                            VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT,
+                            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE_EXT,
+                            VK_DYNAMIC_STATE_STENCIL_OP_EXT};
     VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dy.dynamicStateCount = 6;
-    dy.pDynamicStates = dyn;
+    // (all seven base ones: with 6, depth bias wasn't dynamic and vkCmdSetDepthBias did nothing, so the pipeline's own 0
+    // was used: every offset the game asked for, on shadows and decals, was lost)
+    std::vector<VkDynamicState> dynamic(dyn, dyn + (vk()->extended_dynamic_state ? std::size(dyn) : 7));
+    if (vk()->vertex_input_dynamic_state) dynamic.push_back(VK_DYNAMIC_STATE_VERTEX_INPUT_EXT);
+    dy.dynamicStateCount = static_cast<uint32_t>(dynamic.size());
+    dy.pDynamicStates = dynamic.data();
 
     VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pi.stageCount = static_cast<uint32_t>(stages.size());
@@ -6696,6 +6726,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     key.topology = static_cast<uint32_t>(d.primitive);
     key.polygon = st_.polygon;
     key.depth_stencil = st_.depth_stencil;
+    if (vk()->extended_dynamic_state) normalize_dynamic(key);  // (set per draw: see the dynamic state below)
     key.color = st_.color;
     key.masks = st_.masks;
     key.masks.masks &= rp_keep_masks_;  // merged_passes: los adjuntos del pase que no son de los targets del juego, sin escribir
@@ -6737,6 +6768,14 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
             key.strides[k] = st_.streams[a.stream].stride;
             key.divisors[k] = st_.streams[a.stream].divisor;
         }
+    }
+    // (the attribute check below still sees the layout: diagnostics)
+    PipelineKey layout_key;
+    if (vk()->vertex_input_dynamic_state) {
+        memcpy(layout_key.attribs, key.attribs, sizeof key.attribs);
+        memcpy(layout_key.strides, key.strides, sizeof key.strides);
+        memcpy(layout_key.divisors, key.divisors, sizeof key.divisors);
+        normalize_vertex_input(key);  // (set per draw: see the dynamic state)
     }
     // La misma clave que la última encontrada: su hash y su pipeline, sin volver a hashear ni buscar.
     const bool memo = memo_pipeline_ && !per_stage_keys_ && last_pipeline_ && memcmp(&key, &last_pipeline_key_, sizeof key) == 0;
@@ -6807,16 +6846,17 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     // eran stubs a 0 y la caché de estado del juego (main+0x77178b0, compara layouts con esos getters) daba por iguales
     // todos los de mismo número de streams y no volvía a enlazar el estado: normales y tangentes de otro vértice (cara
     // oscura y a facetas). Se vigila al crear cada pipeline (una línea por caso, como mucho 16).
+    const PipelineKey& lk = vk()->vertex_input_dynamic_state ? layout_key : key;
     for (int k = 0; k < 16; k++) {
-        if (!(inputs & (1ull << k)) || key.divisors[k] || !key.strides[k]) continue;
-        const FormatInfo* f = format_info(key.attribs[k].format);
-        if (!f || f->block != 1 || uint32_t{key.attribs[k].offset} + f->bytes <= key.strides[k]) continue;
+        if (!(inputs & (1ull << k)) || lk.divisors[k] || !lk.strides[k]) continue;
+        const FormatInfo* f = format_info(lk.attribs[k].format);
+        if (!f || f->block != 1 || uint32_t{lk.attribs[k].offset} + f->bytes <= lk.strides[k]) continue;
         static int logged_stride = 0;
         const ProgramStage* ps = st_.stages[static_cast<int>(Stage::Fragment)];
         if (logged_stride++ < 16)
             NVN_LOG("atributo %d (formato %s, %u bytes desde %u) más ancho que la zancada %u de su stream %u: vertex %016llx "
-                    "pixel %016llx (¿estado de streams de otro draw?)\n", k, f->name, f->bytes, key.attribs[k].offset,
-                    key.strides[k], key.attribs[k].stream, static_cast<unsigned long long>(vs ? vs->print : 0),
+                    "pixel %016llx (¿estado de streams de otro draw?)\n", k, f->name, f->bytes, lk.attribs[k].offset,
+                    lk.strides[k], lk.attribs[k].stream, static_cast<unsigned long long>(vs ? vs->print : 0),
                     static_cast<unsigned long long>(ps ? ps->print : 0));
     }
 
@@ -8103,6 +8143,59 @@ void Executor::draw(const cmd::Draw& in) {
         if (all || ds.write_mask[f] != bound_dynamic_.write_mask[f]) vkCmdSetStencilWriteMask(cmd_, kFace[f], ds.write_mask[f]);
         if (all || ds.compare_mask[f] != bound_dynamic_.compare_mask[f])
             vkCmdSetStencilCompareMask(cmd_, kFace[f], ds.compare_mask[f]);
+    }
+    if (vk()->extended_dynamic_state) {
+        const DepthStencilState& z = st_.depth_stencil;
+        ds.cull = vk_cull_mode(st_.polygon.cull_face);
+        ds.front = st_.polygon.front_face ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+        ds.depth_test = z.depth_test;
+        ds.depth_write = z.depth_write;
+        ds.depth_op = vk_compare_op(z.depth_func);
+        ds.stencil_test = z.stencil_test;
+        const uint32_t ops[2][4] = {{static_cast<uint32_t>(vk_stencil_op(z.front_fail)), static_cast<uint32_t>(vk_stencil_op(z.front_zpass)),
+                                     static_cast<uint32_t>(vk_stencil_op(z.front_zfail)), static_cast<uint32_t>(vk_compare_op(z.front_func))},
+                                    {static_cast<uint32_t>(vk_stencil_op(z.back_fail)), static_cast<uint32_t>(vk_stencil_op(z.back_zpass)),
+                                     static_cast<uint32_t>(vk_stencil_op(z.back_zfail)), static_cast<uint32_t>(vk_compare_op(z.back_func))}};
+        memcpy(ds.stencil_ops, ops, sizeof ops);
+        if (all || ds.cull != bound_dynamic_.cull) vkCmdSetCullModeEXT(cmd_, ds.cull);
+        if (all || ds.front != bound_dynamic_.front) vkCmdSetFrontFaceEXT(cmd_, static_cast<VkFrontFace>(ds.front));
+        if (all || ds.depth_test != bound_dynamic_.depth_test) vkCmdSetDepthTestEnableEXT(cmd_, ds.depth_test);
+        if (all || ds.depth_write != bound_dynamic_.depth_write) vkCmdSetDepthWriteEnableEXT(cmd_, ds.depth_write);
+        if (all || ds.depth_op != bound_dynamic_.depth_op) vkCmdSetDepthCompareOpEXT(cmd_, static_cast<VkCompareOp>(ds.depth_op));
+        if (all || ds.stencil_test != bound_dynamic_.stencil_test) vkCmdSetStencilTestEnableEXT(cmd_, ds.stencil_test);
+        for (int f = 0; f < 2; f++)
+            if (all || memcmp(ds.stencil_ops[f], bound_dynamic_.stencil_ops[f], sizeof ds.stencil_ops[f]))
+                vkCmdSetStencilOpEXT(cmd_, kFace[f], static_cast<VkStencilOp>(ds.stencil_ops[f][0]),
+                                     static_cast<VkStencilOp>(ds.stencil_ops[f][1]), static_cast<VkStencilOp>(ds.stencil_ops[f][2]),
+                                     static_cast<VkCompareOp>(ds.stencil_ops[f][3]));
+    }
+    if (vk()->vertex_input_dynamic_state) {
+        // The vertex layout, as make_graphics_pipeline would bake it: each generic the vertex shader reads at its
+        // location, a binding of its own (its own buffer: see the vertices below), offset 0
+        VkVertexInputBindingDescription2EXT binds[16];
+        VkVertexInputAttributeDescription2EXT attrs[16];
+        uint32_t n = 0;
+        uint64_t print = 0xcbf29ce484222325ull;
+        const ProgramStage* vs = st_.stages[static_cast<int>(Stage::Vertex)];
+        const uint64_t inputs = vs ? vs->shader.input_generics : 0;
+        for (uint32_t k = 0; k < 16; k++) {
+            if (!(inputs & (1ull << k))) continue;
+            const VertexAttribState a = k < st_.attribs.size() ? st_.attribs[k] : VertexAttribState{};
+            const uint32_t stride = a.stream < st_.streams.size() ? st_.streams[a.stream].stride : 0;
+            const bool instanced = a.stream < st_.streams.size() && st_.streams[a.stream].divisor;
+            const FormatInfo* f = format_info(a.format);
+            const VkFormat format = f && f->vk != VK_FORMAT_UNDEFINED ? f->vk : VK_FORMAT_R32G32B32A32_SFLOAT;
+            binds[n] = {VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT, nullptr, k, stride,
+                        instanced ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX, 1};
+            attrs[n] = {VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT, nullptr, k, k, format, 0};
+            for (uint64_t v : {uint64_t{k}, uint64_t{stride}, uint64_t{instanced}, uint64_t{static_cast<uint32_t>(format)}})
+                print = (print ^ v) * 0x100000001b3ull;
+            n++;
+        }
+        if (all || print != bound_vertex_input_) {
+            vkCmdSetVertexInputEXT(cmd_, n, binds, n, attrs);
+            bound_vertex_input_ = print;
+        }
     }
     bound_dynamic_ = ds;
     dynamic_valid_ = true;
@@ -11021,8 +11114,12 @@ void Executor::warm_up() {
     size_t created = 0, missing = 0, taken = 0, failed = 0, slow = 0, done = 0;
     double slow_ms = 0;
     bool low_memory = false;
-    for (const PipelineRecord& rec : records) {
+    for (PipelineRecord rec : records) {
         if (created >= kWarmMax) break;
+        // (recorded with or without extended dynamic state: keyed as this run keys them, so the ones that now share a
+        // pipeline make it once)
+        if (rec.kind == 0 && vk()->extended_dynamic_state) normalize_dynamic(rec.key);
+        if (rec.kind == 0 && vk()->vertex_input_dynamic_state) normalize_vertex_input(rec.key);
         if (done++ % 64 == 0) {
             const long kb = available_kb();
             if (kb >= 0 && kb < kWarmMinAvailableKb) {

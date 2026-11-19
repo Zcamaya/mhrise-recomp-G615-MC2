@@ -48,6 +48,7 @@ void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (q.x >= p.size.x || q.y >= p.size.y) return;
     vec2 x = vec2(q) + 0.5;
+    bool sharp = (p.flags & 1) != 0;  // bicubic samples (Balanced and Sharp); Light, bilinear
     vec3 a0 = texelFetch(frame_a, q, 0).rgb, b0 = texelFetch(frame_b, q, 0).rgb;
     float still = most(abs(a0 - b0));
     if (still < 0.006) {
@@ -75,10 +76,12 @@ void main() {
     if (min(err_f, err_g) > 0.35 && !ok_f && !ok_g) {
         outc = b0;  // (nothing lines up: a cut or a flash)
     } else if (err_f + (ok_f ? 0.0 : 0.5) <= err_g + (ok_g ? 0.0 : 0.5)) {
-        vec3 a = bicubic(frame_a, pa), b = bicubic(frame_b, x + 0.5 * f);
+        vec3 a = sharp ? bicubic(frame_a, pa) : bilinear(frame_a, pa);
+        vec3 b = sharp ? bicubic(frame_b, x + 0.5 * f) : bilinear(frame_b, x + 0.5 * f);
         outc = ok_f ? mix((a + b) * 0.5, a, smoothstep(0.03, 0.10, err_f)) : a;
     } else {
-        vec3 a = bicubic(frame_a, x + 0.5 * g), b = bicubic(frame_b, pb);
+        vec3 a = sharp ? bicubic(frame_a, x + 0.5 * g) : bilinear(frame_a, x + 0.5 * g);
+        vec3 b = sharp ? bicubic(frame_b, pb) : bilinear(frame_b, pb);
         outc = ok_g ? mix((a + b) * 0.5, b, smoothstep(0.03, 0.10, err_g)) : b;
     }
     imageStore(dst, q, vec4(mix(b0, outc, smoothstep(0.006, 0.02, still)), 1.0));

@@ -246,6 +246,8 @@ final class SettingsMenu {
         flag("GPU usage", "How busy the GPU is. Only where the phone lets apps read it (many Adreno phones do; most "
                 + "others show N/A).", "no_hud_gpu", true);
         flag("Memory", "The game's own RAM, then the phone's used / total.", "no_hud_ram", true);
+        flag("Heat", "How close the phone is to slowing itself down from heat (Android's own measure, Android 12 and "
+                + "later): at 100 % it throttles hard. Yellow from 80 %, red from 95 %.", "no_hud_heat", true);
         flag("Shaders building", "Pipelines being made in the background right now. Above 0, a new effect or area is "
                 + "being prepared: short hitches then are that.", "no_hud_shaders", true);
     }
@@ -333,6 +335,20 @@ final class SettingsMenu {
         flag("Anisotropic filtering",
                 "Sharper floors and walls at an angle in the distance. Off: a little cheaper for a weak GPU.",
                 "no_af", true);
+        if (gpu.eds || gpu.vids) {  // (only where the driver has them; known after the game's first start)
+            header("Extensions");
+            if (gpu.eds)
+                flag("Extended dynamic state",
+                        "Cull mode, depth test and stencil set per draw instead of built into each pipeline: far fewer "
+                                + "pipelines to build, so fewer hitches when new effects or areas show up. Off by default: "
+                                + "some drivers have bugs with it. Takes effect on the next start.",
+                        "dynamic_state", false);
+            if (gpu.vids)
+                flag("Vertex input dynamic state",
+                        "The vertex layout set per draw too: fewer pipelines again (a mesh with another layout shares "
+                                + "one). Off by default, for the same reason. Takes effect on the next start.",
+                        "vertex_input_state", false);
+        }
         header("Driver");
         action("GPU driver",
                 "The system's, or one of your own for an Adreno (Turnip…), added from a .zip. Takes effect on the next start.",
@@ -343,6 +359,12 @@ final class SettingsMenu {
     }
 
     private void buildPerformance() {
+        header("GPU work");
+        flag("Skip empty GPU barriers",
+                "About half of the GPU's full stops in a frame come right after another one with nothing in between, and "
+                        + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
+                        + "by default: if graphics glitch with it on, turn it off. Applies at once.",
+                "tight_barriers", false);
         if (gpu.adreno()) {
             header("GPU");
             flag("GPU boost (Adreno)",
@@ -1472,7 +1494,8 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "cutout", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
+        "60fps", "adreno_turbo", "cutout", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "dynamic_state", "vertex_input_state",
+        "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",
         "no_hud_frametime", "no_hud_gpu", "no_hud_ram", "no_hud_shaders", "lsfg_no_guard", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",

@@ -12,10 +12,11 @@ layout(binding = 0, r32f) uniform readonly image2D i0;
 layout(binding = 1, r32f) uniform readonly image2D i1;
 layout(binding = 2, rgba16f) uniform readonly image2D coarse;
 layout(binding = 3, rgba32f) uniform writeonly image2D patches;
-// size: the grid of patches; src_size: the level; flags 1: there's a coarser flow (coarse_size packed in extra), 2: search
+// size: the grid of patches; src_size: the level; flags 1: there's a coarser flow (coarse_size packed in extra), 2: search,
+// 4: fewer steps (Light)
 layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int extra; } p;
 
-const int kIterations = 6;
+const int kIterations = 6;  // (4 with flags 4: Light)
 const int kRadius = 4;      // the coarsest level's search
 const int kCandidates = 6;  // coarser flow at the middle and 4 corners, and no motion
 
@@ -110,7 +111,8 @@ void main() {
     float det = h.x * h.z - h.y * h.y;
     if (det > 1e-9) {
         mat2 inv = mat2(h.z, -h.y, -h.y, h.x) / det;
-        for (int k = 0; k < kIterations; k++) {
+        int steps = (p.flags & 4) != 0 ? 4 : kIterations;
+        for (int k = 0; k < steps; k++) {
             float e = bilinear1(vec2(x) + u) - t;
             vec4 b = sum4(vec4(gc * e, 0.0, 0.0), i);
             vec2 du = inv * b.xy;

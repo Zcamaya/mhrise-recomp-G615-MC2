@@ -272,21 +272,25 @@ public final class DriverActivity extends Activity {
                 dll.delete();
                 build();
             });
-            if (!own && folder != null) {
-                // LSFG's flow scale: how finely it follows motion. Lower is lighter but softer and smears more.
-                File half = new File(folder, "lsfg_flow_50"), full = new File(folder, "lsfg_flow_100");
-                int level = full.exists() ? 2 : half.exists() ? 1 : 0;
-                String[] names = {"Light (flow 25 %)", "Balanced (flow 50 %)", "Sharp (flow 100 %)"};
-                entry("Quality", names[level] + ". How finely Lossless Scaling follows motion: higher is sharper with "
-                        + "less smearing, and heavier on the GPU. Tap for " + names[(level + 1) % 3] + ".", level > 0, () -> {
-                    deleteTree(half);
-                    deleteTree(full);
-                    int next = (level + 1) % 3;
-                    if (next == 1 && !half.mkdirs()) say("Couldn't write to the game folder.", true);
-                    if (next == 2 && !full.mkdirs()) say("Couldn't write to the game folder.", true);
-                    build();
-                }, null);
-            }
+        }
+        if (folder != null) {
+            // How finely the generator follows motion: Lossless Scaling's flow scale, or for the built-in one the size of
+            // its finest flow level (a quarter, a third or half of the picture). Lower is lighter but softer and smears
+            // more. The game picks it up at once.
+            File half = new File(folder, "lsfg_flow_50"), full = new File(folder, "lsfg_flow_100");
+            int level = full.exists() ? 2 : half.exists() ? 1 : 0;
+            String[] names = own ? new String[] {"Light (motion at 1/4)", "Balanced (motion at 1/3)", "Sharp (motion at 1/2)"}
+                                 : new String[] {"Light (flow 25 %)", "Balanced (flow 50 %)", "Sharp (flow 100 %)"};
+            entry("Quality", names[level] + ". How finely " + (own ? "the generator" : "Lossless Scaling") + " follows "
+                    + "motion: higher is sharper with less smearing, and heavier on the GPU (each step about twice the "
+                    + "work). Tap for " + names[(level + 1) % 3] + ".", level > 0, () -> {
+                deleteTree(half);
+                deleteTree(full);
+                int next = (level + 1) % 3;
+                if (next == 1 && !half.mkdirs()) say("Couldn't write to the game folder.", true);
+                if (next == 2 && !full.mkdirs()) say("Couldn't write to the game folder.", true);
+                build();
+            }, null);
         }
         TextView add = button(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll", false);
         add.setOnClickListener(v -> pickDll());

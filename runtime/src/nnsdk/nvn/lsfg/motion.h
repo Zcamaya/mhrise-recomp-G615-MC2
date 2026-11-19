@@ -5,7 +5,8 @@
 //
 // Dense optical flow by inverse search (DIS: Kroeger, Timofte, Dai and Van Gool, "Fast Optical Flow using Dense Inverse
 // Search", ECCV 2016), both ways, and a warp that knows what's covered and uncovered:
-//   per real frame n (record_shared): its luma at 1/4, 1/8, 1/16 and 1/32 of the picture, kept for the next pair;
+//   per real frame n (record_shared): its luma at four levels from 1/4 of the picture (Light; 1/3 Balanced, 1/2 Sharp)
+//   down, kept for the next pair;
 //   for the picture between n - 1 (A) and n (B) (record_generate), from the coarsest level to the finest, A to B and
 //   B to A:
 //     1. patches of 8x8 texels every 4 (fg_patch): each starts from the best of the coarser level's motion around it
@@ -36,7 +37,8 @@ public:
     ~Motion() override { destroy(); }
 
     // For a picture of that size and format (the window's). false with the reason (and nothing made) if it fails.
-    bool create(VkExtent2D extent, VkFormat format, std::string* why);
+    // flow: the quality, as LSFG's flow scale (0.25 Light, 0.5 Balanced, 1 Sharp)
+    bool create(VkExtent2D extent, VkFormat format, float flow, std::string* why);
     void destroy();
 
     const char* name() const override { return "built-in"; }
@@ -48,14 +50,14 @@ public:
     void record_generate(VkCommandBuffer cmd, uint64_t n) const override;
     VkExtent2D extent() const override { return extent_; }
     VkFormat format() const override { return format_; }
-    float flow() const override { return 0.25f; }  // (the finest flow level: a quarter of the picture)
+    float flow() const override { return flow_; }
     size_t images() const override { return all_.size(); }
     VkDeviceSize bytes() const override { return bytes_; }
     uint32_t sets() const override { return kSets; }
 
 private:
     enum Pass { kLuma, kDown, kPatch, kDensify, kWarp, kPasses };
-    static constexpr int kLevels = 4;  // 1/4 .. 1/32 of the picture (fewer if the picture is small)
+    static constexpr int kLevels = 4;  // from the finest (1/2, 1/3 or 1/4 of the picture) down, halving (fewer if small)
     struct Pipeline {
         VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
         VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -78,6 +80,8 @@ private:
     VkExtent2D extent_{};
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     int levels_ = kLevels;
+    float flow_ = 0.25f;
+    uint32_t finest_ = 4;  // picture pixels per texel of the finest flow level
     bool initialized_ = false;
     Pipeline passes_[kPasses];
     VkSampler sampler_ = VK_NULL_HANDLE;

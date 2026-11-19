@@ -135,17 +135,55 @@ void mount(const char* name, const std::string& dir, bool read_only = false, boo
     printf("[fs] %s: -> %s%s\n", name, dir.c_str(), read_only ? " (solo lectura)" : "");
 }
 
-// "rom:/data/a.dat" -> "<carpeta de rom>/data/a.dat" y su punto de montaje. Vacío si el punto de montaje no
-// existe. Un nombre sin ':' es el punto de montaje entero ("save" en CommitSaveData).
+// Mods, as LayeredFS does on a Switch: <datos>/mods/<any name>/romfs/... holds files that take the place of the game's
+// (or are added to it: the game's patch paks, re_chunk_000.pak.patch_00N.pak, are found by name). Several mods: the
+// first by folder name wins for a file both have. A folder whose name starts with '.' or '#' is switched off. Read
+// once, when rom: is first used: added or switched mods count from the next start.
+const std::vector<std::string>& mod_roots() {
+    static const std::vector<std::string> roots = [] {
+        std::vector<std::string> r;
+        const std::string dir = data_dir() + "/mods";
+        if (DIR* d = opendir(dir.c_str())) {
+            while (const dirent* e = readdir(d)) {
+                if (e->d_name[0] == '.' || e->d_name[0] == '#') continue;
+                const std::string root = dir + "/" + e->d_name + "/romfs";
+                struct stat st;
+                if (stat(root.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) r.push_back(root);
+            }
+            closedir(d);
+        }
+        std::sort(r.begin(), r.end());
+        for (const std::string& m : r) printf("[fs] mod: %s\n", m.c_str());
+        return r;
+    }();
+    return roots;
+}
+
+// "rom:/data/a.dat" -> "<carpeta de rom>/data/a.dat" y su punto de montaje (or a mod's copy of it). Vacío si el punto
+// de montaje no existe. Un nombre sin ':' es el punto de montaje entero ("save" en CommitSaveData).
 std::string host_path(const char* path, Mount* out = nullptr) {
     const char* colon = strchr(path, ':');
     std::string name = colon ? std::string(path, colon - path) : path;
+    const char* rest = colon ? colon + 1 : "";
+    while (*rest == '/') rest++;
+    if (name == "rom" && *rest)
+        for (const std::string& root : mod_roots()) {
+            const std::string modded = root + "/" + rest;
+            struct stat st;
+            if (stat(modded.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+                static std::atomic<int> logged{0};
+                if (logged++ < 64) printf("[fs] mod file: %s\n", modded.c_str());
+                std::lock_guard lock(g_mounts_m);
+                auto it = g_mounts.find(name);
+                if (it == g_mounts.end()) return {};
+                if (out) *out = it->second;
+                return modded;
+            }
+        }
     std::lock_guard lock(g_mounts_m);
     auto it = g_mounts.find(name);
     if (it == g_mounts.end()) return {};
     if (out) *out = it->second;
-    const char* rest = colon ? colon + 1 : "";
-    while (*rest == '/') rest++;
     return it->second.dir + "/" + rest;
 }
 

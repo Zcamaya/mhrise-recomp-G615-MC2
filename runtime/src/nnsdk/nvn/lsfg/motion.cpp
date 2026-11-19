@@ -29,7 +29,9 @@ constexpr VkFormat kLumaFormat = VK_FORMAT_R32_SFLOAT, kFieldFormat = VK_FORMAT_
 // The dense flows: half floats (a storage format every driver has, and filterable), so the warp reads each with one
 // bilinear tap instead of four loads
 constexpr VkFormat kFlowFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr uint32_t kFinest = 4;  // the finest flow level: a quarter of the picture
+// The finest flow level by quality (the Quality row, the same switches as LSFG's flow): a quarter of the picture
+// (Light), a third (Balanced), half (Sharp). Each step finer is about twice the work and follows smaller things.
+uint32_t finest_for(float flow) { return flow >= 0.99f ? 2 : flow >= 0.49f ? 3 : 4; }
 constexpr VkFormat kOut = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkImageUsageFlags kWork = VK_IMAGE_USAGE_STORAGE_BIT;
 
@@ -74,7 +76,7 @@ void Motion::add(Image& image, VkExtent2D extent, VkFormat format, VkFormat view
     all_.push_back(&image);
 }
 
-bool Motion::create(VkExtent2D extent, VkFormat format, std::string* why) {
+bool Motion::create(VkExtent2D extent, VkFormat format, float flow, std::string* why) {
     destroy();
     if (!available()) {
         *why = "this build has no shaders for it (tools/shaders.sh)";
@@ -82,6 +84,8 @@ bool Motion::create(VkExtent2D extent, VkFormat format, std::string* why) {
     }
     extent_ = extent;
     format_ = format;
+    flow_ = flow;
+    finest_ = finest_for(flow);
     if (!build_pipelines(why) || !build_images(why) || !build_sets(why)) {
         destroy();
         return false;
@@ -187,7 +191,7 @@ bool Motion::build_images(std::string* why) {
             srgb ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0);
     // The levels: a quarter of the picture, then halves, while both sides keep at least 16 texels (two patches)
     levels_ = 0;
-    for (VkExtent2D e = div(extent_, kFinest); levels_ < kLevels && e.width >= 16 && e.height >= 16; e = div(e, 2)) {
+    for (VkExtent2D e = div(extent_, finest_); levels_ < kLevels && e.width >= 16 && e.height >= 16; e = div(e, 2)) {
         for (int i = 0; i < 2; i++) add(lum_[i][levels_], e, kLumaFormat, kLumaFormat, kWork);
         for (int w = 0; w < 2; w++) {
             add(patches_[w][levels_], grid(e), kFieldFormat, kFieldFormat, kWork);
@@ -363,7 +367,7 @@ void Motion::dispatch(VkCommandBuffer cmd, Pass pass, VkDescriptorSet set, VkExt
 
 void Motion::record_shared(VkCommandBuffer cmd, uint64_t n) const {
     const int p = static_cast<int>(n % 2);
-    dispatch(cmd, kLuma, luma_set_[p], lum_[p][0].extent, extent_, 0, 0);
+    dispatch(cmd, kLuma, luma_set_[p], lum_[p][0].extent, extent_, 0, static_cast<int>(finest_));
     for (int l = 1; l < levels_; l++) {
         compute_barrier(cmd);
         dispatch(cmd, kDown, down_set_[p][l], lum_[p][l].extent, lum_[p][l - 1].extent, 0, 0);
@@ -374,18 +378,21 @@ void Motion::record_generate(VkCommandBuffer cmd, uint64_t n) const {
     const int p = static_cast<int>(n % 2);
     auto packed = [](VkExtent2D e) { return static_cast<int>(e.width | (e.height << 16)); };
     compute_barrier(cmd);  // (this frame's levels, from record_shared)
+    // Light (the lowest quality, for weak GPUs): fewer search steps and bilinear samples in the warp, roughly a third
+    // less work again
+    const bool light = finest_ >= 4;
     for (int l = levels_ - 1; l >= 0; l--) {
         const bool coarsest = l == levels_ - 1;
         const VkExtent2D e = lum_[p][l].extent;
         // flags 1: start from the coarser level's flow; 2: search whole texels first (the coarsest)
         for (int w = 0; w < 2; w++)
-            dispatch(cmd, kPatch, patch_set_[p][w][l], grid(e), e, coarsest ? 2 : 1,
+            dispatch(cmd, kPatch, patch_set_[p][w][l], grid(e), e, (coarsest ? 2 : 1) | (light ? 4 : 0),
                      coarsest ? 0 : packed(flows_[w][l + 1].extent), true);
         compute_barrier(cmd);
         for (int w = 0; w < 2; w++) dispatch(cmd, kDensify, dense_set_[p][w][l], e, grid(e), 0, 0);
         compute_barrier(cmd);
     }
-    dispatch(cmd, kWarp, warp_set_[p], extent_, flows_[0][0].extent, 0, static_cast<int>(kFinest));
+    dispatch(cmd, kWarp, warp_set_[p], extent_, flows_[0][0].extent, light ? 0 : 1, static_cast<int>(finest_));
 }
 
 }  // namespace nvn::lsfg
