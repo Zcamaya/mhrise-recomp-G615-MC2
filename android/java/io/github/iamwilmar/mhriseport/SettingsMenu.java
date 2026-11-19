@@ -206,6 +206,10 @@ final class SettingsMenu {
                         + "of it. With a wider aspect ratio or Stretch, On shows the picture right to the edge. Takes "
                         + "effect on the next start.",
                 "cutout", false);
+        flag("Show Android's bars",
+                "Keep the status and navigation bars on screen while playing. Off: they're hidden, and a swipe in from "
+                        + "the edge brings them back for a moment. Takes effect the next time you come back to the game.",
+                "system_bars", false);
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "
@@ -1494,7 +1498,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "cutout", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "dynamic_state", "vertex_input_state",
+        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",

@@ -110,6 +110,10 @@ struct Options {
     // skinning de la cara del cazador (793657b4) tomaba el caso que pone los pesos a cero (1/0 → NaN, la cabeza no se
     // ve). Se emite OpReturn: nunca se ejecuta y no le da al compilador nada que suponer.
     bool broken_unreachable = false;
+    // Pixel discards (KIL) gathered into one at the end of the shader (Eden's needs_demote_reorder, which it sets for
+    // AMD and Samsung's Xclipse). Their compilers get an early discard wrong: alpha-tested cards (foliage, smoke, the
+    // edges of cliffs) came out as whole flat quads in the scene's fog colour, the big brown sheets on an Xclipse 530.
+    bool demote_reorder = false;
     // Compute of one Switch warp (32 invocations or fewer) on a GPU whose subgroups are smaller (the Mali: 16). Those
     // shaders share data through shared memory with no barrier, because a Maxwell warp runs in lockstep; split in two
     // subgroups, one half reads what the other hasn't written yet. With this a workgroup barrier goes in at each point

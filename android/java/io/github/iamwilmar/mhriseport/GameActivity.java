@@ -11,6 +11,8 @@ import android.os.VibrationEffect;
 import android.view.Gravity;
 import android.os.Vibrator;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
 import java.io.File;
@@ -55,6 +57,26 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         pad = new TouchPad(this, controls, this);
         // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
         getWindow().getDecorView().post(this::showPad);
+    }
+
+    // Full screen for real: the Fullscreen theme only drops the status bar, so with three-button navigation (or a visible
+    // gesture bar) the bottom bar sat over the game. Both bars hidden every time the window gets the focus (start-up and
+    // coming back from another app); a swipe in from the edge shows them for a moment. Settings → Display → Show Android's
+    // bars (system_bars) keeps them.
+    @Override
+    public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) hideSystemBars();
+    }
+
+    private void hideSystemBars() {
+        File folder = SettingsMenu.gameFolder(this);
+        if (folder != null && new Ini(folder).on("system_bars")) return;
+        getWindow().setDecorFitsSystemWindows(false);
+        WindowInsetsController bars = getWindow().getInsetsController();
+        if (bars == null) return;
+        bars.hide(WindowInsets.Type.systemBars());
+        bars.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
     }
 
     private void showPad() {

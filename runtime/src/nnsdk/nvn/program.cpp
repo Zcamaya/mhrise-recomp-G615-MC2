@@ -278,6 +278,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.subgroup_operations);
     h.u32(o.broken_subgroup_shuffle);
     h.u32(o.broken_unreachable);
+    if (o.demote_reorder) h.u32(0x44454D4F);  // (only where it's on: other GPUs keep their keys)
     if (o.warp_barriers) h.u32(0x57415250);  // (only where it's on: other GPUs keep their keys)
     if (!o.multi_viewport) h.u32(0x4D56);  // (solo sin multiViewport: las claves de siempre no cambian)
     h.u32(o.shared_to_local);
@@ -417,6 +418,10 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // <datos>/no_return_mali: el OpUnreachable de siempre en ellas.
         options.broken_unreachable = (c->props.vendorID == 0x5143 && !NVN_FLAG("no_return_qualcomm")) ||
                                      (c->props.vendorID == 0x13B5 && !NVN_FLAG("no_return_mali"));
+        // Samsung's Xclipse (vendor 0x144D, AMD RDNA inside) and AMD (0x1002): discards moved to the end, as Eden does
+        // for them. <data>/no_demote_reorder at translation: as before; <data>/demote_reorder forces it on any GPU.
+        options.demote_reorder = NVN_FLAG("demote_reorder") ||
+                                 ((c->props.vendorID == 0x144D || c->props.vendorID == 0x1002) && !NVN_FLAG("no_demote_reorder"));
         // <datos>/no_nonuniform al traducir: sin la decoración NonUniform (si el driver se lleva mal con ella).
         options.nonuniform_indexing = c->nonuniform_sampled && !NVN_FLAG("no_nonuniform");
         options.multi_viewport = c->multi_viewport;

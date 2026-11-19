@@ -105,6 +105,9 @@ mixed each time. It's now one continuous queue (`audio_cola.h`).
 - **Shader stutter:** translations are cached in `spirv.bin`, pipelines are warmed up from `pipelines_estado.bin`, and
   the driver's pipeline cache is saved. MH Rise creates about 1,200 translations from about 250 distinct shaders per
   session; each one used to cost 2.2 ms with the frame stopped.
+  The warm-up starts with the pipelines the last session used (`pipelines_recent.bin`), and any pipeline already
+  recorded is made right away in NvnSubmit (up to 8 ms a frame) instead of skipping its draws while a background
+  thread builds it: no more objects blinking in after loading a save. From IamWilmar's upstream v1.5.0.
 - **Mirrors and write watching** instead of hashing or copying megabytes per submit.
 - **Tiler options** (see [gpus-and-drivers.md](gpus-and-drivers.md)) to keep render passes whole on Adreno.
 - **Dynamic resolution** through the game's own `ImageQualityRate`, only when the GPU is the limit.

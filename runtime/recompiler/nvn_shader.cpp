@@ -402,6 +402,7 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         Shader::Maxwell::Flow::CFG cfg(env, flow_blocks, env.StartAddress() + (compute ? 0 : sizeof(Shader::ProgramHeader)));
         Shader::HostTranslateInfo host{};
         host.support_conditional_barrier = options.keep_conditional_barriers;
+        host.needs_demote_reorder = options.demote_reorder;
         // Bindless de los uniform buffers del juego: arrays hasta el final del cbuf (los decals de c9 son 256 registros de
         // 128 bytes en 32 KB; con el límite de 1024 descriptores repartido entre los arrays se cortaban). El Adreno admite
         // 524288 por etapa.
