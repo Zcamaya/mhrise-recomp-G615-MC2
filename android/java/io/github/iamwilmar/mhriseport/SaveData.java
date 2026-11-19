@@ -325,10 +325,30 @@ final class SaveData {
         Map<Integer, Cls> from = new HashMap<>();
         for (Root r : source) from.putIfAbsent(r.hash, r.cls);
         List<Root> out = new ArrayList<>();
-        for (Root r : template) out.add(new Root(r.hash, fillClass(r.cls, from.get(r.hash), n)));
+        for (Root r : template) {
+            Cls src = from.get(r.hash);
+            // Each root has its own revision number: one the other save wrote at another revision isn't read the same way
+            // (the Netflix release's b0ca70c9 is at 22, 1.16's at 14, and the game crashed loading it into the world), so
+            // the template's stays. Switch and Steam have the same revisions.
+            if (src != null && revision(src) != revision(r.cls)) {
+                n.kept++;
+                out.add(r);
+                continue;
+            }
+            out.add(new Root(r.hash, fillClass(r.cls, src, n)));
+        }
         for (Root r : source)
             if (!containsRoot(template, r.hash)) n.dropped++;
         return out;
+    }
+
+    private static final int REVISION = 0xef10b158;
+
+    // A root's revision (its field 0xef10b158); -1 if it has none
+    private static long revision(Cls c) {
+        for (Field f : c.fields)
+            if (f.hash == REVISION && f.value instanceof Val && ((Val) f.value).data.length == 4) return le32(((Val) f.value).data, 0);
+        return -1;
     }
 
     private static boolean containsRoot(List<Root> roots, int hash) {
@@ -370,8 +390,9 @@ final class SaveData {
             }
             n.taken++;
             if (a.kind != 1) return from;
-            // As many elements as the source has; the ones the template has no counterpart for keep their own layout,
-            // or take the first element's if it's the same class
+            // At least as many elements as the source has (the lengths change with what the save has);
+            // the ones the template has no counterpart for keep their own layout, or take the first element's if it's
+            // the same class
             Arr out = new Arr();
             out.memberType = a.memberType;
             out.memberSize = a.memberSize;
@@ -381,6 +402,13 @@ final class SaveData {
                 Cls e = (Cls) s.items.get(i);
                 if (i < a.items.size()) out.items.add(fillClass((Cls) a.items.get(i), e, n));
                 else out.items.add(first != null && first.hash == e.hash ? fillClass(first, e, n) : e);
+            }
+            // Fewer than the template has: the rest from the template. Some of these are fixed slots, and a save from
+            // another release can have fewer of them (the Netflix one: 6 of 1.16's 8 in the hunter's section, and the
+            // game crashed loading into the world)
+            for (int i = s.items.size(); i < a.items.size(); i++) {
+                out.items.add(a.items.get(i));
+                n.kept++;
             }
             if (a.hashes != null || s.hashes != null) out.hashes = new int[out.items.size()];
             return out;
@@ -404,6 +432,7 @@ final class SaveData {
         List<Root> roots;
         int curve = -1;    // Citrus: the curve the Steam ID's key is on (needed to encrypt again)
         long steamId;      // Citrus: the ID that opened it
+        boolean foreign;   // neither Switch's nor Steam's: plain main files from another release (converted too)
     }
 
     static int murmur3(byte[] d, int len) {
@@ -509,6 +538,9 @@ final class SaveData {
                 o.base = base;
                 // A plain file a save editor made from a Steam one can read at 12 too; what only Steam has gives it away
                 if (base != SWITCH_BASE || containsRoot(o.roots, STEAM_ONLY_SLOT[1])) o.steam = true;
+                // The Switch deflates its main files: a plain one is from another release (the Netflix one, say) or a
+                // save editor, and gets filled into the Switch's layout like Steam's
+                o.foreign = !o.steam && o.flags == 0 && (name.equals(SLOT) || name.equals(SYSTEM));
                 return o;
             } catch (Problem p) {
                 last = p;

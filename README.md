@@ -301,6 +301,8 @@ Settings → **Saves** handles the save in the data folder's `save/`, which is i
   the game, as JPEGs, and their list) come across too, and the old save's go. The
   save that was here goes to `save_backups/` first (the last 10 are kept, **Restore a backup** brings one back). The game
   closes right after, since it still has the old save loaded and would write it back.
+  Plain save files from another release (the Netflix one) or from a save editor are filled into this save's layout
+  the same way.
 - **Export for Steam**: the save converted to the PC version's, photos included, in `win64_save/`, to copy into Steam's
   `...\1446780\remote\win64_save` (with the game closed, and Steam Cloud off for it, or it may bring the old one back).
   It's encrypted for the account under **Steam account**.

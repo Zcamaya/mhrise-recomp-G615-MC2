@@ -200,7 +200,7 @@ final class SaveFiles {
         if (!f.isFile()) return null;
         try {
             SaveData.Opened o = SaveData.open(name, Files.readAllBytes(f.toPath()), new long[0], null, -1);
-            return o.steam ? null : o.roots;
+            return o.steam || o.foreign ? null : o.roots;
         } catch (IOException e) {
             return null;
         }
@@ -295,15 +295,18 @@ final class SaveFiles {
         Map<String, SaveData.Opened> opened = open(c, in, data, typed);
         Map<String, byte[]> out = new LinkedHashMap<>();
         StringBuilder notes = new StringBuilder();
-        boolean steam = false;
+        boolean steam = false, foreign = foreign(opened);
         for (SaveData.Opened o : opened.values()) {
-            if (!o.steam) {
+            if (foreign && ss1(o.name)) continue;  // (see foreign())
+            if (!o.steam && !o.foreign) {
                 out.put(o.name, in.files.get(o.name));  // (the Switch's file as it is)
                 continue;
             }
-            steam = true;
             out.put(o.name, toSwitch(data, o, notes));
-            keepSteam(data, o);
+            if (o.steam) {
+                steam = true;
+                keepSteam(data, o);
+            }
         }
         String backup = backup(data);
         File dir = saveDir(data);
@@ -322,8 +325,17 @@ final class SaveFiles {
             else from.add(in.paths.containsKey(n) ? in.paths.get(n) : n);
         }
         if (extra > 0) from.add(extra + " SS1_* file(s)");
-        return (steam ? "Steam save converted and imported" : "Save imported") + " (" + String.join(", ", from) + ")."
+        return (steam ? "Steam save converted and imported" : foreign ? "Save from another release converted and imported"
+                : "Save imported") + " (" + String.join(", ", from) + ")."
                 + (backup != null ? " The one before is in Saves → Restore a backup (" + backup + ")." : "") + notes;
+    }
+
+    // Plain main files: another release's save (the Netflix one, the save editors'). Its SS1_* photo list has another
+    // length and no photos with it, so it's left out (the game makes its own).
+    private static boolean foreign(Map<String, SaveData.Opened> opened) {
+        for (SaveData.Opened o : opened.values())
+            if (o.foreign) return true;
+        return false;
     }
 
     static final class Zip {
@@ -375,15 +387,16 @@ final class SaveFiles {
     // The picked save as the other platform's, into a zip; the port's own save isn't touched
     static Zip convert(Context c, Incoming in, File data, long typed) throws IOException {
         Map<String, SaveData.Opened> opened = open(c, in, data, typed);
-        boolean steam = false;
-        for (SaveData.Opened o : opened.values()) steam |= o.steam;
+        boolean steam = false, foreign = foreign(opened);
+        for (SaveData.Opened o : opened.values()) steam |= o.steam || o.foreign;  // (to the Switch's, from either)
         Map<String, byte[]> out = new LinkedHashMap<>();
         StringBuilder notes = new StringBuilder();
         boolean[] encrypted = {false};
         boolean template = true;
         for (SaveData.Opened o : opened.values()) {
+            if (foreign && ss1(o.name)) continue;
             if (steam) {
-                out.put(o.name, o.steam ? toSwitch(data, o, notes) : in.files.get(o.name));
+                out.put(o.name, o.steam || o.foreign ? toSwitch(data, o, notes) : in.files.get(o.name));
                 if (o.steam) keepSteam(data, o);
             } else {
                 if (!ss1(o.name)) template &= steamTemplate(data, o.name) != null;
@@ -392,7 +405,7 @@ final class SaveFiles {
         }
         Zip z = new Zip();
         z.bytes = zip(out, steam ? "" : "win64_save/");
-        z.name = (steam ? "MHRise save from Steam " : "MHRise Steam save ") + stamp() + ".zip";
+        z.name = (foreign ? "MHRise Switch save " : steam ? "MHRise save from Steam " : "MHRise Steam save ") + stamp() + ".zip";
         z.message = steam ? "Converted to the Switch's save." + notes : "Converted to a Steam save." + steamNotes(encrypted[0], template);
         return z;
     }
