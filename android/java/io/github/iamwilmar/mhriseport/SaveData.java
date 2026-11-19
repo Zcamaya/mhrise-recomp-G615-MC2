@@ -500,7 +500,7 @@ final class SaveData {
         }
         // Plain and deflated files read at 12 (the Switch's layout); Steam's at 16 or 24. A plain file from a save editor
         // could be either, so whichever reads.
-        int[] bases = o.flags == FLAG_HAS_ID ? new int[] {24} : o.flags == FLAG_CITRUS ? new int[] {STEAM_BASE}
+        int[] bases = o.flags == FLAG_HAS_ID ? new int[] {STEAM_SS1_BASE} : o.flags == FLAG_CITRUS ? new int[] {STEAM_BASE}
                 : new int[] {SWITCH_BASE, STEAM_BASE};
         Problem last = null;
         for (int base : bases) {
@@ -540,6 +540,16 @@ final class SaveData {
         h.put(new byte[] {'D', 'S', 'S', 'S'}).putInt(2).putInt(0);
         return withHash(h.array(), body);
     }
+
+    // Steam's SS1_* file: the account's number (the low half of the Steam ID) as a u64 at 0x10, then the data, laid out
+    // at 24 already. (The 4 bytes before the number are only padding: whatever was in memory, in the game's files.)
+    static byte[] steamSs1File(byte[] body, long steamId) {
+        ByteBuffer h = le(0x18);
+        h.put(new byte[] {'D', 'S', 'S', 'S'}).putInt(2).putInt(FLAG_HAS_ID).putInt(0).putLong(steamId & 0xffffffffL);
+        return withHash(h.array(), body);
+    }
+
+    static final int STEAM_SS1_BASE = 24;
 
     // Steam's file, encrypted for that Steam ID; laid out at 16 already
     static byte[] steamFile(byte[] body, long steamId, Citrus citrus, int curve) throws Problem {

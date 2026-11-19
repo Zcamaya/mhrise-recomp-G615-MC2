@@ -254,6 +254,8 @@ int translate_or_queue(ProgramStage& stage);
 // Precarga (program.cpp): el hilo que traduce los shaders al fijarlos le pasa al ejecutor cada compute traducido, para
 // crear su pipeline antes del primer dispatch (la toma warm_take).
 void prefetch_compute_pipeline(const ProgramStage& stage);
+// What has a range of the game's memory on our side (executor.cpp): for a log line
+std::string describe_memory(const void* p, size_t size);
 
 // Lo que pasó en el último tramo del log de ritmo (window.cpp lo escribe cada 10 s si hubo frames lentos y lo pone a
 // cero): GPU del frame del juego, el ejecutor por frame, pipelines y traducciones en NvnSubmit y en segundo plano.

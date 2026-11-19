@@ -57,6 +57,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         pad = new TouchPad(this, controls, this);
         // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
         getWindow().getDecorView().post(this::showPad);
+        showSaveMessage();
     }
 
     // Full screen for real: the Fullscreen theme only drops the status bar, so with three-button navigation (or a visible
@@ -385,7 +386,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 SaveFiles.Zip z = steam ? SaveFiles.exportSteam(this, data) : SaveFiles.exportSwitch(data);
                 runOnUiThread(() -> saveZip(z));
             } catch (java.io.IOException | RuntimeException e) {
-                saveDone("Couldn't export it: " + e.getMessage(), false);
+                saveDone("Couldn't export it: " + e.getMessage());
             }
         }, "SaveExport").start();
     }
@@ -410,7 +411,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 saveWork(in, request == CONVERT_ZIP || request == CONVERT_FOLDER ? 1
                         : request == LEARN_ZIP || request == LEARN_FOLDER ? 2 : 0, 0);
             } catch (java.io.IOException | RuntimeException e) {
-                saveDone("Couldn't read it: " + e.getMessage(), false);
+                saveDone("Couldn't read it: " + e.getMessage());
             }
         }, "SaveImport").start();
     }
@@ -423,16 +424,17 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 SaveFiles.Zip z = SaveFiles.convert(this, in, data, typed);
                 runOnUiThread(() -> saveZip(z));
             } else if (mode == 2) {
-                saveDone(SaveFiles.learnSteam(this, in, data, typed), false);
+                saveDone(SaveFiles.learnSteam(this, in, data, typed));
             } else {
-                saveDone(SaveFiles.install(this, in, data, typed), true);
+                String done = SaveFiles.install(this, in, data, typed);
+                runOnUiThread(() -> saveOver(done));
             }
         } catch (SaveData.Citrus.NeedId e) {
             runOnUiThread(() -> askSteamId(in, mode, typed != 0
                     ? "That Steam ID doesn't open this save. It's the account the save was made on." : ""));
         } catch (java.io.IOException | RuntimeException e) {
             saveDone((mode == 1 ? "Couldn't convert it: " : mode == 2 ? "Couldn't read it: " : "Couldn't import it: ")
-                    + e.getMessage(), false);
+                    + e.getMessage());
         }
     }
 
@@ -441,7 +443,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         new TextPrompt(this).show("Steam ID of the save's account", "17 digits, starting with 7656", "", error, 0, 24, false,
                 false, text -> {
                     if (text == null) {
-                        saveDone(null, false);
+                        saveDone(null);
                         return;
                     }
                     long id = SaveData.steamId(text);
@@ -456,12 +458,42 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     }
 
     // The menu again, on Saves, with what happened
-    private void saveDone(String message, boolean restart) {
+    private void saveDone(String message) {
         runOnUiThread(() -> {
             if (message != null) SettingsMenu.saveMessage = message;
-            if (restart) SettingsMenu.restartSave = true;
             if (!isFinishing()) new SettingsMenu(this, controls).show();
         });
+    }
+
+    // A save was put in place of the one the game has loaded. The game would write its own back the next time it saves
+    // (an autosave is enough), so it closes now, without saving; the message is shown on the next start.
+    void saveOver(String message) {
+        File data = SettingsMenu.gameFolder(this);
+        try {
+            if (data != null) java.nio.file.Files.write(SaveFiles.pendingMessage(data).toPath(),
+                    message.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException ignored) {
+            // (only the message is lost)
+        }
+        Toast.makeText(this, "Save in place. The game closes now; open it again to play it.", Toast.LENGTH_LONG).show();
+        getWindow().getDecorView().postDelayed(() -> {
+            finishAffinity();
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }, 2500);
+    }
+
+    // What the last import or restore said, once
+    private void showSaveMessage() {
+        File data = SettingsMenu.gameFolder(this);
+        if (data == null) return;
+        File f = SaveFiles.pendingMessage(data);
+        try {
+            String m = new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            f.delete();
+            Toast.makeText(this, m, Toast.LENGTH_LONG).show();
+        } catch (java.io.IOException ignored) {
+            // (nothing imported)
+        }
     }
 
     private void start(Intent i, int request) {
@@ -486,15 +518,15 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             SaveFiles.Zip z = outgoing;
             outgoing = null;
             if (uri == null || z == null) {
-                saveDone(null, false);
+                saveDone(null);
                 return;
             }
             new Thread(() -> {
                 try {
                     SaveFiles.write(getContentResolver(), uri, z.bytes);
-                    saveDone(z.message, false);
+                    saveDone(z.message);
                 } catch (java.io.IOException | RuntimeException e) {
-                    saveDone("Couldn't write the zip: " + e.getMessage(), false);
+                    saveDone("Couldn't write the zip: " + e.getMessage());
                 }
             }, "SaveExport").start();
         } else if (request == PICK_IMAGE) {

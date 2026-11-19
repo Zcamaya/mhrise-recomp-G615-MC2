@@ -1413,10 +1413,8 @@ final class SettingsMenu {
 
     // ---- mods and cheats (ModFiles; the runtime's side is fs.cpp and cheats.cpp) ----------------------------------------
 
-    // What the last import or restore did, shown at the top of Saves (GameActivity sets it). restartSave: the save on disk
-    // isn't the one the game has loaded any more, so it has to close before it saves over it.
+    // What the last export or convert did, shown at the top of Saves (GameActivity sets it)
     static String saveMessage;
-    static boolean restartSave;
 
     private void buildSaves() {
         if (folder == null) {
@@ -1424,14 +1422,6 @@ final class SettingsMenu {
             return;
         }
         if (saveMessage != null) note(saveMessage);
-        if (restartSave) {
-            note("The game still has the old save loaded and would write it back the next time it saves. Close it now and "
-                    + "open the app again to play the new one.");
-            action("Close the game", "Closes the app now, without saving, so the next start loads the imported save.", () -> {
-                activity.finishAffinity();
-                android.os.Process.killProcess(android.os.Process.myPid());
-            });
-        }
         header("This save");
         note(SaveFiles.describe(folder) + " The port uses the Switch's save files, so a save exported from here works on the "
                 + "Switch (with JKSV or Checkpoint), Eden and Yuzu as it is.");
@@ -1463,7 +1453,7 @@ final class SettingsMenu {
         header("Import");
         note("Takes the place of this save. The one here is backed up first. A Steam save is converted on the way in: it's "
                 + "decrypted with your Steam ID (read from the save itself when it can be, asked for when not), then filled "
-                + "into this save's layout. Close the game afterwards.");
+                + "into this save's layout. The game closes right after, so it can't write the old save back.");
         String[] from = {"From a .zip", "From a folder"};
         action("Import a save", "A zip or a folder with data001Slot.bin and data00-1.bin, from the Switch, Eden, Yuzu, "
                 + "another copy of the port, or Steam (win64_save).", () -> dropDown("Import a save", from, -1, i -> {
@@ -1479,8 +1469,10 @@ final class SettingsMenu {
                             new String[] {"Keep this one", "Restore it"}, -1, k -> {
                                 if (k == 1) {
                                     try {
-                                        saveMessage = SaveFiles.restore(folder, backups.get(i));
-                                        restartSave = true;
+                                        String done = SaveFiles.restore(folder, backups.get(i));
+                                        dialog.dismiss();
+                                        activity.saveOver(done);
+                                        return;
                                     } catch (IOException e) {
                                         saveMessage = "Couldn't restore it: " + e.getMessage();
                                     }

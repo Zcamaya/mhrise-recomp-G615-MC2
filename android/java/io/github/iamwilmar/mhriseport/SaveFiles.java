@@ -60,6 +60,7 @@ final class SaveFiles {
     static final class Incoming {
         final Map<String, byte[]> files = new LinkedHashMap<>();
         private final Map<String, Integer> depth = new LinkedHashMap<>();
+        final Map<String, String> paths = new LinkedHashMap<>();  // where in the zip or folder each one was
         final List<Long> ids = new ArrayList<>();
 
         void offer(String path, byte[] data) {
@@ -74,12 +75,15 @@ final class SaveFiles {
                 Matcher a = GSE_ID.matcher(new String(data, StandardCharsets.UTF_8));
                 if (a.find()) id(SaveData.steamId(a.group(1)));
             }
-            for (String main : MAIN) {
-                // The one nearest the top, if there are several (a backup folder inside, say)
-                if (name.equalsIgnoreCase(main) && (!depth.containsKey(main) || d < depth.get(main))) {
-                    files.put(main, data);
-                    depth.put(main, d);
-                }
+            String key = null;
+            for (String main : MAIN)
+                if (name.equalsIgnoreCase(main)) key = main;
+            if (ss1(name) && name.toLowerCase(Locale.ROOT).endsWith(".bin")) key = name;
+            // The one nearest the top, if there are several (a backup folder inside, say)
+            if (key != null && (!depth.containsKey(key) || d < depth.get(key))) {
+                files.put(key, data);
+                depth.put(key, d);
+                paths.put(key, p);
             }
         }
 
@@ -92,6 +96,12 @@ final class SaveFiles {
                 if (name.equalsIgnoreCase(main)) return true;
             return name.startsWith("SS1_") || name.equalsIgnoreCase("configs.user.ini");
         }
+    }
+
+    // The SS1_* files: the photos taken in the game (a 960x960 JPEG in each of 002-009, its thumbnail in 302-309, the list
+    // of them in 001), plain on the Switch, with the account's number on Steam
+    static boolean ss1(String name) {
+        return name.startsWith("SS1_");
     }
 
     private static final Pattern USERDATA = Pattern.compile("(?i)userdata/(\\d{1,10})/1446780/");
@@ -206,6 +216,7 @@ final class SaveFiles {
 
     // A Steam file as the Switch's, filled into the port's own save (its layout) when there is one
     private static byte[] toSwitch(File data, SaveData.Opened o, StringBuilder notes) {
+        if (ss1(o.name)) return SaveData.switchFile(o.name, SaveData.write(o.roots, SaveData.SWITCH_BASE));
         List<SaveData.Root> template = current(data, o.name);
         String none = " No Switch save was here to take the layout from, so only what Steam alone has was left out.";
         if (template == null && notes.indexOf(none) < 0) notes.append(none);
@@ -216,11 +227,16 @@ final class SaveFiles {
     // A Switch file as Steam's: filled into the last Steam save brought in, and encrypted for its account if that's known
     private static byte[] toSteam(Context c, File data, SaveData.Opened o, boolean[] encrypted, StringBuilder notes)
             throws IOException {
-        List<SaveData.Root> template = steamTemplate(data, o.name);
-        List<SaveData.Root> roots = SaveData.fill(template, o.roots, o.name, false, new SaveData.Counts());
         Ini ini = new Ini(data);
         long id = SaveData.steamId(ini.get("steam_id"));
         int curve = curve(ini);
+        if (ss1(o.name)) {
+            // (photos: nothing in them differs between the two, so no filling; and no encryption on Steam either)
+            if (id != 0 && curve >= 0) return SaveData.steamSs1File(SaveData.write(o.roots, SaveData.STEAM_SS1_BASE), id);
+            return SaveData.plainFile(SaveData.write(o.roots, SaveData.SWITCH_BASE));
+        }
+        List<SaveData.Root> template = steamTemplate(data, o.name);
+        List<SaveData.Root> roots = SaveData.fill(template, o.roots, o.name, false, new SaveData.Counts());
         if (id != 0 && curve >= 0) {
             encrypted[0] = true;
             return SaveData.steamFile(SaveData.write(roots, SaveData.STEAM_BASE), id, citrus(c), curve);
@@ -239,6 +255,7 @@ final class SaveFiles {
 
     // Kept to fill when a save goes back to Steam: what only the PC version has comes from here
     private static void keepSteam(File data, SaveData.Opened o) throws IOException {
+        if (ss1(o.name)) return;
         File dir = steamDir(data);
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't write " + dir);
         writeFile(new File(dir, o.name + ".steam"), SaveData.write(o.roots, SaveData.STEAM_BASE));
@@ -292,9 +309,20 @@ final class SaveFiles {
         File dir = saveDir(data);
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't write " + dir);
         for (Map.Entry<String, byte[]> f : out.entrySet()) writeFile(new File(dir, f.getKey()), f.getValue());
+        // The old save's photos (SS1_*) would be listed by nothing in the new one: out, they're in the backup
+        File[] old = dir.listFiles((x, n) -> ss1(n) && !out.containsKey(n));
+        if (old != null)
+            for (File f : old) f.delete();
         // The game's own copy of the last committed save (fs.cpp) is of the old one now; the next save makes it again
         new File(new File(data, "save.bak"), ".pendiente").delete();
-        return (steam ? "Steam save converted and imported" : "Save imported") + " (" + String.join(", ", out.keySet()) + ")."
+        List<String> from = new ArrayList<>();
+        int extra = 0;
+        for (String n : out.keySet()) {
+            if (ss1(n)) extra++;
+            else from.add(in.paths.containsKey(n) ? in.paths.get(n) : n);
+        }
+        if (extra > 0) from.add(extra + " SS1_* file(s)");
+        return (steam ? "Steam save converted and imported" : "Save imported") + " (" + String.join(", ", from) + ")."
                 + (backup != null ? " The one before is in Saves → Restore a backup (" + backup + ")." : "") + notes;
     }
 
@@ -323,11 +351,17 @@ final class SaveFiles {
         boolean[] encrypted = {false};
         boolean template = true;
         StringBuilder notes = new StringBuilder();
-        for (String name : MAIN) {
+        List<String> names = new ArrayList<>(Arrays.asList(MAIN));
+        String[] photos = saveDir(data).list((d, n) -> ss1(n) && n.toLowerCase(Locale.ROOT).endsWith(".bin"));
+        if (photos != null) {
+            Arrays.sort(photos);
+            names.addAll(Arrays.asList(photos));
+        }
+        for (String name : names) {
             File f = new File(saveDir(data), name);
             if (!f.isFile()) continue;
             SaveData.Opened o = SaveData.open(name, Files.readAllBytes(f.toPath()), new long[0], null, -1);
-            template &= steamTemplate(data, name) != null;
+            if (!ss1(name)) template &= steamTemplate(data, name) != null;
             out.put(name, toSteam(c, data, o, encrypted, notes));
         }
         if (out.isEmpty()) throw new IOException("there's no save yet");
@@ -352,7 +386,7 @@ final class SaveFiles {
                 out.put(o.name, o.steam ? toSwitch(data, o, notes) : in.files.get(o.name));
                 if (o.steam) keepSteam(data, o);
             } else {
-                template &= steamTemplate(data, o.name) != null;
+                if (!ss1(o.name)) template &= steamTemplate(data, o.name) != null;
                 out.put(o.name, toSteam(c, data, o, encrypted, notes));
             }
         }
@@ -407,6 +441,11 @@ final class SaveFiles {
         for (File f : files) newest = Math.max(newest, f.lastModified());
         return "Save: " + files.length + " file(s), last written "
                 + new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(new Date(newest)) + ".";
+    }
+
+    // What an import or restore said, for the next start (the game closes right after it, see GameActivity.saveOver)
+    static File pendingMessage(File data) {
+        return new File(data, "save_imported.txt");
     }
 
     // ---- files ----------------------------------------------------------------------------------------------------------

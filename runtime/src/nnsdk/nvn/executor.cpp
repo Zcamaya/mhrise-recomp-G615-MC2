@@ -1159,6 +1159,7 @@ public:
         --it;
         return address < it->first + it->second.first ? it->first : 0;
     }
+    std::string describe_memory(uint64_t address, uint64_t size);
     void wait_idle() {
         std::lock_guard lock(g_mutex);
         wait_all();
@@ -11862,9 +11863,41 @@ void Executor::dump_frame(Texture* presented) {
             it = frame_ - it->second.frame > 2 ? culled_draws_.erase(it) : std::next(it);
 }
 
+// What holds a range of the game's memory on our side: a GPU buffer (overlay) and whether it goes back to the memory,
+// or a texture's storage. For the album (album.cpp): a photo that comes out black says from where it was read.
+std::string Executor::describe_memory(uint64_t address, uint64_t size) {
+    std::lock_guard lock(g_mutex);
+    std::string out;
+    char line[256];
+    for (auto it = overlays_.upper_bound(address + size); it != overlays_.begin();) {
+        --it;
+        const Overlay& o = it->second;
+        if (it->first + o.size <= address) break;
+        snprintf(line, sizeof line, " overlay %#llx+%llu (writers %u, written in submit %llu, cpu_reads %d, returned %llu)",
+                 static_cast<unsigned long long>(it->first), static_cast<unsigned long long>(o.size), o.writers,
+                 static_cast<unsigned long long>(o.written), o.cpu_reads, static_cast<unsigned long long>(o.written_back));
+        out += line;
+    }
+    const auto* p = reinterpret_cast<const uint8_t*>(address);
+    g_textures.find_if([&](const void*, Texture& t) {
+        if (t.storage && p < t.storage + t.layout.total_size() && t.storage < p + size) {
+            snprintf(line, sizeof line, " texture %dx%d format 0x%x %s%s at +%lld", t.desc.width, t.desc.height,
+                     t.desc.format, t.layout.linear ? "linear" : "block-linear", t.gpu_written ? ", written by the GPU" : "",
+                     static_cast<long long>(p - t.storage));
+            out += line;
+        }
+        return false;
+    });
+    return out.empty() ? " nothing of ours (only the CPU's memory)" : out;
+}
+
 Executor g_executor;
 
 }  // namespace
+
+std::string describe_memory(const void* p, size_t size) {
+    return g_executor.describe_memory(reinterpret_cast<uint64_t>(p), size);
+}
 
 DropStats g_drop_stats;
 void prefetch_compute_pipeline(const ProgramStage& stage) { g_executor.prefetch_compute(stage); }

@@ -297,10 +297,11 @@ Settings → **Saves** handles the save in the data folder's `save/`, which is i
   Checkpoint), in Eden or Yuzu, or in another copy of the port.
 - **Import a save**: from a zip or a folder. A Switch save goes in as it is. A Steam save (`win64_save`) is converted:
   it's decrypted with the Steam ID of its account (read from its `SS1_*` files, a Goldberg/GSE `configs.user.ini` or a
-  `userdata/<id>/` path when it has one, asked for when not), then filled into the layout of the save already here. The
-  save that was here goes to `save_backups/` first (the last 10 are kept, **Restore a backup** brings one back). Close
-  the game afterwards: it still has the old save loaded.
-- **Export for Steam**: the save converted to the PC version's, in `win64_save/`, to copy into Steam's
+  `userdata/<id>/` path when it has one, asked for when not), then filled into the layout of the save already here. Its `SS1_*` files (the photos taken in
+  the game, as JPEGs, and their list) come across too, and the old save's go. The
+  save that was here goes to `save_backups/` first (the last 10 are kept, **Restore a backup** brings one back). The game
+  closes right after, since it still has the old save loaded and would write it back.
+- **Export for Steam**: the save converted to the PC version's, photos included, in `win64_save/`, to copy into Steam's
   `...\1446780\remote\win64_save` (with the game closed, and Steam Cloud off for it, or it may bring the old one back).
   It's encrypted for the account under **Steam account**.
 - **Steam account → Set from a Steam save**: the PC version encrypts saves with a key that comes from the Steam ID, and

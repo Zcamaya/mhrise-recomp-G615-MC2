@@ -16,6 +16,10 @@
 
 #include "nnsdk/types.h"
 
+namespace nvn {
+std::string describe_memory(const void* p, size_t size);
+}
+
 namespace nn::account {
 struct Uid;
 }
@@ -86,6 +90,12 @@ bool write_png(const char* path, const uint8_t* rgba, int width, int height) {
 
 Result save(const void* image, size_t size, ImageSize image_size) {
     if (image_size != ImageSize_1280x720 || !image || size < size_t(kWidth) * kHeight * 4) return kResultAlbumError;
+    // An all-black photo means the pixels were read from memory the GPU's picture never got back to: say where from
+    const auto* px = static_cast<const uint8_t*>(image);
+    size_t lit = 0;
+    for (size_t k = 0; k < size_t(kWidth) * kHeight * 4; k += 4) lit += (px[k] | px[k + 1] | px[k + 2]) != 0;
+    printf("[album] photo %p (%zu bytes): %.1f%% of its pixels not black;%s\n", image, size,
+           100.0 * double(lit) / (double(kWidth) * kHeight), nvn::describe_memory(image, size).c_str());
     const time_t now = time(nullptr);
     tm local{};
     localtime_r(&now, &local);
