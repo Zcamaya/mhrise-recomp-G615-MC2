@@ -141,7 +141,7 @@ public:
         const bool bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
         if (!bgra && format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB) return;
         const bool stats = !NVN_FLAG("no_hud_frametime") || !NVN_FLAG("no_hud_cpu") || !NVN_FLAG("no_hud_gpu") || !NVN_FLAG("no_hud_ram") ||
-                           !NVN_FLAG("no_hud_shaders");
+                           !NVN_FLAG("no_hud_heat") || !NVN_FLAG("no_hud_shaders");
         if (!hidden_ && stats) {
             if (extent.width >= kX + kStatsW && extent.height >= kY + kStatsH &&
                 (!stats_buffers_.empty() || create(stats_buffers_, kStatsW, kStatsH))) {
@@ -563,6 +563,12 @@ private:
         if (!NVN_FLAG("no_hud_ram")) {
             snprintf(lines[n].text, sizeof lines[n].text, "RAM %.1f GB  %.1f/%.1f", ram_app_, ram_used_, ram_total_);
             lines[n++].color = ram_total_ > 0 && ram_used_ > ram_total_ * 0.9f ? kWarn : kText;
+        }
+        if (!NVN_FLAG("no_hud_heat")) {  // (Android's thermal headroom: 100 % is where it starts to throttle hard)
+            const float h = nvn::thermal_headroom();
+            if (h >= 0.0f) snprintf(lines[n].text, sizeof lines[n].text, "HEAT %d%%", static_cast<int>(h * 100.0f + 0.5f));
+            else snprintf(lines[n].text, sizeof lines[n].text, "HEAT N/A");
+            lines[n++].color = h >= 0.95f ? kBad : h >= 0.8f ? kWarn : h < 0.0f ? kDim : kText;
         }
         if (!NVN_FLAG("no_hud_shaders")) {
             const int building = g_building.load(std::memory_order_relaxed);

@@ -253,6 +253,8 @@ final class SettingsMenu {
         flag("GPU usage", "How busy the GPU is. Only where the phone lets apps read it (many Adreno phones do; most "
                 + "others show N/A).", "no_hud_gpu", true);
         flag("Memory", "The game's own RAM, then the phone's used / total.", "no_hud_ram", true);
+        flag("Heat", "How close the phone is to slowing itself down from heat (Android's own measure, Android 12 and "
+                + "later): at 100 % it throttles hard. Yellow from 80 %, red from 95 %.", "no_hud_heat", true);
         flag("Shaders building", "Pipelines being made in the background right now. Above 0, a new effect or area is "
                 + "being prepared: short hitches then are that.", "no_hud_shaders", true);
     }

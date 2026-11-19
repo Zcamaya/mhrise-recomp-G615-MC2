@@ -3993,6 +3993,24 @@ bool Executor::ensure_image(Texture& t, VkCommandBuffer cmd) {
             format = format == VK_FORMAT_R8G8B8A8_SRGB ? VK_FORMAT_ASTC_4x4_SRGB_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
         vkGetPhysicalDeviceFormatProperties(c->gpu, format, &fp);
     }
+    // 24-bit depth on a GPU without it (AMD's, and so Samsung's Xclipse: no D24S8 at all): 32-bit float depth instead,
+    // which holds every value the game writes. Without this, every pass with the game's DEPTH24_STENCIL8 depth (the depth
+    // pre-pass, the shadows, the main view) failed to start and its draws were skipped: a third of the frame, and the
+    // scenery came out as flat, see-through shapes on an Xclipse 530.
+    if (is_depth_format(format) && !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+        const VkFormat wider = format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D16_UNORM_S8_UINT
+                                   ? VK_FORMAT_D32_SFLOAT_S8_UINT
+                               : format == VK_FORMAT_X8_D24_UNORM_PACK32 || format == VK_FORMAT_D16_UNORM ? VK_FORMAT_D32_SFLOAT
+                                                                                                         : format;
+        VkFormatProperties wp;
+        vkGetPhysicalDeviceFormatProperties(c->gpu, wider, &wp);
+        if (wider != format && (wp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+            static std::set<VkFormat> told;
+            if (told.insert(format).second) NVN_LOG("depth format %s: the GPU doesn't have it, 32-bit float depth instead\n", f->name);
+            format = wider;
+            fp = wp;
+        }
+    }
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
         !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
         NVN_LOG("formato %s sin soporte de imagen en la GPU\n", f->name);
@@ -4868,6 +4886,7 @@ VkImageView Executor::view(Texture& t, const TextureViewDesc& requested, bool at
                 want = plain != VK_FORMAT_UNDEFINED && bcn::texel_bytes(bcn::kind_of(want)) == bcn::texel_bytes(
                            static_cast<bcn::Kind>(t.bcn)) ? plain : vi.format;
             }
+            if (is_depth_format(want) && is_depth_format(vi.format)) want = vi.format;  // (depth widened to 32 bits: as is)
             if (t.mutable_format) vi.format = want;
         }
     if (storage) {
@@ -5614,7 +5633,9 @@ bool Executor::defer_clear(Texture* t, const TextureViewDesc& v, VkImageAspectFl
     const int target = (v.flags & kViewTarget) ? v.target : t->desc.target;
     if (target != kTarget2D && target != kTarget2DArray && target != kTargetRectangle) return false;
     if (v.flags & kViewFormat)
-        if (const FormatInfo* f = format_info(v.format); !f || f->vk != t->vk_format) return false;
+        if (const FormatInfo* f = format_info(v.format);
+            !f || (f->vk != t->vk_format && !(is_depth_format(f->vk) && is_depth_format(t->vk_format))))
+            return false;
     VkFormatProperties fp;
     vkGetPhysicalDeviceFormatProperties(vk()->gpu, t->vk_format, &fp);
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) return false;  // para vkCmdClear*Image

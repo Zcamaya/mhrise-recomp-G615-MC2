@@ -44,7 +44,7 @@ The log (`log.txt` in the data folder) says what the port picked for your phone.
 - **Touch controls** laid out like a real controller, with a full editor (size, position, opacity, your own pictures
   and shapes), combos and turbo, plus any USB or Bluetooth controller.
 - **Settings menu** in the game: resolution, aspect ratio, FPS limit, shadows, effects, overlay stats (FPS, frame time,
-  CPU, GPU, RAM), Local Play and more.
+  CPU, GPU, RAM, temperature), Local Play and more.
 - **Frame generation:** a built-in one (three quality levels), or Lossless Scaling's if you have its DLL.
 - **Mods and cheats** like Eden: add a mod's zip, turn each one on or off, and use Atmosphere cheat files with a
   toggle per cheat.
@@ -166,6 +166,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `dynamic_state`, `vertex_input_state` | Extended dynamic state and vertex input dynamic state (Settings → Graphics → Extensions, shown only where the driver has `VK_EXT_extended_dynamic_state` / `VK_EXT_vertex_input_dynamic_state`; off by default). The first sets cull mode, front face, depth test/write/compare and the stencil test and ops per draw; the second the vertex attributes' formats and the streams' strides and step rates. Either way, far fewer pipelines to build and switch. At start-up. |
 | `no_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |
 | `no_affinity` | Doesn't pin the frame's three threads to the fast cores (they're only pinned when the phone has at least three fast cores). Live. |
+| `no_hud_heat` | Hides the overlay's HEAT line (Android's thermal headroom: 100 % is hard throttling). |
 | `fps_20`, `fps_25`, `fps_40`, `fps_45` | FPS limit other than the game's 30 (`60fps` for 60). The game measures each frame's length, so it keeps its normal speed: a lower limit saves GPU, heat and battery without slow motion. Loading screens still run at 60. Live. |
 | `no_shadows` | Shadows off: the shadow maps aren't drawn and every shadow lookup reads as lit. Live. |
 | `fast_depth` | The colour pass draws with GEQUAL instead of EQUAL against the depth pre-pass (MH Rise uses reversed Z), which keeps Adreno's LRZ early rejection on. Meshes the pre-pass drew with a pixel shader (cut-outs: grass, leaves) keep EQUAL, or they would show as whole cards. Graphics → Fast depth test. Live. |
@@ -206,6 +207,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_mirrors_at_start` | The mirrors (GPU copies of game buffers the shaders read) that were used in the last frame are no longer checked and uploaded together at the start of each submit, but by the first draw that reads each one, as before. That closed the render pass open at that moment and put two full barriers around each upload: after a quest, with about ten 4 MB buffers rewritten every frame, the depth pre-pass was split five times. Live. |
 | `perf_stats` | The profile lines ("perfil …": where the port's CPU time goes) every 10 seconds, without the rest of `verbose_log`. Debug → Performance stats. Live. |
 | `no_return_mali` | On Mali GPUs (ARM's driver and PanVK), the impossible branch Eden leaves after a switch is written as a plain return instead of an "unreachable", as on Qualcomm's driver, so the compiler can't make assumptions from it in the skinning shaders. This puts the "unreachable" back. Read at start-up. |
+| (no switch) | 24-bit depth on GPUs without it (AMD-based ones such as Samsung's Xclipse have no DEPTH24_STENCIL8): the image is made as 32-bit float depth instead. Without that, every pass with the game's main depth buffer failed to start and its draws were skipped. |
 | `no_demote_reorder` | On Samsung Xclipse and AMD GPUs, pixel discards are gathered into one at the end of each shader, as Eden does there: their compilers mishandle an early discard, and alpha-tested scenery (foliage, smoke, cliff edges) came out as big flat brown sheets. This turns that off. `demote_reorder` forces it on any GPU. Read at start-up. |
 | `no_safe_translation` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
 | `breadcrumbs` | Debugging: GPU breadcrumbs. If the GPU hangs, or the driver aborts a stuck job, the log names the render pass or dispatch and its shaders. Everything on the GPU runs in order: slow. |
