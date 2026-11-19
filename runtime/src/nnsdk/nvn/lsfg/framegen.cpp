@@ -620,11 +620,15 @@ void FrameGen::present(Window& w, Texture* t) {
     // ¿Toca? Solo con el juego a ~30 fps (intervalo 2) y sin tirones recientes. When real frames run late (the phone
     // below 30) it keeps generating: the picture stays doubled.
     if (dt > 0) ema_ = ema_ > 0 ? ema_ + (dt - ema_) * 0.1 : dt;
-    const bool pace_ok = w.present_interval == 2 && ema_ >= kTooFastMs;
+    // The pace the presenter keeps (window.cpp: the FPS limit, or the game's own MaxFps): 30 or slower. A 40 or 60 that
+    // falls behind is still too fast to double on a 60 Hz screen (and generating there made it flicker on and off,
+    // slowing the real frames each time)
+    const bool pace_ok = w.present_interval == 2 && ema_ >= kTooFastMs && frame_period_ns() >= 32'000'000;
     if (pace_ok == pace_logged_) {
         pace_logged_ = !pace_ok;
         if (!pace_ok)
-            NVN_LOG("lsfg: el juego no va a 30 fps (intervalo %d, %.1f ms por frame): sin generar\n", w.present_interval, ema_);
+            NVN_LOG("lsfg: el juego no va a 30 fps (intervalo %d, %.1f ms por frame, ritmo %.1f ms): sin generar\n",
+                    w.present_interval, ema_, frame_period_ns() / 1e6);
     }
     if (!pace_ok) {
         skip_pace_++;

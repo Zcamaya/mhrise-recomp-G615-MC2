@@ -1,6 +1,6 @@
 #version 450
-// Built-in frame generation, 5: the picture halfway between A and B, from the two flows (A to B and B to A, half the
-// picture's size, in its texels). Each pixel x follows each flow back to where it was: in A at a, with a + F(a) / 2 = x
+// Built-in frame generation, 5: the picture halfway between A and B, from the two flows (A to B and B to A, a quarter
+// of the picture's size, in its texels). Each pixel x follows each flow back to where it was: in A at a, with a + F(a) / 2 = x
 // (a few fixed-point steps from a = x), and in B at b, with b + G(b) / 2 = x. A vector the other flow doesn't send back
 // (F(a) + G(a + F(a)) far from zero: the forward-backward check) is something that one of the frames doesn't see: covered
 // or uncovered. Of the two ways, the one that both checks out and matches better; its two samples averaged where they
@@ -10,27 +10,17 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D frame_a;
 layout(binding = 1) uniform sampler2D frame_b;
-layout(binding = 2, rgba32f) uniform readonly image2D flow_ab;
-layout(binding = 3, rgba32f) uniform readonly image2D flow_ba;
+layout(binding = 2) uniform sampler2D flow_ab;
+layout(binding = 3) uniform sampler2D flow_ba;
 layout(binding = 4, rgba8) uniform writeonly image2D dst;
-// size: the picture; src_size: the flows; inv_src: 1 / the picture
-layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int pad; } p;
+// size: the picture; src_size: the flows; inv_src: 1 / the picture; scale: picture pixels per flow texel
+layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int scale; } p;
 
-// A flow at pixel position x (pixel centres on .5), in pixels: its texel k covers pixels 2k and 2k + 1
+// A flow at pixel position x (pixel centres on .5), in pixels: one bilinear tap (the flow covers the same picture, so
+// the same normalised position)
 vec2 flow_at(bool forward, vec2 x) {
-    vec2 c = x * 0.5 - 0.5, f = floor(c), t = c - f;
-    ivec2 k = ivec2(f), last = p.src_size - 1;
-    ivec2 k00 = clamp(k, ivec2(0), last), k11 = clamp(k + 1, ivec2(0), last);
-    ivec2 k10 = ivec2(k11.x, k00.y), k01 = ivec2(k00.x, k11.y);
-    vec2 v00, v10, v01, v11;
-    if (forward) {
-        v00 = imageLoad(flow_ab, k00).xy; v10 = imageLoad(flow_ab, k10).xy;
-        v01 = imageLoad(flow_ab, k01).xy; v11 = imageLoad(flow_ab, k11).xy;
-    } else {
-        v00 = imageLoad(flow_ba, k00).xy; v10 = imageLoad(flow_ba, k10).xy;
-        v01 = imageLoad(flow_ba, k01).xy; v11 = imageLoad(flow_ba, k11).xy;
-    }
-    return mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y) * 2.0;
+    vec2 uv = x * p.inv_src;
+    return (forward ? textureLod(flow_ab, uv, 0.0).xy : textureLod(flow_ba, uv, 0.0).xy) * float(p.scale);
 }
 
 vec3 bilinear(sampler2D s, vec2 x) { return textureLod(s, x * p.inv_src, 0.0).rgb; }
@@ -66,14 +56,14 @@ void main() {
     }
     // Where it was in A, and that vector checked against the other flow
     vec2 pa = x, f = vec2(0.0);
-    for (int k = 0; k < 4; k++) {
+    for (int k = 0; k < 3; k++) {
         f = flow_at(true, pa);
         pa = x - 0.5 * f;
     }
     float back_f = length(f + flow_at(false, pa + f));
     // Where it was in B
     vec2 pb = x, g = vec2(0.0);
-    for (int k = 0; k < 4; k++) {
+    for (int k = 0; k < 3; k++) {
         g = flow_at(false, pb);
         pb = x - 0.5 * g;
     }

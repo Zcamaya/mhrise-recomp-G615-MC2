@@ -10,19 +10,19 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0, r32f) uniform readonly image2D i0;
 layout(binding = 1, r32f) uniform readonly image2D i1;
-layout(binding = 2, rgba32f) uniform readonly image2D coarse;
+layout(binding = 2, rgba16f) uniform readonly image2D coarse;
 layout(binding = 3, rgba32f) uniform writeonly image2D patches;
 // size: the grid of patches; src_size: the level; flags 1: there's a coarser flow (coarse_size packed in extra), 2: search
 layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int extra; } p;
 
-const int kIterations = 8;
+const int kIterations = 6;
 const int kRadius = 4;      // the coarsest level's search
 const int kCandidates = 6;  // coarser flow at the middle and 4 corners, and no motion
 
 shared vec4 sums[64];
 shared float templ[64];
-shared vec2 starts[kCandidates];
-shared float costs[81];
+shared vec2 starts[1];
+shared float costs[81];  // (the coarsest level's search)
 
 float t0(ivec2 c) { return imageLoad(i0, clamp(c, ivec2(0), p.src_size - 1)).r; }
 float t1(ivec2 c) { return imageLoad(i1, clamp(c, ivec2(0), p.src_size - 1)).r; }
@@ -78,24 +78,26 @@ void main() {
         barrier();
         u = starts[0];
     } else {
-        if (i < uint(kCandidates)) {
-            ivec2 cs = ivec2(p.extra & 0xffff, p.extra >> 16);
-            const ivec2 at[5] = ivec2[5](ivec2(4, 4), ivec2(0, 0), ivec2(7, 0), ivec2(0, 7), ivec2(7, 7));
-            vec2 v = vec2(0.0);
-            if ((p.flags & 1) != 0 && i < 5u)
-                v = imageLoad(coarse, clamp((o + at[i]) / 2, ivec2(0), cs - 1)).xy * 2.0;
-            starts[i] = v;
-            costs[i] = fit(o, v);
-        }
-        barrier();
-        if (i == 0u) {
-            int best = kCandidates - 1;  // (no motion when it ties)
-            for (int c = 0; c < kCandidates; c++)
-                if (costs[c] < costs[best] - 1e-6) best = c;
-            starts[0] = starts[best];
-        }
-        barrier();
-        u = starts[0];
+        // Every thread works out its own texel's difference for each start and the patch sums them up together:
+        // three sums of (difference, its square) for two starts each
+        ivec2 cs = ivec2(p.extra & 0xffff, p.extra >> 16);
+        const ivec2 at[5] = ivec2[5](ivec2(4, 4), ivec2(0, 0), ivec2(7, 0), ivec2(0, 7), ivec2(7, 7));
+        vec2 v[kCandidates];
+        for (int c = 0; c < 5; c++)
+            v[c] = (p.flags & 1) != 0 ? imageLoad(coarse, clamp((o + at[c]) / 2, ivec2(0), cs - 1)).xy * 2.0 : vec2(0.0);
+        v[5] = vec2(0.0);
+        float e[kCandidates];
+        for (int c = 0; c < kCandidates; c++) e[c] = bilinear1(vec2(x) + v[c]) - t;
+        vec4 s01 = sum4(vec4(e[0], e[0] * e[0], e[1], e[1] * e[1]), i);
+        vec4 s23 = sum4(vec4(e[2], e[2] * e[2], e[3], e[3] * e[3]), i);
+        vec4 s45 = sum4(vec4(e[4], e[4] * e[4], e[5], e[5] * e[5]), i);
+        float cost[kCandidates] = float[kCandidates](s01.y - s01.x * s01.x / 64.0, s01.w - s01.z * s01.z / 64.0,
+                                                     s23.y - s23.x * s23.x / 64.0, s23.w - s23.z * s23.z / 64.0,
+                                                     s45.y - s45.x * s45.x / 64.0, s45.w - s45.z * s45.z / 64.0);
+        int best = kCandidates - 1;  // (no motion when it ties; every thread picks the same)
+        for (int c = 0; c < kCandidates; c++)
+            if (cost[c] < cost[best] - 1e-6) best = c;
+        u = v[best];
     }
     vec2 start = u;
 

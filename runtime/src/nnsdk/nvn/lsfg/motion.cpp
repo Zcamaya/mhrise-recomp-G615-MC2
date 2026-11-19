@@ -26,6 +26,10 @@ struct Push {
 };
 
 constexpr VkFormat kLumaFormat = VK_FORMAT_R32_SFLOAT, kFieldFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+// The dense flows: half floats (a storage format every driver has, and filterable), so the warp reads each with one
+// bilinear tap instead of four loads
+constexpr VkFormat kFlowFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr uint32_t kFinest = 4;  // the finest flow level: a quarter of the picture
 constexpr VkFormat kOut = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkImageUsageFlags kWork = VK_IMAGE_USAGE_STORAGE_BIT;
 
@@ -125,7 +129,7 @@ bool Motion::build_pipelines(std::string* why) {
         {k_fg_down_spv, sizeof k_fg_down_spv, {S, S}},
         {k_fg_patch_spv, sizeof k_fg_patch_spv, {S, S, S, S}},
         {k_fg_densify_spv, sizeof k_fg_densify_spv, {S, S, S, S}},
-        {k_fg_warp_spv, sizeof k_fg_warp_spv, {T, T, S, S, S}},
+        {k_fg_warp_spv, sizeof k_fg_warp_spv, {T, T, T, T, S}},
     };
     for (int k = 0; k < kPasses; k++) {
         Pipeline& p = passes_[k];
@@ -181,13 +185,13 @@ bool Motion::build_images(std::string* why) {
     for (Image& f : frames_)
         add(f, extent_, format_, view, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             srgb ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0);
-    // The levels: half the picture, then halves, while both sides keep at least 16 texels (two patches)
+    // The levels: a quarter of the picture, then halves, while both sides keep at least 16 texels (two patches)
     levels_ = 0;
-    for (VkExtent2D e = div(extent_, 2); levels_ < kLevels && e.width >= 16 && e.height >= 16; e = div(e, 2)) {
+    for (VkExtent2D e = div(extent_, kFinest); levels_ < kLevels && e.width >= 16 && e.height >= 16; e = div(e, 2)) {
         for (int i = 0; i < 2; i++) add(lum_[i][levels_], e, kLumaFormat, kLumaFormat, kWork);
         for (int w = 0; w < 2; w++) {
             add(patches_[w][levels_], grid(e), kFieldFormat, kFieldFormat, kWork);
-            add(flows_[w][levels_], e, kFieldFormat, kFieldFormat, kWork);
+            add(flows_[w][levels_], e, kFlowFormat, kFlowFormat, kWork | VK_IMAGE_USAGE_SAMPLED_BIT);
         }
         levels_++;
     }
@@ -262,7 +266,7 @@ bool Motion::build_images(std::string* why) {
 bool Motion::build_sets(std::string* why) {
     VkContext* c = vk();
     VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 4},  // (at most 4 in a set)
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 2}};
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 4}};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.maxSets = kSets;
     pi.poolSizeCount = 2;
@@ -295,7 +299,7 @@ bool Motion::build_sets(std::string* why) {
         const int a = 1 - p;
         if (!make(kLuma, &luma_set_[p]) || !make(kWarp, &warp_set_[p])) return *why = "vkAllocateDescriptorSets", false;
         write(luma_set_[p], {{&frames_[p], true}, {&lum_[p][0], false}});
-        write(warp_set_[p], {{&frames_[a], true}, {&frames_[p], true}, {&flows_[0][0], false}, {&flows_[1][0], false},
+        write(warp_set_[p], {{&frames_[a], true}, {&frames_[p], true}, {&flows_[0][0], true}, {&flows_[1][0], true},
                              {&output_, false}});
         for (int l = 0; l < levels_; l++) {
             if (l > 0) {
@@ -381,7 +385,7 @@ void Motion::record_generate(VkCommandBuffer cmd, uint64_t n) const {
         for (int w = 0; w < 2; w++) dispatch(cmd, kDensify, dense_set_[p][w][l], e, grid(e), 0, 0);
         compute_barrier(cmd);
     }
-    dispatch(cmd, kWarp, warp_set_[p], extent_, flows_[0][0].extent, 0, 0);
+    dispatch(cmd, kWarp, warp_set_[p], extent_, flows_[0][0].extent, 0, static_cast<int>(kFinest));
 }
 
 }  // namespace nvn::lsfg

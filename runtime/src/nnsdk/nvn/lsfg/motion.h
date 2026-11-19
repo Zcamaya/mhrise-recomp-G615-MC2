@@ -5,7 +5,7 @@
 //
 // Dense optical flow by inverse search (DIS: Kroeger, Timofte, Dai and Van Gool, "Fast Optical Flow using Dense Inverse
 // Search", ECCV 2016), both ways, and a warp that knows what's covered and uncovered:
-//   per real frame n (record_shared): its luma at 1/2, 1/4, 1/8 and 1/16 of the picture, kept for the next pair;
+//   per real frame n (record_shared): its luma at 1/4, 1/8, 1/16 and 1/32 of the picture, kept for the next pair;
 //   for the picture between n - 1 (A) and n (B) (record_generate), from the coarsest level to the finest, A to B and
 //   B to A:
 //     1. patches of 8x8 texels every 4 (fg_patch): each starts from the best of the coarser level's motion around it
@@ -48,14 +48,14 @@ public:
     void record_generate(VkCommandBuffer cmd, uint64_t n) const override;
     VkExtent2D extent() const override { return extent_; }
     VkFormat format() const override { return format_; }
-    float flow() const override { return 0.5f; }  // (the finest flow level: half the picture)
+    float flow() const override { return 0.25f; }  // (the finest flow level: a quarter of the picture)
     size_t images() const override { return all_.size(); }
     VkDeviceSize bytes() const override { return bytes_; }
     uint32_t sets() const override { return kSets; }
 
 private:
     enum Pass { kLuma, kDown, kPatch, kDensify, kWarp, kPasses };
-    static constexpr int kLevels = 4;  // 1/2 .. 1/16 of the picture (fewer if the picture is small)
+    static constexpr int kLevels = 4;  // 1/4 .. 1/32 of the picture (fewer if the picture is small)
     struct Pipeline {
         VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
         VkPipelineLayout layout = VK_NULL_HANDLE;

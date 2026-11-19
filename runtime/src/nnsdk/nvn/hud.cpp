@@ -123,6 +123,7 @@ public:
         last_real_ = now;
         reals_.push_back(now);
         trim(reals_, now);
+        trim(generated_, now);  // (with frame generation off none are added: the old ones go here)
     }
     void generated_frame() {
         generated_.push_back(last_real_);
