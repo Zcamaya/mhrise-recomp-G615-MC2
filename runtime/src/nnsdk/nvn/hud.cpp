@@ -138,8 +138,8 @@ public:
         if (failed_) return;
         const bool bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
         if (!bgra && format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB) return;
-        const bool stats = NVN_FLAG("hud_frametime") || NVN_FLAG("hud_cpu") || NVN_FLAG("hud_gpu") || NVN_FLAG("hud_ram") ||
-                           NVN_FLAG("hud_battery") || NVN_FLAG("hud_shaders");
+        const bool stats = !NVN_FLAG("no_hud_frametime") || !NVN_FLAG("no_hud_cpu") || !NVN_FLAG("no_hud_gpu") || !NVN_FLAG("no_hud_ram") ||
+                           !NVN_FLAG("no_hud_shaders");
         if (!hidden_ && stats) {
             if (extent.width >= kX + kStatsW && extent.height >= kY + kStatsH &&
                 (!stats_buffers_.empty() || create(stats_buffers_, kStatsW, kStatsH))) {
@@ -195,14 +195,17 @@ private:
             if (marked != choose_folder_) choose_folder_ = marked, panel_dirty_ = true;
             const bool tv = has_tv() && nnsdk::ini::on("tv_mode");
             if (tv != tv_) tv_ = tv, panel_dirty_ = true;
+            const bool fg = nnsdk::ini::on("lsfg");
+            if (fg != fg_) fg_ = fg, panel_dirty_ = true;
         }
     }
-    // Las filas del panel, en orden: el contador de FPS siempre; el modo TV si el port lo tiene; cambiar de carpeta si
-    // la app tiene pantalla de inicio.
-    enum RowId { kRowFps, kRowTv, kRowFolder };
+    // Las filas del panel, en orden: el contador de FPS y la generación de frames siempre; el modo TV si el port lo tiene;
+    // cambiar de carpeta si la app tiene pantalla de inicio.
+    enum RowId { kRowFps, kRowFg, kRowTv, kRowFolder };
     static int rows(RowId* out) {
         int n = 0;
         out[n++] = kRowFps;
+        out[n++] = kRowFg;
         if (has_tv()) out[n++] = kRowTv;
         if (has_setup()) out[n++] = kRowFolder;
         return n;
@@ -267,9 +270,10 @@ private:
                     } else {
                         touched_at_ = now;
                         const int row = t.y >= kPanelHeader ? (t.y - kPanelHeader) / kPanelRow : -1;
-                        RowId ids[3];
+                        RowId ids[4];
                         if (row >= 0 && row < rows(ids)) {
                             if (ids[row] == kRowFps) set_hidden(!hidden_);
+                            else if (ids[row] == kRowFg) set_fg(!fg_);
                             else if (ids[row] == kRowTv) set_tv(!tv_);
                             else set_choose_folder(!choose_folder_);
                         }
@@ -298,6 +302,14 @@ private:
             close(fd);
         }
         NVN_LOG("hud: cambiar de carpeta al abrir la app: %s\n", on ? "sí" : "no");
+    }
+    // "Frame generation": the lsfg line of mhr.ini, which the presenter reads live (lsfg/framegen.cpp): on and off at
+    // once, and kept for the next start
+    void set_fg(bool on) {
+        fg_ = on;
+        panel_dirty_ = true;
+        nnsdk::ini::set("lsfg", on ? "1" : "0");
+        NVN_LOG("hud: frame generation %s from the panel\n", on ? "on" : "off");
     }
     // "TV mode": with tv_mode in mhr.ini the game thinks it's docked (more resolution, Pro Controller) from the next
     // time it opens; the mode is decided at start-up (nnsdk::tv_mode).
@@ -380,9 +392,10 @@ private:
             bool on;
         };
         const Row all[] = {{"CONTADOR DE FPS", "FPS COUNTER", nullptr, nullptr, !hidden_},
+                           {"GENERAR FRAMES", "FRAME GEN", "X2 A 60 FPS", "X2 TO 60 FPS", fg_},
                            {"MODO TV", "TV MODE", "AL ABRIR LA APP", "AT NEXT START", tv_},
                            {"CAMBIAR CARPETA", "CHANGE FOLDER", "AL ABRIR LA APP", "AT NEXT START", choose_folder_}};
-        RowId ids[3];
+        RowId ids[4];
         const int count = rows(ids);
         int y = kPanelHeader;
         for (int k = 0; k < count; k++) {
@@ -488,7 +501,7 @@ private:
         }
         cpu_ticks_ = ticks;
         sampled_at_ = now;
-        if (NVN_FLAG("hud_gpu")) gpu_ = gpu_busy();
+        if (!NVN_FLAG("no_hud_gpu")) gpu_ = gpu_busy();
         if (read_file("/proc/self/statm", buf, sizeof buf)) {
             unsigned long size = 0, resident = 0;
             if (sscanf(buf, "%lu %lu", &size, &resident) == 2)
@@ -499,13 +512,6 @@ private:
             if (const char* t = strstr(buf, "MemTotal:")) sscanf(t + 9, "%lu", &total);
             if (const char* a = strstr(buf, "MemAvailable:")) sscanf(a + 13, "%lu", &available);
             if (total) ram_total_ = total / 1048576.0f, ram_used_ = (total - std::min(total, available)) / 1048576.0f;
-        }
-        battery_ = read_file("/sys/class/power_supply/battery/capacity", buf, sizeof buf) ? atoi(buf) : -1;
-        if (read_file("/sys/class/power_supply/battery/temp", buf, sizeof buf)) {
-            const long t = atol(buf);  // (tenths of a degree; a few kernels give thousandths)
-            battery_temp_ = t > 2000 ? t / 1000.0f : t / 10.0f;
-        } else {
-            battery_temp_ = -1.0f;
         }
         // The game's frames: their average length over the last half second or so, and the 1 % low (the fps of the
         // slowest 1 % of the last 300)
@@ -538,32 +544,25 @@ private:
         else snprintf(lines[n].text, sizeof lines[n].text, "%d FPS  %d REAL", std::min(shown_, 999),
                       static_cast<int>(reals_.size()));
         lines[n++].color = fps_color;
-        if (NVN_FLAG("hud_frametime")) {
+        if (!NVN_FLAG("no_hud_frametime")) {
             snprintf(lines[n].text, sizeof lines[n].text, "%.1f MS  1%% LOW %.0f", frame_ms_, low_fps_);
             lines[n++].color = kText;
         }
-        if (NVN_FLAG("hud_cpu")) {
+        if (!NVN_FLAG("no_hud_cpu")) {
             if (cpu_ >= 0) snprintf(lines[n].text, sizeof lines[n].text, "CPU %d%%", cpu_);
             else snprintf(lines[n].text, sizeof lines[n].text, "CPU --");
             lines[n++].color = cpu_ >= 85 ? kWarn : kText;
         }
-        if (NVN_FLAG("hud_gpu")) {
+        if (!NVN_FLAG("no_hud_gpu")) {
             if (gpu_ >= 0) snprintf(lines[n].text, sizeof lines[n].text, "GPU %d%%", gpu_);
             else snprintf(lines[n].text, sizeof lines[n].text, "GPU N/A");
             lines[n++].color = gpu_ >= 95 ? kWarn : gpu_ < 0 ? kDim : kText;
         }
-        if (NVN_FLAG("hud_ram")) {
+        if (!NVN_FLAG("no_hud_ram")) {
             snprintf(lines[n].text, sizeof lines[n].text, "RAM %.1f GB  %.1f/%.1f", ram_app_, ram_used_, ram_total_);
             lines[n++].color = ram_total_ > 0 && ram_used_ > ram_total_ * 0.9f ? kWarn : kText;
         }
-        if (NVN_FLAG("hud_battery")) {
-            char pct[12] = "--", temp[16] = "";
-            if (battery_ >= 0) snprintf(pct, sizeof pct, "%d%%", battery_);
-            if (battery_temp_ > 0) snprintf(temp, sizeof temp, "  %.1f C", battery_temp_);
-            snprintf(lines[n].text, sizeof lines[n].text, "BAT %s%s", pct, temp);
-            lines[n++].color = battery_temp_ >= 45.0f ? kBad : battery_temp_ >= 40.0f ? kWarn : kText;
-        }
-        if (NVN_FLAG("hud_shaders")) {
+        if (!NVN_FLAG("no_hud_shaders")) {
             const int building = g_building.load(std::memory_order_relaxed);
             snprintf(lines[n].text, sizeof lines[n].text, "SHADERS %d", std::max(building, 0));
             lines[n++].color = building > 0 ? kWarn : kDim;
@@ -638,8 +637,8 @@ private:
     // What the overlay's lines show, read twice a second (sample)
     int64_t sampled_at_ = 0;
     uint64_t cpu_ticks_ = 0;  // the process's user + system time, in clock ticks, at sampled_at_
-    int cpu_ = -1, gpu_ = -1, battery_ = -1, gpu_source_ = -2;  // % (-1: can't be read here); gpu_source_ -2: not looked yet
-    float battery_temp_ = -1.0f, ram_app_ = 0.0f, ram_used_ = 0.0f, ram_total_ = 0.0f;  // °C, GB
+    int cpu_ = -1, gpu_ = -1, gpu_source_ = -2;  // % (-1: can't be read here); gpu_source_ -2: not looked yet
+    float ram_app_ = 0.0f, ram_used_ = 0.0f, ram_total_ = 0.0f;  // GB
     float frame_ms_ = 0.0f, low_fps_ = 0.0f;
     bool failed_ = false;
     bool hidden_ = false, flag_ = false, flag_seen_ = false;  // the counter off; what no_fps said last
@@ -647,6 +646,7 @@ private:
     bool panel_dirty_ = true, panel_drawn_hidden_ = false;  // hay que redibujarlo; el estado con el que se dibujó
     bool choose_folder_ = false;                   // la fila "Cambiar carpeta" (el fichero <datos>/elegir_carpeta)
     bool tv_ = false;                              // the "TV mode" row (tv_mode in mhr.ini)
+    bool fg_ = nnsdk::ini::on("lsfg");             // the "Frame gen" row (lsfg in mhr.ini)
     uint32_t panel_w_ = 0, panel_h_ = 0;           // el tamaño con el que se crearon sus buffers
     float panel_from_ = 0.0f;                     // lo que asomaba cuando se abrió o se cerró por última vez
     int64_t panel_at_ = 0, touched_at_ = 0;       // cuándo fue eso, y la última vez que se tocó

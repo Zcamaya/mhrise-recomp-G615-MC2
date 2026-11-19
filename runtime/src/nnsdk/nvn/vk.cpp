@@ -214,13 +214,17 @@ bool create(VkContext& c, bool system_driver) {
     c.multi_draw_indirect = features.multiDrawIndirect == VK_TRUE;
     c.tessellation = features.tessellationShader == VK_TRUE;
     c.fill_non_solid = features.fillModeNonSolid == VK_TRUE;
-    // DEPURACIÓN: <datos>/robusto al arrancar: con robustBufferAccess (los accesos fuera de un buffer devuelven 0, como
-    // los cbuf de Maxwell, en vez de leer memoria cualquiera).
+    // robustBufferAccess: a read past the end of a buffer gives 0 (as Maxwell's constant buffers do) instead of whatever
+    // memory is there. Adreno shrugs that off; an ARM Mali takes it as a GPU page fault (GROUP_ERROR_FATAL in the log,
+    // status ...02c2: a translation fault), drops the whole batch of work, uploads included, and the picture goes black
+    // or magenta (ASTC that never arrived) until something rebuilds it. So on by default on Mali (vendor 0x13B5);
+    // <datos>/no_robust turns it off there, and <datos>/robusto turns it on anywhere. Read at start-up.
+    const bool arm = c.props.vendorID == 0x13B5;
     bool robust = false;
-    if (nnsdk::ini::on("robusto")) {
+    if (nnsdk::ini::on("robusto") || (arm && !nnsdk::ini::on("no_robust"))) {
         features.robustBufferAccess = VK_TRUE;
         robust = true;
-        NVN_LOG("robustBufferAccess: sí (<datos>/robusto)\n");
+        NVN_LOG("robustBufferAccess: on (%s)\n", arm ? "Mali" : "robusto");
     }
     NVN_LOG("límites: salidas de vértice %u, entradas de fragmento %u, geometry entradas %u salidas %u vértices %u\n",
             c.props.limits.maxVertexOutputComponents, c.props.limits.maxFragmentInputComponents,

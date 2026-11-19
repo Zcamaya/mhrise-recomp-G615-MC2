@@ -12,7 +12,7 @@
 // FIFO pone uno por vsync: G y luego N, dos por cada 33,3 ms. El ritmo del juego no cambia (una llamada a
 // nvn::present por frame real), así que su lógica sigue a 30.
 //
-// Interruptores (flags.h): <datos>/lsfg enciende; <datos>/lsfg_no_guard quita la guarda de carga;
+// Interruptores (flags.h): <datos>/lsfg enciende;
 // <datos>/lsfg_flow_50 / lsfg_flow_100 el flujo óptico a la mitad / entero (por defecto un cuarto: Quality en la pantalla
 // del driver); <datos>/lsfg_fp32 fuerza
 // los shaders FP32 (se mira al compilar, una vez por sesión).
@@ -57,14 +57,6 @@ constexpr uint64_t kRetireWaitNs = 50'000'000;   // al apagar: espera acotada an
 constexpr uint64_t kWarmFrames = 3;              // se genera desde el 4.º frame seguido: beta lee 3 de historia
 constexpr double kHitchMs = 100.0;               // un hueco así (carga, tirón): no se interpola a través de él
 constexpr double kTooFastMs = 25.0;              // el juego presenta a más de ~40 fps: no cabe un frame generado
-constexpr double kLateMs = 38.0;                 // un frame real tarde (33,3 ms + 14 %)
-constexpr int kLateRun = 3;                      // tantos seguidos tarde: salta la guarda
-constexpr double kMeanLimitMs = 34.5;            // o la media de 30 frames por debajo de 29 fps
-constexpr int kMeanWindow = 30;
-// Esperas cortas: con la resolución dinámica del juego haciendo sitio (executor.cpp le suma el coste de LSFG al tiempo
-// de GPU), un salto suele ser una zona pesada pasajera; esperar hasta un minuto dejaba 30 fps en zonas que ya cabían.
-constexpr int kBackoffS[] = {2, 3, 5, 5};
-constexpr auto kStableForget = std::chrono::seconds(60);  // un minuto generando sin saltar: el reintento vuelve a 5 s
 
 double ms_between(Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); }
 
@@ -105,7 +97,6 @@ private:
     void start_job(VkExtent2D extent, VkFormat format, float flow);
     void poll_job();
     bool compile(std::string* why, bool* missing);
-    bool guard(double dt, Clock::time_point now, bool enabled);
     void log_stats(Clock::time_point now);
     bool record_lsfg(int index, const Texture& t, const VkRect2D& crop, uint64_t n, bool generate);
     bool record_blit(Slot& s, const Window& w, uint32_t image);
@@ -140,16 +131,14 @@ private:
     bool set_up_ = false;
 
     uint64_t warm_ = 0;  // frames seguidos copiados a la cadena (0: hay que volver a calentar)
-    Clock::time_point last_{}, hold_until_{}, guard_until_{}, resumed_{}, settle_until_{};
+    Clock::time_point last_{}, hold_until_{};
     double ema_ = 0;
-    int late_run_ = 0, window_n_ = 0, backoff_ = 0;
-    double window_sum_ = 0;
     bool pace_logged_ = false;
 
     // Contadores de los ~5 s del log.
     Clock::time_point stats_start_{};
-    uint32_t real_ = 0, generated_ = 0, warming_ = 0, skip_guard_ = 0, skip_hold_ = 0, skip_pace_ = 0, skip_busy_ = 0,
-             skip_image_ = 0, trips_ = 0;
+    uint32_t real_ = 0, generated_ = 0, warming_ = 0, skip_hold_ = 0, skip_pace_ = 0, skip_busy_ = 0,
+             skip_image_ = 0;
     double gpu_sum_ = 0, gpu_max_ = 0;
     uint32_t gpu_n_ = 0;
     bool announced_ = false;
@@ -428,65 +417,23 @@ bool FrameGen::compile(std::string* why, bool* missing) {
     return true;
 }
 
-// La guarda de carga: si con LSFG los frames reales llegan tarde (la GPU no cabe frame real + LSFG en 33,3 ms),
-// se deja de generar un rato y se reintenta, cada vez más tarde. true: se puede generar este frame.
-bool FrameGen::guard(double dt, Clock::time_point now, bool enabled) {
-    if (!enabled) {
-        late_run_ = window_n_ = 0;
-        window_sum_ = 0;
-        return true;
-    }
-    if (now < guard_until_) return false;
-    if (backoff_ && now - resumed_ > kStableForget) backoff_ = 0;
-    if (!warm_) return true;  // el intervalo de este frame no incluye trabajo de LSFG
-    // Tras un tirón (una carga: frames de más de 100 ms) el juego tarda unos segundos en volver a su ritmo, sin culpa de
-    // LSFG: esos frames tarde no cuentan (si no, la guarda saltaba en cada carga y llegaba a pararlo un minuto).
-    if (dt > kHitchMs) settle_until_ = now + std::chrono::seconds(8);
-    if (now < settle_until_) {
-        late_run_ = window_n_ = 0;
-        window_sum_ = 0;
-        return true;
-    }
-    late_run_ = dt > kLateMs ? late_run_ + 1 : 0;
-    window_sum_ += dt;
-    window_n_++;
-    const double mean = window_sum_ / window_n_;
-    const bool slow_mean = window_n_ >= kMeanWindow && mean > kMeanLimitMs;
-    if (window_n_ >= kMeanWindow) {
-        window_n_ = 0;
-        window_sum_ = 0;
-    }
-    if (late_run_ < kLateRun && !slow_mean) return true;
-    const int wait = kBackoffS[std::min<int>(backoff_, std::size(kBackoffS) - 1)];
-    if (slow_mean)
-        NVN_LOG("lsfg: guarda: %.1f fps reales en el último segundo: sin generar %d s\n", 1000.0 / mean, wait);
-    else
-        NVN_LOG("lsfg: guarda: %d frames reales seguidos tarde (el último %.1f ms): sin generar %d s\n", late_run_, dt, wait);
-    guard_until_ = resumed_ = now + std::chrono::seconds(wait);
-    backoff_++;
-    trips_++;
-    late_run_ = window_n_ = 0;
-    window_sum_ = 0;
-    return false;
-}
-
 void FrameGen::log_stats(Clock::time_point now) {
     real_++;
     const double secs = ms_between(stats_start_, now) / 1000.0;
     if (secs < 5.0) return;
     if (NVN_FLAG("verbose_log")) {  // DEPURACIÓN
         if (gpu_n_)
-            NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u guarda (%u saltos), %u tirón, "
+            NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u tirón, "
                     "%u ritmo, %u GPU ocupada, %u sin imagen; GPU %.2f ms de media (máx %.2f)\n",
-                    real_ / secs, generated_, warming_, skip_guard_, trips_, skip_hold_, skip_pace_, skip_busy_, skip_image_,
+                    real_ / secs, generated_, warming_, skip_hold_, skip_pace_, skip_busy_, skip_image_,
                     gpu_sum_ / gpu_n_, gpu_max_);
         else
-            NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u guarda (%u saltos), %u tirón, "
+            NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u tirón, "
                     "%u ritmo, %u GPU ocupada, %u sin imagen\n",
-                    real_ / secs, generated_, warming_, skip_guard_, trips_, skip_hold_, skip_pace_, skip_busy_, skip_image_);
+                    real_ / secs, generated_, warming_, skip_hold_, skip_pace_, skip_busy_, skip_image_);
     }
     stats_start_ = now;
-    real_ = generated_ = warming_ = skip_guard_ = skip_hold_ = skip_pace_ = skip_busy_ = skip_image_ = trips_ = 0;
+    real_ = generated_ = warming_ = skip_hold_ = skip_pace_ = skip_busy_ = skip_image_ = 0;
     gpu_sum_ = gpu_max_ = 0;
     gpu_n_ = 0;
 }
@@ -631,12 +578,10 @@ void FrameGen::present(Window& w, Texture* t) {
     // con el frame real en zonas abiertas. lsfg_flow_50 / lsfg_flow_100 para comparar.
     const float flow = NVN_FLAG("lsfg_flow_100") ? 1.0f : NVN_FLAG("lsfg_flow_50") ? 0.5f : 0.25f;
     const bool reduced = NVN_FLAG("lsfg_medium");
-    const bool guarded = !NVN_FLAG("lsfg_no_guard");
     if (!enabled_) {
         enabled_ = true;
         stats_start_ = now;
-        NVN_LOG("lsfg: encendido: 2x, modo rendimiento, flujo %.2f, SDR, ui_threshold 0.5, guarda %s\n", flow,
-                guarded ? "sí" : "no");
+        NVN_LOG("lsfg: encendido: 2x, modo rendimiento, flujo %.2f, SDR, ui_threshold 0.5\n", flow);
     }
     log_stats(now);
     if (missing_dll_ || !setup()) return;
@@ -672,7 +617,8 @@ void FrameGen::present(Window& w, Texture* t) {
         return;
     }
 
-    // ¿Toca? Solo con el juego a ~30 fps (intervalo 2), sin tirones recientes y si la guarda lo deja.
+    // ¿Toca? Solo con el juego a ~30 fps (intervalo 2) y sin tirones recientes. When real frames run late (the phone
+    // below 30) it keeps generating: the picture stays doubled.
     if (dt > 0) ema_ = ema_ > 0 ? ema_ + (dt - ema_) * 0.1 : dt;
     const bool pace_ok = w.present_interval == 2 && ema_ >= kTooFastMs;
     if (pace_ok == pace_logged_) {
@@ -688,11 +634,6 @@ void FrameGen::present(Window& w, Texture* t) {
     if (dt > kHitchMs) hold_until_ = now + std::chrono::seconds(1);
     if (now < hold_until_) {
         skip_hold_++;
-        warm_ = 0;
-        return;
-    }
-    if (!guard(dt, now, guarded)) {
-        skip_guard_++;
         warm_ = 0;
         return;
     }

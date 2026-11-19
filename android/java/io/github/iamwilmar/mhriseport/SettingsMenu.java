@@ -201,6 +201,11 @@ final class SettingsMenu {
                         + "whole screen. Applies at once.",
                 new String[] {"Default (16:9)", "Force 4:3", "Force 21:9", "Force 16:10", "Stretch to screen"},
                 new String[] {null, "aspect_4_3", "aspect_21_9", "aspect_16_10", "aspect_stretch"});
+        flag("Expand into the cutout",
+                "Use the strip beside the camera cutout too, as in Eden and Azahar. Off: Android keeps the picture clear "
+                        + "of it. With a wider aspect ratio or Stretch, On shows the picture right to the edge. Takes "
+                        + "effect on the next start.",
+                "cutout", false);
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "
@@ -236,14 +241,13 @@ final class SettingsMenu {
         note("More lines under the FPS counter, each on its own. With any of them on, the counter becomes a small box "
                 + "that also shows how many of the fps are real when frame generation is on. All apply at once.");
         flag("Frame time", "How long the game's frames take (ms), and the 1 % low: the fps of its slowest frames, "
-                + "which is what you feel as stutter.", "hud_frametime", false);
-        flag("CPU usage", "How much of the phone's CPU the game uses, all cores together.", "hud_cpu", false);
+                + "which is what you feel as stutter.", "no_hud_frametime", true);
+        flag("CPU usage", "How much of the phone's CPU the game uses, all cores together.", "no_hud_cpu", true);
         flag("GPU usage", "How busy the GPU is. Only where the phone lets apps read it (many Adreno phones do; most "
-                + "others show N/A).", "hud_gpu", false);
-        flag("Memory", "The game's own RAM, then the phone's used / total.", "hud_ram", false);
-        flag("Battery", "Charge and temperature (yellow from 40 °C, red from 45 °C).", "hud_battery", false);
+                + "others show N/A).", "no_hud_gpu", true);
+        flag("Memory", "The game's own RAM, then the phone's used / total.", "no_hud_ram", true);
         flag("Shaders building", "Pipelines being made in the background right now. Above 0, a new effect or area is "
-                + "being prepared: short hitches then are that.", "hud_shaders", false);
+                + "being prepared: short hitches then are that.", "no_hud_shaders", true);
     }
 
     private void buildGraphics() {
@@ -593,10 +597,16 @@ final class SettingsMenu {
                     "On Qualcomm's driver, shuffle with a dynamic index is emulated, as in Eden." + next,
                     "no_shuffle_qualcomm", true);
         }
-        if (gpu.mali())
+        if (gpu.mali()) {
             flag("Mali: return after a switch",
                     "The same on Mali GPUs (ARM's driver and PanVK)." + next,
                     "no_return_mali", true);
+            flag("Mali: safe buffer reads",
+                    "A read past the end of a buffer gives 0 instead of a GPU fault, which on Mali throws away the "
+                            + "frame's work (black or magenta screens that fix themselves when you leave and come back). "
+                            + "Costs very little." + next,
+                    "no_robust", true);
+        }
 
         header("Driver environment");
         note("Settings for the GPU driver itself, as NAME=value, set before it starts (on the next start). Mesa's drivers "
@@ -1462,14 +1472,15 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
+        "60fps", "adreno_turbo", "cutout", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
-        "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
+        "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",
+        "no_hud_frametime", "no_hud_gpu", "no_hud_ram", "no_hud_shaders", "lsfg_no_guard", "keep_dead_functions", "log_lines", "low_memory", "model_detail_high", "model_detail_low",
         "model_detail_lowest", "model_detail_min", "no_adpf", "no_af", "no_affinity", "no_ao", "no_async_shaders", "no_bindless_arrays", "no_bloom",
         "no_chromatic_aberration", "no_depth_of_field", "no_dynamic_resolution", "no_dynamic_shadows",
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
         "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
-        "no_return_mali", "no_return_qualcomm", "no_count_check", "no_safe_translation", "no_shadows", "no_short_subgroups",
+        "no_return_mali", "no_return_qualcomm", "no_robust", "no_count_check", "no_safe_translation", "no_shadows", "no_short_subgroups",
         "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_area", "no_deferred_clear", "no_store_ops", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
         "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
         "shadow_half", "shadow_quarter", "short_subgroups", "single_thread_pipelines", "small_object_culling",

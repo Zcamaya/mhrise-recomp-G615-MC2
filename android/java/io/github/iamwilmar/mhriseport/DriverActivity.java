@@ -245,20 +245,21 @@ public final class DriverActivity extends Activity {
                 + "Takes effect the next time the game starts.");
         File dll = losslessDll();
         File folder = gameFolder();
-        File toggle = folder != null ? new File(folder, "lsfg") : null;
+        // (on and off in mhr.ini, like the in-game panel's row, which the game reads live)
+        Ini ini = folder != null ? new Ini(folder) : null;
         File builtin = folder != null ? new File(folder, "fg_builtin") : null;
-        boolean on = toggle != null && toggle.exists();
+        boolean on = ini != null && ini.on("lsfg");
         boolean own = !dll.isFile() || (builtin != null && builtin.exists());
         entry("Frame generation", (on ? "On" : "Off") + " · " + (own ? "built-in" : "Lossless Scaling") + ". Tap to turn it "
                 + (on ? "off." : "on."), on, () -> {
-            if (toggle == null) {
+            if (ini == null) {
                 say("Choose the game folder first.", true);
                 return;
             }
-            if (toggle.exists()) deleteTree(toggle);
-            else if (!toggle.mkdirs()) say("Couldn't write to the game folder.", true);
+            ini.set("lsfg", on ? "0" : "1");
             build();
         }, null);
+
         if (dll.isFile()) {
             String size = String.format(java.util.Locale.ROOT, "%.1f MB", dll.length() / 1048576.0);
             entry("Generator", (own ? "Built-in" : "Lossless Scaling") + " · Lossless.dll imported (" + size + "). Tap for the "
@@ -331,7 +332,7 @@ public final class DriverActivity extends Activity {
         dll.delete();
         if (!tmp.renameTo(dll)) throw new IOException("couldn't save it");
         File folder = gameFolder();
-        if (folder != null) new File(folder, "lsfg").mkdirs();  // (on by default once it's there)
+        if (folder != null) new Ini(folder).set("lsfg", "1");  // (on by default once it's there)
         return String.format(java.util.Locale.ROOT, "%.1f MB", total / 1048576.0);
     }
 

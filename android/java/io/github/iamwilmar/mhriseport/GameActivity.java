@@ -42,6 +42,13 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        // Expand into the cutout (Settings → Display): the game's window over the strip beside the camera too
+        File cutoutFolder = SettingsMenu.gameFolder(this);
+        if (cutoutFolder != null && new Ini(cutoutFolder).on("cutout")) {
+            WindowManager.LayoutParams attrs = getWindow().getAttributes();
+            attrs.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            getWindow().setAttributes(attrs);
+        }
         controls = new Controls(this);
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
         applyPad();
