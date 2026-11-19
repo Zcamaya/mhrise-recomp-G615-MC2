@@ -142,8 +142,15 @@ final class Glyphs {
     }
 
     // La cruceta: una cruz con una flecha en cada brazo; dirs, los brazos pulsados (bit 0 arriba, 1 abajo, 2 izquierda,
-    // 3 derecha)
-    void dpad(Canvas c, float cx, float cy, float half, int dirs, int alpha) {
+    // 3 derecha). plateColor, outline, picture and ownShape as in custom (a picture is cut to the cross, or alone in its
+    // own shape; it darkens while an arm is pressed)
+    void dpad(Canvas c, float cx, float cy, float half, int dirs, int alpha, int plateColor, float outline,
+              android.graphics.Bitmap picture, boolean ownShape) {
+        if (picture != null && ownShape) {
+            fitted(picture, cx, cy, half);
+            drawPicture(c, picture, alpha, dirs != 0);
+            return;
+        }
         float arm = half * 0.36f;
         path.reset();
         path.moveTo(cx - arm, cy - half);
@@ -159,15 +166,26 @@ final class Glyphs {
         path.lineTo(cx - half, cy - arm);
         path.lineTo(cx - arm, cy - arm);
         path.close();
-        plate(alpha, false, half * 0.05f);
-        c.drawPath(path, fill);
+        plate(alpha, false, half * 0.05f * outline);
+        if (plateColor != 0) fill.setColor(withAlpha(plateColor, alpha * 9 / 10));
+        if (picture != null) {
+            c.save();
+            c.clipPath(path);
+            box.set(cx - half, cy - half, cx + half, cy + half);
+            imagePaint.setAlpha(alpha);
+            c.drawBitmap(picture, null, box, imagePaint);
+            c.restore();
+        } else {
+            c.drawPath(path, fill);
+        }
         // los brazos pulsados, en oro
-        fill.setColor(withAlpha(GOLD, alpha));
+        fill.setColor(withAlpha(GOLD, picture != null ? alpha / 2 : alpha));
         if ((dirs & 1) != 0) { box.set(cx - arm, cy - half, cx + arm, cy - arm); c.drawRect(box, fill); }
         if ((dirs & 2) != 0) { box.set(cx - arm, cy + arm, cx + arm, cy + half); c.drawRect(box, fill); }
         if ((dirs & 4) != 0) { box.set(cx - half, cy - arm, cx - arm, cy + arm); c.drawRect(box, fill); }
         if ((dirs & 8) != 0) { box.set(cx + arm, cy - arm, cx + half, cy + arm); c.drawRect(box, fill); }
-        c.drawPath(path, edge);
+        if (outline > 0) c.drawPath(path, edge);
+        if (picture != null) return;  // (the picture has its own arrows, or none)
         float tip = half * 0.82f, base = half * 0.52f, w = arm * 0.62f;
         for (int d = 0; d < 4; d++) {
             ink.setColor(inkColor(alpha, (dirs & (1 << d)) != 0));
@@ -185,17 +203,24 @@ final class Glyphs {
 
     // Un stick: la base con un aro de marcas cada 45 grados, y la seta donde va el dedo (kx, ky de -1 a 1, y hacia abajo
     // positivo); con un dedo encima la seta se aclara, y en oro mientras es L3 / R3
-    void stick(Canvas c, float cx, float cy, float r, float kx, float ky, boolean held, boolean pressed, int alpha) {
-        fill.setColor(withAlpha(DEEP, alpha * 7 / 10));
-        c.drawCircle(cx, cy, r, fill);
-        edge.setColor(withAlpha(BRONZE, alpha));
-        edge.setStrokeWidth(r * 0.035f);
-        c.drawCircle(cx, cy, r, edge);
-        edge.setStrokeWidth(r * 0.015f);
-        edge.setColor(withAlpha(BRONZE, alpha / 2));
-        c.drawCircle(cx, cy, r * 0.70f, edge);
+    // shape (Controls.SHAPES, 0 or 1 a circle) and plateColor are the base's, outline the width of its edges; picture is
+    // the knob, cut round or (ownShape) alone in its own shape
+    void stick(Canvas c, float cx, float cy, float r, float kx, float ky, boolean held, boolean pressed, int alpha,
+               int shape, int plateColor, float outline, android.graphics.Bitmap picture, boolean ownShape) {
+        float round = shape <= 1 ? r : shape == 2 ? r * 0.38f : r * 0.08f;
+        box.set(cx - r, cy - r, cx + r, cy + r);
+        fill.setColor(withAlpha(plateColor != 0 ? plateColor : DEEP, alpha * 7 / 10));
+        c.drawRoundRect(box, round, round, fill);
+        if (outline > 0) {
+            edge.setColor(withAlpha(BRONZE, alpha));
+            edge.setStrokeWidth(r * 0.035f * outline);
+            c.drawRoundRect(box, round, round, edge);
+            edge.setStrokeWidth(r * 0.015f * outline);
+            edge.setColor(withAlpha(BRONZE, alpha / 2));
+            c.drawCircle(cx, cy, r * 0.70f, edge);
+        }
         ink.setColor(withAlpha(BRONZE, alpha * 3 / 4));
-        for (int i = 0; i < 8; i++) {  // (las ocho direcciones: rombos pequeños en el borde)
+        for (int i = 0; i < 8 && outline > 0; i++) {  // (las ocho direcciones: rombos pequeños en el borde)
             double a = Math.PI / 4 * i;
             float mx = cx + (float) Math.cos(a) * r * 0.86f, my = cy + (float) Math.sin(a) * r * 0.86f, d = r * (i % 2 == 0 ? 0.06f : 0.04f);
             path.reset();
@@ -207,10 +232,32 @@ final class Glyphs {
             c.drawPath(path, ink);
         }
         float knob = r * 0.42f, x = cx + kx * (r - knob * 0.6f), y = cy + ky * (r - knob * 0.6f);
-        plate(alpha, pressed, knob * 0.1f);
-        if (held && !pressed) fill.setColor(withAlpha(0xFF6A2A22, alpha));
+        if (picture != null) {
+            if (ownShape) {
+                fitted(picture, x, y, knob);
+                drawPicture(c, picture, alpha, pressed);
+            } else {
+                path.reset();
+                path.addCircle(x, y, knob, Path.Direction.CW);
+                c.save();
+                c.clipPath(path);
+                box.set(x - knob, y - knob, x + knob, y + knob);
+                imagePaint.setAlpha(pressed ? alpha * 6 / 10 : held ? alpha : alpha * 9 / 10);
+                c.drawBitmap(picture, null, box, imagePaint);
+                c.restore();
+                if (outline > 0) {
+                    edge.setColor(withAlpha(pressed ? GOLD : BRONZE, alpha));
+                    edge.setStrokeWidth(knob * 0.1f * outline);
+                    c.drawCircle(x, y, knob, edge);
+                }
+            }
+            return;
+        }
+        plate(alpha, pressed, knob * 0.1f * outline);
+        if (plateColor != 0 && !pressed) fill.setColor(withAlpha(plateColor, alpha));
+        if (held && !pressed) fill.setColor(withAlpha(plateColor != 0 ? plateColor : 0xFF6A2A22, alpha));
         c.drawCircle(x, y, knob, fill);
-        c.drawCircle(x, y, knob, edge);
+        if (outline > 0) c.drawCircle(x, y, knob, edge);
         edge.setColor(inkColor(alpha, pressed));
         edge.setStrokeWidth(knob * 0.06f);
         c.drawCircle(x, y, knob * 0.62f, edge);  // (el agarre de goma de la seta)
@@ -232,11 +279,7 @@ final class Glyphs {
             // (the picture alone, in its own shape and proportions inside the button's square: no plate, no edge; pressed
             // it darkens)
             fitted(picture, cx, cy, r);
-            imagePaint.setAlpha(alpha);
-            imagePaint.setColorFilter(pressed ? new android.graphics.PorterDuffColorFilter(0x90281010,
-                    android.graphics.PorterDuff.Mode.SRC_ATOP) : null);
-            c.drawBitmap(picture, null, box, imagePaint);
-            imagePaint.setColorFilter(null);
+            drawPicture(c, picture, alpha, pressed);
         } else {
             if (plateColor != 0 || pressed || picture == null) c.drawRoundRect(box, round, round, fill);
             if (picture != null) {  // (clipped to the shape)
@@ -255,6 +298,8 @@ final class Glyphs {
             // (the picture is the label)
         } else if (icon > 0) {
             icon(c, cx, cy, r * 0.55f, icon, color);
+        } else if (text == null) {  // (the menu: its gear)
+            gear(c, cx, cy, r * 0.62f, color, pressed ? GOLD : plateColor != 0 ? plateColor : WINE, alpha);
         } else {
             float size = r * (text.length() <= 2 ? 0.95f : text.length() <= 4 ? 0.62f : text.length() <= 7 ? 0.44f : 0.32f);
             label(c, text, cx, cy, size, color);
@@ -270,6 +315,15 @@ final class Glyphs {
             ink.setColor(color);
             c.drawPath(path, ink);
         }
+    }
+
+    // A picture in its own shape, in box (fitted): no plate, no edge; pressed, it darkens
+    private void drawPicture(Canvas c, android.graphics.Bitmap picture, int alpha, boolean pressed) {
+        imagePaint.setAlpha(alpha);
+        imagePaint.setColorFilter(pressed ? new android.graphics.PorterDuffColorFilter(0x90281010,
+                android.graphics.PorterDuff.Mode.SRC_ATOP) : null);
+        c.drawBitmap(picture, null, box, imagePaint);
+        imagePaint.setColorFilter(null);
     }
 
     // Where a picture in its own shape goes: as large as fits a 2r square, its proportions kept, centred (in box)

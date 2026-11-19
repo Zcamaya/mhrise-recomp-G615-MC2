@@ -331,6 +331,13 @@ void record_input() {
 std::atomic<uint64_t> g_touch_buttons{0};
 std::atomic<uint32_t> g_touch_sticks_on{0};
 std::atomic<int32_t> g_pad_sticks[4] = {};
+// Where the touch sticks are (kept for when a combo lets go of one), and the stick directions that a combo or a mapped
+// key holds (bits 16-23 of NpadButton: kStickLLeft...). Those push their stick all the way, over the finger's and the
+// controller's; g_forced_sticks says which ones it is now (bit 0 the left, bit 1 the right).
+std::atomic<int32_t> g_touch_sticks[4] = {};
+std::atomic<uint64_t> g_axis_forced{0};
+std::atomic<uint32_t> g_forced_sticks{0};
+constexpr uint64_t kStickDirs = 0xFFull << 16;
 
 // Ajustes del mando físico, del menú de controles (GameActivity.nativePad): la zona muerta de los sticks (radial), desde
 // dónde un gatillo analógico cuenta como ZL / ZR, dónde está el stick derecho, y los combos: un botón (o dos a la vez)
@@ -358,21 +365,43 @@ bool mapped_key(int32_t keycode, uint64_t* out) {
     return any;
 }
 
+// The sticks those directions hold (both ways at once: as if neither), and the ones let go back to the finger's or
+// the controller's. Under g_publish_mutex.
+void force_sticks(uint64_t dirs) {
+    uint32_t now = 0;
+    for (int s = 0; s < 2; s++) {
+        const uint64_t d = dirs >> (16 + 4 * s);  // (left, up, right, down)
+        const float x = static_cast<float>((d >> 2) & 1) - static_cast<float>(d & 1);
+        const float y = static_cast<float>((d >> 1) & 1) - static_cast<float>((d >> 3) & 1);
+        if (x == 0.0f && y == 0.0f) continue;
+        const float k = x != 0.0f && y != 0.0f ? 0.70710678f : 1.0f;  // (a diagonal: as far as a stick goes)
+        g_input.sticks[2 * s] = to_stick(x * k);
+        g_input.sticks[2 * s + 1] = to_stick(y * k);
+        now |= 1u << s;
+    }
+    const uint32_t gone = g_forced_sticks.exchange(now) & ~now, touched = g_touch_sticks_on;
+    for (int s = 0; s < 2; s++)
+        if (gone & (1u << s))
+            for (int k = 2 * s; k < 2 * s + 2; k++)
+                g_input.sticks[k] = (touched & (1u << s)) ? g_touch_sticks[k].load() : g_pad_sticks[k].load();
+}
+
 std::mutex g_publish_mutex;
 void publish() {
     std::lock_guard lock(g_publish_mutex);
-    uint64_t pad = g_key_buttons | g_axis_buttons;
+    uint64_t pad = g_key_buttons | g_axis_buttons, out = 0;
     {
         std::lock_guard pad_lock(g_pad_mutex);
         // Un combo cambia los botones que lo disparan por los suyos; con dos combos sobre el mismo botón, el de más
         // botones primero (L+R antes que L solo), que el usuario los pone en ese orden en el menú
-        uint64_t out = 0;
         for (const auto& [chord, buttons] : g_pad.combos)
             if (chord && (pad & chord) == chord) pad &= ~chord, out |= buttons;
         pad |= out;
     }
     const uint64_t touch = g_touch_buttons;
     g_input.buttons = pad | g_auto_buttons | touch;
+    // (a real stick's directions are in pad too, from g_axis_buttons: those don't count, only what was mapped)
+    force_sticks((g_key_buttons | g_axis_forced | out | touch) & kStickDirs);
     record_input();
 }
 
@@ -645,7 +674,7 @@ int32_t on_input(android_app* app, AInputEvent* event) {
         g_pad_sticks[1] = to_stick(-ly);  // en Android abajo es positivo
         g_pad_sticks[2] = to_stick(rx);
         g_pad_sticks[3] = to_stick(-ry);
-        const uint32_t touched = g_touch_sticks_on;  // (un stick que lleva un dedo no se toca desde aquí)
+        const uint32_t touched = g_touch_sticks_on | g_forced_sticks;  // (un stick que lleva un dedo o un combo no se toca desde aquí)
         for (int k = 0; k < 4; k++)
             if (!(touched & (1u << (k / 2)))) g_input.sticks[k] = g_pad_sticks[k].load();
         float hx = axis(AMOTION_EVENT_AXIS_HAT_X), hy = axis(AMOTION_EVENT_AXIS_HAT_Y);
@@ -669,6 +698,7 @@ int32_t on_input(android_app* app, AInputEvent* event) {
         press(hy > 0.5f, AKEYCODE_DPAD_DOWN, kDown);
         press(lt > set.trigger, AKEYCODE_BUTTON_L2, kZL);
         press(rt > set.trigger, AKEYCODE_BUTTON_R2, kZR);
+        g_axis_forced = b & kStickDirs;  // (stick directions here are a hat or trigger mapped to one)
         if (lx < -0.5f) b |= kStickLLeft;
         if (lx > 0.5f) b |= kStickLRight;
         if (ly < -0.5f) b |= kStickLUp;
@@ -737,8 +767,11 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_iamwilmar_mhriseport_GameActivi
     const uint32_t on = static_cast<uint32_t>(sticks_on) & 3u;
     const uint32_t was = g_touch_sticks_on.exchange(on);
     const float v[4] = {lx, ly, rx, ry};
+    const uint32_t forced = g_forced_sticks;  // (one a combo holds stays the combo's until it lets go)
     for (int k = 0; k < 4; k++) {
-        if (on & (1u << (k / 2))) g_input.sticks[k] = to_stick(v[k]);
+        g_touch_sticks[k] = to_stick(v[k]);
+        if (forced & (1u << (k / 2))) continue;
+        if (on & (1u << (k / 2))) g_input.sticks[k] = g_touch_sticks[k].load();
         else if (was & (1u << (k / 2))) g_input.sticks[k] = g_pad_sticks[k].load();  // (soltado: vuelve el del mando)
     }
     publish();

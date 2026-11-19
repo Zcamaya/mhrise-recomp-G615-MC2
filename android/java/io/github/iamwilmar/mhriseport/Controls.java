@@ -13,10 +13,16 @@ final class Controls {
     static final long A = 1L, B = 1L << 1, X = 1L << 2, Y = 1L << 3, LSTICK = 1L << 4, RSTICK = 1L << 5, L = 1L << 6,
             R = 1L << 7, ZL = 1L << 8, ZR = 1L << 9, PLUS = 1L << 10, MINUS = 1L << 11, LEFT = 1L << 12, UP = 1L << 13,
             RIGHT = 1L << 14, DOWN = 1L << 15;
+    // The sticks' directions (NpadButton has them too): in a combo or a mapped key one pushes its stick all the way
+    // that way (the loader's force_sticks), over the finger's and the controller's
+    static final long LS_LEFT = 1L << 16, LS_UP = 1L << 17, LS_RIGHT = 1L << 18, LS_DOWN = 1L << 19, RS_LEFT = 1L << 20,
+            RS_UP = 1L << 21, RS_RIGHT = 1L << 22, RS_DOWN = 1L << 23;
 
     // Los botones que se pueden poner en un combo, en el orden del menú, y su nombre.
-    static final long[] BUTTONS = {A, B, X, Y, L, R, ZL, ZR, PLUS, MINUS, LSTICK, RSTICK, UP, DOWN, LEFT, RIGHT};
-    static final String[] NAMES = {"A", "B", "X", "Y", "L", "R", "ZL", "ZR", "+", "−", "L3", "R3", "↑", "↓", "←", "→"};
+    static final long[] BUTTONS = {A, B, X, Y, L, R, ZL, ZR, PLUS, MINUS, LSTICK, RSTICK, UP, DOWN, LEFT, RIGHT,
+            LS_UP, LS_DOWN, LS_LEFT, LS_RIGHT, RS_UP, RS_DOWN, RS_LEFT, RS_RIGHT};
+    static final String[] NAMES = {"A", "B", "X", "Y", "L", "R", "ZL", "ZR", "+", "−", "L3", "R3", "↑", "↓", "←", "→",
+            "LS↑", "LS↓", "LS←", "LS→", "RS↑", "RS↓", "RS←", "RS→"};
 
     static String names(long mask) {
         StringBuilder s = new StringBuilder();
@@ -374,9 +380,18 @@ final class Controls {
         }
     }
 
-    // A button whose look and tap to hold can be changed (not the sticks, the d-pad or the menu)
+    // A button that presses something by itself: it can have an icon or a label, tap to hold, a copy (not the sticks,
+    // the d-pad or the menu)
     static boolean isButton(Ctl c) {
         return c != null && c != Ctl.LSTICK && c != Ctl.RSTICK && c != Ctl.DPAD && c != Ctl.MENU;
+    }
+
+    static boolean isStick(Ctl c) { return c == Ctl.LSTICK || c == Ctl.RSTICK; }
+
+    // Whether its look was changed from the usual drawing (Edit layout: size and opacity aside)
+    boolean styled(Ctl c) {
+        int k = c.ordinal();
+        return shape[k] != 0 || icon[k] != 0 || hold[k] || color[k] != 0 || label[k] != null || image[k] || outline[k] != 100;
     }
 
     // The first combo with no buttons (-1: all taken)

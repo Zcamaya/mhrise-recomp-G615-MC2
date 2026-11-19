@@ -92,7 +92,8 @@ final class TouchPad extends View {
 
     // For a picture in its own shape: the touch inside it (true), outside (false), or no shape to go by (null)
     private Boolean insidePicture(Ctl c, float x, float y) {
-        if (!cfg.image[c.ordinal()] || !cfg.fit[c.ordinal()]) return null;
+        // (a stick's picture is its knob, which moves: the stick is touched on its base, as always)
+        if (!cfg.image[c.ordinal()] || !cfg.fit[c.ordinal()] || Controls.isStick(c)) return null;
         android.graphics.Bitmap b = bitmap(c);
         Outline o = shapes[c.ordinal()];
         if (b == null || o == null || !o.usable) return null;
@@ -194,7 +195,7 @@ final class TouchPad extends View {
             final boolean pill = (c == Ctl.L || c == Ctl.R) && shape == 0;
             float reach = c == Ctl.LSTICK || c == Ctl.RSTICK ? r * 1.35f : pill ? r * 1.15f : r * 1.25f;
             if (pill) dy *= 2.0f;  // (una pastilla: más ancha que alta)
-            float d = shape >= 2 && Controls.isButton(c) ? Math.max(Math.abs(dx), Math.abs(dy))  // (a square)
+            float d = shape >= 2 && c != Ctl.DPAD ? Math.max(Math.abs(dx), Math.abs(dy))  // (a square)
                                                          : (float) Math.hypot(dx, dy);
             Boolean picture = insidePicture(c, x, y);
             if (picture != null) {
@@ -644,26 +645,34 @@ final class TouchPad extends View {
         float x = cx(ctl), y = cy(ctl), r = radius(ctl);
         boolean down = pressed(ctl) || (latched[ctl.ordinal()] && cfg.hold[ctl.ordinal()] && !editing);
         final int k = ctl.ordinal();
-        if (Controls.isButton(ctl) && (cfg.shape[k] != 0 || cfg.icon[k] != 0 || cfg.hold[k] || single(ctl) || cfg.color[k] != 0
-                                       || cfg.label[k] != null || cfg.image[k] || cfg.outline[k] != 100)) {
+        android.graphics.Bitmap picture = cfg.image[k] ? bitmap(ctl) : null;
+        if (ctl == Ctl.MENU && cfg.styled(ctl)) {  // (its gear, unless it has an icon or a label)
+            glyphs.custom(c, x, y, r, cfg.shape[k] == 0 ? 1 : cfg.shape[k], cfg.icon[k], cfg.label[k], false, down, a,
+                    Controls.COLOR_FILLS[cfg.color[k]], picture, cfg.outline[k] / 100f, cfg.fit[k]);
+            return;
+        }
+        if (Controls.isButton(ctl) && (cfg.styled(ctl) || single(ctl))) {
             // (a button with a look of its own; a combo of one button looks like that button; tap to hold shows a dot)
             int shape = cfg.shape[k];
             if (shape == 0) shape = ctl.combo() && !single(ctl) ? 2 : 1;
             String text = cfg.label[k] != null ? cfg.label[k]
                     : ctl.combo() ? Controls.names(cfg.combo[ctl.comboIndex()]) : buttonText(ctl);
             glyphs.custom(c, x, y, r, shape, cfg.icon[k], text, cfg.hold[k], down, a, Controls.COLOR_FILLS[cfg.color[k]],
-                    cfg.image[k] ? bitmap(ctl) : null, cfg.outline[k] / 100f, cfg.fit[k]);
+                    picture, cfg.outline[k] / 100f, cfg.fit[k]);
             return;
         }
         switch (ctl) {
             case LSTICK:
-                glyphs.stick(c, x, y, r, lx, ly, (sticksOn & 1) != 0, (pulse & Controls.LSTICK) != 0, a);
+                glyphs.stick(c, x, y, r, lx, ly, (sticksOn & 1) != 0, (pulse & Controls.LSTICK) != 0, a, cfg.shape[k],
+                        Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture, cfg.fit[k]);
                 break;
             case RSTICK:
-                glyphs.stick(c, x, y, r, rx, ry, (sticksOn & 2) != 0, (pulse & Controls.RSTICK) != 0, a);
+                glyphs.stick(c, x, y, r, rx, ry, (sticksOn & 2) != 0, (pulse & Controls.RSTICK) != 0, a, cfg.shape[k],
+                        Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture, cfg.fit[k]);
                 break;
             case DPAD:
-                glyphs.dpad(c, x, y, r, dpadHeld(), a);
+                glyphs.dpad(c, x, y, r, dpadHeld(), a, Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture,
+                        cfg.fit[k]);
                 break;
             case A: case B: case X: case Y:
                 glyphs.face(c, x, y, r, ctl.name(), down, a);

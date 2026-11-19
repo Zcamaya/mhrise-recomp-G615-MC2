@@ -123,15 +123,16 @@ may stutter while its shaders are translated and compiled; they are cached for t
     zone, the tap for L3 / R3, and camera swipe and its speed (to turn the camera with a stick instead, show the right
     stick in *Edit layout* and turn camera swipe off).
   - *Edit layout:* drag each control where you want it, change its size or hide it from the bar at the top, or put the
-    traditional layout back. *Edit* opens the chosen control: a size slider and, for a button, its shape (circle,
-    rounded square, square), an icon instead of its letters, and *Tap to hold* (a tap keeps it pressed until the next
-    tap), its own opacity and outline width, a plate colour, your own label, and a picture of yours instead of its
-    drawing (any image: the app keeps a 256-pixel copy), either cut to the button's shape or in its own shape, where
-    only the picture itself takes touches. *Add* makes a new button and *Copy as a new button* another of a console button;
+    traditional layout back. *Edit* opens the chosen control, any of them: its size, opacity and outline width, a
+    plate colour, and a picture of yours instead of its drawing (any image: the app keeps a 256-pixel copy), either
+    cut to the control's shape or in its own shape, where only the picture itself takes touches. A stick's picture is
+    its knob, and its shape is its base's. Buttons and the menu also get a shape (circle, rounded square, square), an
+    icon and your own label, and buttons *Tap to hold* (a tap keeps it pressed until the next tap). *Add* makes a new button and *Copy as a new button* another of a console button;
     both are combos, so a controller button can fire them too. *Grid* shows a grid and snaps what you drag to it.
   - *Export layout* / *Import layout:* the whole touch layout in a `.zip` (`layout.json` and the pictures), to keep or
     to share; places are fractions of the screen, so it fits another phone.
-  - *Combos:* up to eight. Each presses several buttons at once (A+X, say), from its own button on the screen and, if you
+  - *Combos:* up to eight. Each presses several buttons at once (A+X, say, or a stick direction: LS↑ holds the left
+    stick all the way up), from its own button on the screen and, if you
     choose one, from a controller button or a pair of them (L3, −+R…). One of a single button is called *Button n* and
     looks like that button; one of several, *Combo n*. Under *Controller → Added buttons and combos* each can also get
     any key of a controller or a keyboard.
@@ -139,7 +140,8 @@ may stutter while its shaders are translated and compiled; they are cached for t
     is read from. *By controller* picks Z/RZ or RX/RY from the axes each pad says it has, with triggers on LTRIGGER /
     RTRIGGER, BRAKE / GAS or Z/RZ, so Xbox, DualSense and generic pads all work. The log says what it chose for each pad.
   - *Button mapping* (under Controller): tap a Switch button and press the controller button you want for it. Analog
-    triggers and a hat d-pad can be mapped too. To swap two buttons, map each one to the other; *Reset mapping* puts
+    triggers and a hat d-pad can be mapped too, and so can the sticks' directions (a keyboard's WASD as the left
+    stick, say). To swap two buttons, map each one to the other; *Reset mapping* puts
     everything back. The log lists each mapping (`[input] controller key … mapped to …`).
 
 ## Options
@@ -155,7 +157,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | Name | Effect |
 |---|---|
 | `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam): import it from the GPU driver screen (it's copied into the app), or copy it into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. Read at start-up. |
-| `lsfg/motion.*`, `shaders/fg_*.comp` | The built-in frame generator: no Lossless.dll, plain Vulkan 1.1 compute (a luma pyramid, block motion search refined to a quarter of the picture, a median-filtered field, and a warp of both frames that keeps still pixels such as the HUD unwarped). Used when there's no DLL or Lossless's chain can't run on the GPU, or always with `fg_builtin` (GPU driver screen → Frame generation → Generator). Turned on with `lsfg`, as before. |
+| `lsfg/motion.*`, `shaders/fg_*.comp` | The built-in frame generator: no Lossless.dll, plain Vulkan 1.1 compute (a luma pyramid, block motion search refined to a quarter of the picture, a median-filtered field, and a warp of both frames where each pixel picks its own vector so edges stay sharp, and that keeps still pixels such as the HUD unwarped). Used when there's no DLL or Lossless's chain can't run on the GPU, or always with `fg_builtin` (GPU driver screen → Frame generation → Generator). Turned on with `lsfg`, as before. |
 | `resolution_240`, `resolution_360`, `resolution_432`, `resolution_480`, `resolution_576`, `resolution_648`, `resolution_720` | Base resolution of the 3D scene: 427x240 (the lowest, for the weakest GPUs; FSR helps the upscale), 640x360, 768x432, 854x480 (lower, for weak GPUs), 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). In docked mode, the same ratios of the docked scene. Live. |
 | `aspect_4_3`, `aspect_21_9`, `aspect_16_10`, `aspect_stretch` | Aspect ratio, like Eden's: the picture in the largest rectangle of that shape on the screen, centred, black around it. None of them: 16:9, the game's own (black bars at the sides on a long phone). `aspect_stretch` fills the screen. Display → Aspect ratio. Live. |
 | `dock_mode` | Docked mode: the game believes it's on the dock (1080p TV picture, about twice the pixels, and the controls as player 1's Pro Controller). For strong GPUs. Read at start-up. |

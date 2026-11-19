@@ -794,7 +794,9 @@ final class SettingsMenu {
     }
 
     private static final String[] MAP_NAMES = {"A", "B", "X", "Y", "L", "R", "ZL", "ZR", "+ (Plus)", "− (Minus)",
-        "L3 (left stick press)", "R3 (right stick press)", "D-pad up", "D-pad down", "D-pad left", "D-pad right"};
+        "L3 (left stick press)", "R3 (right stick press)", "D-pad up", "D-pad down", "D-pad left", "D-pad right",
+        "Left stick up", "Left stick down", "Left stick left", "Left stick right", "Right stick up", "Right stick down",
+        "Right stick left", "Right stick right"};
 
     // ---- button mapping -------------------------------------------------------------------------------------------------
 
@@ -895,8 +897,9 @@ final class SettingsMenu {
 
     // ---- the layout editor's Edit: one control -------------------------------------------------------------------------
 
-    // Its size (a slider), and for a button its shape, an icon, tap to hold, and a combo's buttons or a copy of a
-    // console button as a new one (a combo of that button alone, so a controller button can fire it too)
+    // Its size and opacity (sliders), its colour, edge and a picture; the shape too but for the d-pad's (a stick's is
+    // its base's), an icon and a label for a button or the menu; and for a button tap to hold, and a combo's buttons
+    // or a copy of a console button as a new one (a combo of that button alone, so a controller button can fire it too)
     void editControl(Controls.Ctl c) {
         final int k = c.ordinal();
         final Dialog d = new Dialog(activity);
@@ -955,67 +958,76 @@ final class SettingsMenu {
         goldBar(alpha);
         box.addView(alpha);
 
-        if (Controls.isButton(c)) {
+        final boolean button = Controls.isButton(c), stick = Controls.isStick(c), menu = c == Controls.Ctl.MENU;
+        if (c != Controls.Ctl.DPAD)
             box.addView(pickRow("Shape", Controls.SHAPES, () -> cfg.shape[k], v -> cfg.shape[k] = v,
-                    "Its own: the usual look (a combo of one button looks like that button)."));
+                    stick ? "The stick's base. Its own: the usual circle."
+                          : "Its own: the usual look (a combo of one button looks like that button)."));
+        if (button || menu)
             box.addView(pickRow("Icon", Controls.ICONS, () -> cfg.icon[k], v -> cfg.icon[k] = v,
-                    "An icon instead of the button's letters."));
-            final TextView edgeValue = text("", 16, GOLD, false);
-            Runnable showEdge = () -> edgeValue.setText(cfg.outline[k] == 0 ? "None" : cfg.outline[k] + " %");
-            showEdge.run();
-            box.addView(rowView("Outline", edgeValue, "The width of the button's bronze edge (0: none)."));
-            SeekBar edge = new SeekBar(activity);
-            edge.setMax(300);
-            edge.setProgress(cfg.outline[k]);
-            edge.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                @Override
-                public void onProgressChanged(SeekBar bar, int value, boolean user) {
-                    if (!user) return;
-                    cfg.outline[k] = value;
-                    showEdge.run();
+                    menu ? "An icon instead of the gear." : "An icon instead of the button's letters."));
+        final TextView edgeValue = text("", 16, GOLD, false);
+        Runnable showEdge = () -> edgeValue.setText(cfg.outline[k] == 0 ? "None" : cfg.outline[k] + " %");
+        showEdge.run();
+        box.addView(rowView("Outline", edgeValue, "The width of its bronze edge (0: none)."));
+        SeekBar edge = new SeekBar(activity);
+        edge.setMax(300);
+        edge.setProgress(cfg.outline[k]);
+        edge.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int value, boolean user) {
+                if (!user) return;
+                cfg.outline[k] = value;
+                showEdge.run();
+                changed();
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) {}
+        });
+        edge.setPadding(dp(16), dp(10), dp(16), dp(10));
+        goldBar(edge);
+        box.addView(edge);
+        box.addView(pickRow("Colour", Controls.COLORS, () -> cfg.color[k], v -> cfg.color[k] = v,
+                stick ? "The stick's base and knob. Clear: only the edges, the game showing through."
+                      : "Its plate. Clear: only its edge, the game showing through."));
+        final TextView labelValue = text("", 16, GOLD, false);
+        Runnable showLabel = () -> labelValue.setText(cfg.label[k] == null ? "Its own" : cfg.label[k]);
+        showLabel.run();
+        LinearLayout labelRow = rowView("Label", labelValue, "Your own text on it instead of " + (menu ? "the gear" : "its letters")
+                + " (empty: its own).");
+        labelRow.setOnClickListener(v -> new TextPrompt(activity).show("Label", "Empty for its own",
+                cfg.label[k] == null ? "" : cfg.label[k], "", 0, 12, false, false, text -> {
+                    if (text == null) return;
+                    cfg.label[k] = text.trim().isEmpty() ? null : text.trim();
+                    showLabel.run();
                     changed();
-                }
-                @Override public void onStartTrackingTouch(SeekBar bar) {}
-                @Override public void onStopTrackingTouch(SeekBar bar) {}
-            });
-            edge.setPadding(dp(16), dp(10), dp(16), dp(10));
-            goldBar(edge);
-            box.addView(edge);
-            box.addView(pickRow("Colour", Controls.COLORS, () -> cfg.color[k], v -> cfg.color[k] = v,
-                    "The button's plate. Clear: only its edge, the game showing through."));
-            final TextView labelValue = text("", 16, GOLD, false);
-            Runnable showLabel = () -> labelValue.setText(cfg.label[k] == null ? "Its own" : cfg.label[k]);
-            showLabel.run();
-            LinearLayout labelRow = rowView("Label", labelValue, "Your own text on it instead of its letters (empty: its own).");
-            labelRow.setOnClickListener(v -> new TextPrompt(activity).show("Label", "Empty for its own",
-                    cfg.label[k] == null ? "" : cfg.label[k], "", 0, 12, false, false, text -> {
-                        if (text == null) return;
-                        cfg.label[k] = text.trim().isEmpty() ? null : text.trim();
-                        showLabel.run();
-                        changed();
-                    }));
-            box.addView(labelRow);
-            final TextView imageValue = text(cfg.image[k] ? "Yours  ▾" : "None  ▾", 16, GOLD, false);
-            LinearLayout imageRow = rowView("Picture", imageValue,
-                    "An image of yours on the button instead of its drawing, kept with the layout (and in exported "
-                            + "layouts). Pressed, it darkens.");
-            imageRow.setOnClickListener(v -> dropDown("Picture", cfg.image[k] ? new String[] {"Choose another…", "Remove"}
-                                                                                : new String[] {"Choose an image…"}, -1, i -> {
-                if (i == 1) {
-                    cfg.clearImage(c);
-                    imageValue.setText("None  ▾");
-                    changed();
-                    return;
-                }
-                d.dismiss();
-                activity.pickImage(c, () -> editControl(c));  // (the dialog again, with the picture)
-            }));
-            box.addView(imageRow);
-            box.addView(pickRow("Picture shape", new String[] {"Cut to the button", "The picture's own"},
-                    () -> cfg.fit[k] ? 1 : 0, v -> cfg.fit[k] = v != 0,
-                    "Cut to the button: the picture fills the button's shape, with its plate and edge. The picture's own: "
-                            + "only the picture, in its proportions, and only where it's drawn takes touches (a "
-                            + "see-through background doesn't)."));
+                }));
+        if (button || menu) box.addView(labelRow);
+        final TextView imageValue = text(cfg.image[k] ? "Yours  ▾" : "None  ▾", 16, GOLD, false);
+        LinearLayout imageRow = rowView("Picture", imageValue,
+                (stick ? "An image of yours as the stick's knob (it moves with your thumb)"
+                       : "An image of yours instead of its drawing")
+                        + ", kept with the layout (and in exported layouts). Pressed, it darkens.");
+        imageRow.setOnClickListener(v -> dropDown("Picture", cfg.image[k] ? new String[] {"Choose another…", "Remove"}
+                                                                            : new String[] {"Choose an image…"}, -1, i -> {
+            if (i == 1) {
+                cfg.clearImage(c);
+                imageValue.setText("None  ▾");
+                changed();
+                return;
+            }
+            d.dismiss();
+            activity.pickImage(c, () -> editControl(c));  // (the dialog again, with the picture)
+        }));
+        box.addView(imageRow);
+        box.addView(pickRow("Picture shape", new String[] {stick ? "Cut round" : "Cut to the button", "The picture's own"},
+                () -> cfg.fit[k] ? 1 : 0, v -> cfg.fit[k] = v != 0,
+                stick ? "Cut round: the picture fills the knob, with its edge. The picture's own: only the picture, "
+                        + "in its proportions (the stick still takes touches on its whole base)."
+                      : "Cut to the control: the picture fills its shape, with its edge. The picture's own: only the "
+                        + "picture, in its proportions, and only where it's drawn takes touches (a see-through "
+                        + "background doesn't)."));
+        if (button) {
             box.addView(pickRow("Tap to hold", new String[] {"Off", "On"}, () -> cfg.hold[k] ? 1 : 0, v -> cfg.hold[k] = v != 0,
                     "On: a tap presses it and keeps it pressed until the next tap (a small diamond shows it)."));
             if (c.combo()) {

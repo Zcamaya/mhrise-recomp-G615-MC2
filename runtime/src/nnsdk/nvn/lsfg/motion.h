@@ -10,9 +10,10 @@
 //   2. at 1/8 and 1/4, each block takes the best of its coarser neighbours' vectors (doubled), their average and no
 //      motion, then the best one texel step around it; at 1/4 a parabola puts it below a texel;
 //   3. a 3x3 median of the field;
-//   4. each pixel: A at x - d and B at x + d, averaged where they agree, else the median of those two and the plain
-//      blend at x; a pixel the same in A and B (the HUD, still scenery) keeps B's, and where no block matched (a cut,
-//      a flash) B is shown.
+//   4. each pixel picks its own vector (of its four nearest blocks', their mix and none, then a half pixel step: the
+//      best match of A at x - d and B at x + d around it), so edges stay sharp; A and B averaged where they agree,
+//      else B's sample alone; a pixel the same in A and B (the HUD, still scenery) keeps B's, and where no block
+//      matched (a cut, a flash) B is shown.
 // Shaders: shaders/fg_*.comp (tools/shaders.sh). A build whose spirv.h doesn't have them yet can't make one
 // (available() false): the presenter goes on with LSFG alone.
 

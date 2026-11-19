@@ -1,8 +1,13 @@
 #version 450
-// Built-in frame generation, 6: the picture between A and B. Each pixel's vector d (the field bilinear, in pixels)
-// takes A at x - d and B at x + d, and their average where they agree. Where they don't (something uncovered or
-// covered), the median of the two and the plain blend at x. A pixel the same in both frames (the HUD, still scenery)
-// keeps B's own; one whose match is poor everywhere (a cut, a flash, smoke) takes B: a cut shows B twice.
+// Built-in frame generation, 6: the picture between A and B. The field is a vector per 16x16 pixels, too coarse to
+// cross an edge with, so each pixel picks its own: of the four nearest blocks' vectors, their bilinear mix and no
+// motion, the one whose A at x - d and B at x + d match best on a small cross of pixels around x, then the best half
+// pixel step around that one. That keeps a moving thing's edge where it is instead of smearing its motion onto
+// what's behind it, and puts the vector below the field's texel (fine texture, like the planks of a floor, only lines
+// up at the pixel).
+// The colour: A and B averaged where they agree; where they don't (something uncovered or covered, a vector that
+// doesn't fit) B's sample on its own, so it's sharp: a blend of two different things is the smudge. A pixel the same in
+// both frames (the HUD, still scenery) keeps B's own; one whose block matched nothing (a cut, a flash) takes B.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D frame_a;
 layout(binding = 1) uniform sampler2D frame_b;
@@ -11,13 +16,27 @@ layout(binding = 3, rgba8) uniform writeonly image2D dst;
 // size: the picture; src_size: the field; inv_src: 1 / the picture; pad: pixels per field texel's luma texel (4)
 layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int pad; } p;
 
+const vec3 kLuma = vec3(0.299, 0.587, 0.114);
+
 vec4 field_at(ivec2 c) { return imageLoad(field, clamp(c, ivec2(0), p.src_size - 1)); }
+
+float lum_a(vec2 at) { return dot(textureLod(frame_a, at * p.inv_src, 0.0).rgb, kLuma); }
+float lum_b(vec2 at) { return dot(textureLod(frame_b, at * p.inv_src, 0.0).rgb, kLuma); }
+
+// How badly d fits at x (A at x - d against B at x + d over a cross of five pixels), plus a little for leaving the
+// field's own vector: on a flat patch, where everything fits, that one wins and the motion stays smooth.
+float cost_of(vec2 x, vec2 d, vec2 smooth_d) {
+    const vec2 taps[5] = vec2[5](vec2(0.0), vec2(-1.5, 0.0), vec2(1.5, 0.0), vec2(0.0, -1.5), vec2(0.0, 1.5));
+    float cost = 0.0;
+    for (int i = 0; i < 5; i++) cost += abs(lum_a(x + taps[i] - d) - lum_b(x + taps[i] + d));
+    vec2 off = abs(d - smooth_d);
+    return cost + 0.004 * (off.x + off.y);
+}
 
 void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (q.x >= p.size.x || q.y >= p.size.y) return;
     vec2 x = vec2(q) + 0.5;
-    vec2 uv = x * p.inv_src;
     vec3 a0 = texelFetch(frame_a, q, 0).rgb, b0 = texelFetch(frame_b, q, 0).rgb;
     vec3 diff = abs(a0 - b0);
     if (max(diff.r, max(diff.g, diff.b)) < 0.008) {
@@ -31,19 +50,39 @@ void main() {
     vec2 t = f - vec2(i);
     vec4 v00 = field_at(i), v10 = field_at(i + ivec2(1, 0)), v01 = field_at(i + ivec2(0, 1)), v11 = field_at(i + ivec2(1, 1));
     vec4 v = mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y);
-    vec2 d = v.xy * float(p.pad);  // (luma texels to pixels)
-    vec3 a = textureLod(frame_a, uv - d * p.inv_src, 0.0).rgb;
-    vec3 b = textureLod(frame_b, uv + d * p.inv_src, 0.0).rgb;
-    vec3 e = abs(a - b);
-    float err = max(e.r, max(e.g, e.b));
-    vec3 outc;
-    if (v.z > 2.5) {
-        outc = b0;  // (no block there matched: a cut or a flash)
-    } else if (err < 0.06) {
-        outc = (a + b) * 0.5;
-    } else {
-        vec3 blend = (a0 + b0) * 0.5;
-        outc = max(min(a, b), min(max(a, b), blend));  // (the median of a, b and the blend)
+    if (min(min(v00.z, v10.z), min(v01.z, v11.z)) > 2.5) {  // (no block near matched: a cut or a flash)
+        imageStore(dst, q, vec4(b0, 1.0));
+        return;
     }
-    imageStore(dst, q, vec4(outc, 1.0));
+    float px = float(p.pad);  // (luma texels to pixels)
+    vec2 smooth_d = v.xy * px;
+    vec2 cands[6] = vec2[6](smooth_d, v00.xy * px, v10.xy * px, v01.xy * px, v11.xy * px, vec2(0.0));
+    vec2 d = smooth_d;
+    float best = cost_of(x, d, smooth_d);
+    for (int k = 1; k < 6; k++) {
+        float c = cost_of(x, cands[k], smooth_d);
+        if (c < best) {
+            best = c;
+            d = cands[k];
+        }
+    }
+    // (half a pixel each way here is a whole pixel between A and B)
+    vec2 centre = d;
+    for (int y = -1; y <= 1; y++)
+        for (int xx = -1; xx <= 1; xx++) {
+            if (xx == 0 && y == 0) continue;
+            vec2 e = centre + vec2(xx, y) * 0.5;
+            float c = cost_of(x, e, smooth_d);
+            if (c < best) {
+                best = c;
+                d = e;
+            }
+        }
+    vec3 a = textureLod(frame_a, (x - d) * p.inv_src, 0.0).rgb;
+    vec3 b = textureLod(frame_b, (x + d) * p.inv_src, 0.0).rgb;
+    vec3 e3 = abs(a - b);
+    float err = max(e3.r, max(e3.g, e3.b));
+    // (no hard switch between the two: that would flicker along its edge)
+    float alone = smoothstep(0.03, 0.10, err);
+    imageStore(dst, q, vec4(mix((a + b) * 0.5, b, alone), 1.0));
 }
