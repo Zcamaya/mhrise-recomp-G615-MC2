@@ -1,13 +1,13 @@
 #version 450
 // Built-in frame generation, 6: the picture between A and B. The field is a vector per 16x16 pixels, too coarse to
-// cross an edge with, so each pixel picks its own: of the four nearest blocks' vectors, their bilinear mix and no
-// motion, the one whose A at x - d and B at x + d match best on a small cross of pixels around x, then the best half
-// pixel step around that one. That keeps a moving thing's edge where it is instead of smearing its motion onto
-// what's behind it, and puts the vector below the field's texel (fine texture, like the planks of a floor, only lines
-// up at the pixel).
-// The colour: A and B averaged where they agree; where they don't (something uncovered or covered, a vector that
-// doesn't fit) B's sample on its own, so it's sharp: a blend of two different things is the smudge. A pixel the same in
-// both frames (the HUD, still scenery) keeps B's own; one whose block matched nothing (a cut, a flash) takes B.
+// cross an edge with, so each pixel may pick its own: of the four nearest blocks' vectors and no motion, one whose A at
+// x - d and B at x + d match clearly better than the field's own (its bilinear mix) on a 3x3 of pixels around x, then a
+// half pixel step, again only if it's clearly better. "Clearly": on a busy texture (stones, grass) many vectors fit
+// about as well, and a pixel picking a different one from its neighbour, and again a frame later, is what shimmers.
+// The samples are bicubic (Catmull-Rom), not bilinear: a made picture softer than the real ones around it flickers
+// between sharp and soft at the refresh rate on every texture. A and B are averaged where they agree, B's sample is
+// taken alone where they don't (something uncovered or covered), both by how well the 3x3 matched, not one pixel; a
+// pixel the same in both frames (the HUD, still scenery) keeps B's own; where no block matched (a cut, a flash), B.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D frame_a;
 layout(binding = 1) uniform sampler2D frame_b;
@@ -23,14 +23,32 @@ vec4 field_at(ivec2 c) { return imageLoad(field, clamp(c, ivec2(0), p.src_size -
 float lum_a(vec2 at) { return dot(textureLod(frame_a, at * p.inv_src, 0.0).rgb, kLuma); }
 float lum_b(vec2 at) { return dot(textureLod(frame_b, at * p.inv_src, 0.0).rgb, kLuma); }
 
-// How badly d fits at x (A at x - d against B at x + d over a cross of five pixels), plus a little for leaving the
-// field's own vector: on a flat patch, where everything fits, that one wins and the motion stays smooth.
-float cost_of(vec2 x, vec2 d, vec2 smooth_d) {
-    const vec2 taps[5] = vec2[5](vec2(0.0), vec2(-1.5, 0.0), vec2(1.5, 0.0), vec2(0.0, -1.5), vec2(0.0, 1.5));
+// How badly d fits at x: A at x - d against B at x + d on 3x3 pixels two apart
+float cost_of(vec2 x, vec2 d) {
     float cost = 0.0;
-    for (int i = 0; i < 5; i++) cost += abs(lum_a(x + taps[i] - d) - lum_b(x + taps[i] + d));
-    vec2 off = abs(d - smooth_d);
-    return cost + 0.004 * (off.x + off.y);
+    for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++) {
+            vec2 at = x + vec2(i, j) * 2.0;
+            cost += abs(lum_a(at - d) - lum_b(at + d));
+        }
+    return cost;
+}
+
+// Catmull-Rom at pos (in pixels) from nine bilinear reads: the middle two texels of each axis share one read
+vec3 bicubic(sampler2D t, vec2 pos) {
+    vec2 tc = pos - 0.5, f = fract(tc), p1 = floor(tc) + 0.5;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 t0 = (p1 - 1.0) * p.inv_src, t12 = (p1 + w2 / w12) * p.inv_src, t3 = (p1 + 2.0) * p.inv_src;
+    vec3 c = textureLod(t, vec2(t0.x, t0.y), 0.0).rgb * w0.x * w0.y + textureLod(t, vec2(t12.x, t0.y), 0.0).rgb * w12.x * w0.y +
+             textureLod(t, vec2(t3.x, t0.y), 0.0).rgb * w3.x * w0.y + textureLod(t, vec2(t0.x, t12.y), 0.0).rgb * w0.x * w12.y +
+             textureLod(t, vec2(t12.x, t12.y), 0.0).rgb * w12.x * w12.y + textureLod(t, vec2(t3.x, t12.y), 0.0).rgb * w3.x * w12.y +
+             textureLod(t, vec2(t0.x, t3.y), 0.0).rgb * w0.x * w3.y + textureLod(t, vec2(t12.x, t3.y), 0.0).rgb * w12.x * w3.y +
+             textureLod(t, vec2(t3.x, t3.y), 0.0).rgb * w3.x * w3.y;
+    return clamp(c, 0.0, 1.0);
 }
 
 void main() {
@@ -39,7 +57,8 @@ void main() {
     vec2 x = vec2(q) + 0.5;
     vec3 a0 = texelFetch(frame_a, q, 0).rgb, b0 = texelFetch(frame_b, q, 0).rgb;
     vec3 diff = abs(a0 - b0);
-    if (max(diff.r, max(diff.g, diff.b)) < 0.008) {
+    float still = max(diff.r, max(diff.g, diff.b));
+    if (still < 0.006) {
         imageStore(dst, q, vec4(b0, 1.0));
         return;
     }
@@ -49,40 +68,42 @@ void main() {
     ivec2 i = ivec2(floor(f));
     vec2 t = f - vec2(i);
     vec4 v00 = field_at(i), v10 = field_at(i + ivec2(1, 0)), v01 = field_at(i + ivec2(0, 1)), v11 = field_at(i + ivec2(1, 1));
-    vec4 v = mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y);
     if (min(min(v00.z, v10.z), min(v01.z, v11.z)) > 2.5) {  // (no block near matched: a cut or a flash)
         imageStore(dst, q, vec4(b0, 1.0));
         return;
     }
     float px = float(p.pad);  // (luma texels to pixels)
-    vec2 smooth_d = v.xy * px;
-    vec2 cands[6] = vec2[6](smooth_d, v00.xy * px, v10.xy * px, v01.xy * px, v11.xy * px, vec2(0.0));
-    vec2 d = smooth_d;
-    float best = cost_of(x, d, smooth_d);
-    for (int k = 1; k < 6; k++) {
-        float c = cost_of(x, cands[k], smooth_d);
-        if (c < best) {
-            best = c;
-            d = cands[k];
+    vec2 d = mix(mix(v00.xy, v10.xy, t.x), mix(v01.xy, v11.xy, t.x), t.y) * px;
+    float best = cost_of(x, d);
+    // (another one only if it's clearly better: a tenth, and a little more on a flat patch where all are near 0)
+    vec2 cands[5] = vec2[5](v00.xy * px, v10.xy * px, v01.xy * px, v11.xy * px, vec2(0.0));
+    vec2 chosen = d;
+    float chosen_cost = best;
+    for (int k = 0; k < 5; k++) {
+        if (distance(cands[k], d) < 0.5) continue;  // (about the field's own: nothing to gain)
+        float c = cost_of(x, cands[k]);
+        if (c < chosen_cost * 0.9 - 0.02) {
+            chosen_cost = c;
+            chosen = cands[k];
         }
     }
     // (half a pixel each way here is a whole pixel between A and B)
-    vec2 centre = d;
-    for (int y = -1; y <= 1; y++)
-        for (int xx = -1; xx <= 1; xx++) {
-            if (xx == 0 && y == 0) continue;
-            vec2 e = centre + vec2(xx, y) * 0.5;
-            float c = cost_of(x, e, smooth_d);
-            if (c < best) {
-                best = c;
-                d = e;
-            }
+    const vec2 steps[4] = vec2[4](vec2(0.5, 0.0), vec2(-0.5, 0.0), vec2(0.0, 0.5), vec2(0.0, -0.5));
+    vec2 centre = chosen;
+    for (int k = 0; k < 4; k++) {
+        vec2 e = centre + steps[k];
+        float c = cost_of(x, e);
+        if (c < chosen_cost * 0.9 - 0.02) {
+            chosen_cost = c;
+            chosen = e;
         }
-    vec3 a = textureLod(frame_a, (x - d) * p.inv_src, 0.0).rgb;
-    vec3 b = textureLod(frame_b, (x + d) * p.inv_src, 0.0).rgb;
+    }
+    vec3 a = bicubic(frame_a, x - chosen);
+    vec3 b = bicubic(frame_b, x + chosen);
     vec3 e3 = abs(a - b);
     float err = max(e3.r, max(e3.g, e3.b));
-    // (no hard switch between the two: that would flicker along its edge)
-    float alone = smoothstep(0.03, 0.10, err);
-    imageStore(dst, q, vec4(mix((a + b) * 0.5, b, alone), 1.0));
+    // (no hard switches: each would flicker along its edge)
+    float alone = smoothstep(0.035, 0.10, max(chosen_cost / 9.0, 0.6 * err));
+    vec3 made = mix((a + b) * 0.5, b, alone);
+    imageStore(dst, q, vec4(mix(b0, made, smoothstep(0.006, 0.02, still)), 1.0));
 }

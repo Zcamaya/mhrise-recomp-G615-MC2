@@ -3,12 +3,15 @@
 // texels and so a vector per 2x2 of these blocks). Candidates: the coarser vectors of this block and its three nearest
 // neighbours (doubled: a texel there is two here), their average and no motion; the best one, then the best of its
 // 3x3 one texel steps. A small cost for leaving the coarser vector keeps the field smooth. At the last level (flags 1)
-// a parabola through the costs either side gives the vector below a texel.
+// a parabola through the costs either side gives the vector below a texel. With flags 2, this block's vector from the
+// last picture made is a candidate too: steady motion stays the same from one made picture to the next, and a field that
+// doesn't jump about between equally good matches on a busy texture is what keeps it from shimmering.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0, rgba32f) uniform readonly image2D coarse;
 layout(binding = 1, r32f) uniform readonly image2D lum_a;
 layout(binding = 2, r32f) uniform readonly image2D lum_b;
 layout(binding = 3, rgba32f) uniform writeonly image2D field;
+layout(binding = 4, rgba32f) uniform readonly image2D last;  // (the last made picture's field, at this level's size)
 layout(push_constant) uniform P { ivec2 size; ivec2 src_size; vec2 inv_src; int flags; int coarse_w; } p;
 
 ivec2 coarse_size() { return ivec2(p.coarse_w & 0xffff, p.coarse_w >> 16); }
@@ -37,19 +40,26 @@ void main() {
     ivec2 base = q * 4;
     // (this block's quarter of its coarser block: the neighbours on that side)
     ivec2 c = q / 2, side = ivec2((q.x & 1) == 0 ? -1 : 1, (q.y & 1) == 0 ? -1 : 1);
-    vec2 cands[6];
+    vec2 cands[7];
     cands[0] = coarse_at(c);
     cands[1] = coarse_at(c + ivec2(side.x, 0));
     cands[2] = coarse_at(c + ivec2(0, side.y));
     cands[3] = coarse_at(c + side);
     cands[4] = (cands[0] + cands[1] + cands[2] + cands[3]) * 0.25;
     cands[5] = vec2(0.0);
+    cands[6] = vec2(0.0);
+    int n = 6;
+    if ((p.flags & 2) != 0) {
+        vec2 was = imageLoad(last, q).xy;
+        if (!any(isnan(was)) && !any(isinf(was))) cands[n++] = clamp(was, vec2(-64.0), vec2(64.0));
+    }
     vec2 prior = cands[0];
     float best = 1e9;
     ivec2 bestd = ivec2(0);
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < n; i++) {
         ivec2 d = ivec2(round(cands[i]));
-        float cost = cost_of(base, d, prior);
+        // (the last picture's vector a little ahead of the others when it fits about as well)
+        float cost = cost_of(base, d, prior) * (i == 6 ? 0.92 : 1.0);
         if (cost < best) {
             best = cost;
             bestd = d;

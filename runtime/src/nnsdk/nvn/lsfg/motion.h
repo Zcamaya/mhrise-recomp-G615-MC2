@@ -8,11 +8,13 @@
 //   1. at 1/16, a vector per 4x4 texels (64x64 pixels) by a full search of +-3 texels: what's at p in the picture
 //      between was at p - d in A and is at p + d in B;
 //   2. at 1/8 and 1/4, each block takes the best of its coarser neighbours' vectors (doubled), their average and no
-//      motion, then the best one texel step around it; at 1/4 a parabola puts it below a texel;
+//      motion (and at 1/4 its own from the last picture made, so the field stays steady), then the best one texel step
+//      around it; at 1/4 a parabola puts it below a texel;
 //   3. a 3x3 median of the field;
-//   4. each pixel picks its own vector (of its four nearest blocks', their mix and none, then a half pixel step: the
-//      best match of A at x - d and B at x + d around it), so edges stay sharp; A and B averaged where they agree,
-//      else B's sample alone; a pixel the same in A and B (the HUD, still scenery) keeps B's, and where no block
+//   4. each pixel may pick its own vector (of its four nearest blocks' and none, then a half pixel step, only if one
+//      matches A at x - d and B at x + d clearly better than the field's mix), so edges stay sharp without busy
+//      textures shimmering; bicubic samples, so the made picture is as sharp as the real ones; A and B averaged where
+//      they agree, else B's sample alone; a pixel the same in A and B (the HUD, still scenery) keeps B's, and where no block
 //      matched (a cut, a flash) B is shown.
 // Shaders: shaders/fg_*.comp (tools/shaders.sh). A build whose spirv.h doesn't have them yet can't make one
 // (available() false): the presenter goes on with LSFG alone.
@@ -81,6 +83,7 @@ private:
     std::vector<Image*> all_;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
     VkDeviceSize bytes_ = 0;
+    mutable uint64_t made_ = 0;  // pictures made (record_generate): the first has no last field to start from
 
     Image frames_[2], lum1_[2], lum2_[2], lum3_[2];  // the pictures and their luma levels (1/4, 1/8, 1/16), by parity
     Image field3_, field2_, field1_, field_;         // the vectors at 1/16, 1/8, 1/4 and the median's

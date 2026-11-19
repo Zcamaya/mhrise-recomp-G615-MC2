@@ -78,6 +78,7 @@ bool Motion::create(VkExtent2D extent, VkFormat format, std::string* why) {
     }
     extent_ = extent;
     format_ = format;
+    made_ = 0;
     if (!build_pipelines(why) || !build_images(why) || !build_sets(why)) {
         destroy();
         return false;
@@ -124,7 +125,7 @@ bool Motion::build_pipelines(std::string* why) {
         {k_fg_luma_spv, sizeof k_fg_luma_spv, {T, S}},
         {k_fg_down_spv, sizeof k_fg_down_spv, {S, S}},
         {k_fg_search_spv, sizeof k_fg_search_spv, {S, S, S}},
-        {k_fg_refine_spv, sizeof k_fg_refine_spv, {S, S, S, S}},
+        {k_fg_refine_spv, sizeof k_fg_refine_spv, {S, S, S, S, S}},
         {k_fg_median_spv, sizeof k_fg_median_spv, {S, S}},
         {k_fg_warp_spv, sizeof k_fg_warp_spv, {T, T, S, S}},
     };
@@ -290,7 +291,7 @@ bool Motion::build_sets(std::string* why) {
             writes.push_back(w);
         }
     };
-    infos.reserve(kSets * 4);
+    infos.reserve(kSets * 5);
     const Pass kinds[kSetKinds] = {kLuma, kDown, kDown, kSearch, kRefine, kRefine, kWarp};
     for (int k = 0; k < kSetKinds; k++)
         for (int p = 0; p < 2; p++)
@@ -302,8 +303,12 @@ bool Motion::build_sets(std::string* why) {
         write(sets_[kSetDown1][p], {{&lum1_[p], false}, {&lum2_[p], false}});
         write(sets_[kSetDown2][p], {{&lum2_[p], false}, {&lum3_[p], false}});
         write(sets_[kSetSearch][p], {{&lum3_[a], false}, {&lum3_[p], false}, {&field3_, false}});
-        write(sets_[kSetRefine2][p], {{&field3_, false}, {&lum2_[a], false}, {&lum2_[p], false}, {&field2_, false}});
-        write(sets_[kSetRefine1][p], {{&field2_, false}, {&lum1_[a], false}, {&lum1_[p], false}, {&field1_, false}});
+        // (refine's last field: the median's, which is the last picture's until this one's median runs; only the 1/4
+        // level reads it, the 1/8 one has it bound for the layout)
+        write(sets_[kSetRefine2][p], {{&field3_, false}, {&lum2_[a], false}, {&lum2_[p], false}, {&field2_, false},
+                                      {&field_, false}});
+        write(sets_[kSetRefine1][p], {{&field2_, false}, {&lum1_[a], false}, {&lum1_[p], false}, {&field1_, false},
+                                      {&field_, false}});
         write(sets_[kSetWarp][p], {{&frames_[a], true}, {&frames_[p], true}, {&field_, false}, {&output_, false}});
     }
     write(median_set_, {{&field1_, false}, {&field_, false}});
@@ -361,7 +366,8 @@ void Motion::record_generate(VkCommandBuffer cmd, uint64_t n) const {
     compute_barrier(cmd);
     dispatch(cmd, kRefine, sets_[kSetRefine2][p], field2_.extent, lum2_[p].extent, 0, packed(field3_.extent));
     compute_barrier(cmd);
-    dispatch(cmd, kRefine, sets_[kSetRefine1][p], field1_.extent, lum1_[p].extent, 1, packed(field2_.extent));
+    // (the last field only once there is one: the first made picture has nothing before it)
+    dispatch(cmd, kRefine, sets_[kSetRefine1][p], field1_.extent, lum1_[p].extent, made_++ ? 3 : 1, packed(field2_.extent));
     compute_barrier(cmd);
     dispatch(cmd, kMedian, median_set_, field_.extent, field_.extent, 0, 0);
     compute_barrier(cmd);
