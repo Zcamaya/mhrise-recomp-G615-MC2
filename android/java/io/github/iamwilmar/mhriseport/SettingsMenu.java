@@ -498,8 +498,8 @@ final class SettingsMenu {
                 "Background threads that build the GPU pipelines for new effects and areas (like Eden's setting). More "
                         + "build them sooner, so fewer objects pop in late, on a phone with cores to spare; 1 keeps the heat "
                         + "and battery down. Takes effect on the next start.",
-                new String[] {"1", "2 (default)", "3", "4"},
-                new String[] {"pipeline_threads_1", null, "pipeline_threads_3", "pipeline_threads_4"});
+                new String[] {"2 (default)", "1", "3", "4"},
+                new String[] {null, "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4"});
         flag("Asynchronous presentation",
                 "Puts each finished frame on screen from a thread of its own (like Eden's setting), so the renderer starts "
                         + "the next frame instead of waiting for the screen. Can give a few fps back on a busy phone. Off by "
@@ -1728,7 +1728,7 @@ final class SettingsMenu {
     };
 
     private boolean has(String name) {
-        return ini.on(name);
+        return name != null && ini.on(name);
     }
 
     private void put(String name, boolean on) {
