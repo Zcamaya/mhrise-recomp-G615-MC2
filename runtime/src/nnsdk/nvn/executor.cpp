@@ -8650,7 +8650,20 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
             retired_mirrors_.push_back(std::move(it->second));
             mirrors_.erase(it);
         }
-        if (mirror_bytes_ + size > (low_memory() ? kMirrorBudget / 2 : kMirrorBudget)) {
+        // Over the budget: let go of the mirrors no submit of this or the last frame read, the longest unread first (they
+        // were only waiting for reap_mirrors' 300 frames), before giving up on this one
+        const uint64_t budget = low_memory() ? kMirrorBudget / 2 : kMirrorBudget;
+        while (mirror_bytes_ + size > budget) {
+            auto oldest = mirrors_.end();
+            for (auto it = mirrors_.begin(); it != mirrors_.end(); ++it)
+                if (it->second.used_frame + 1 < frame_ && (oldest == mirrors_.end() || it->second.used_frame < oldest->second.used_frame))
+                    oldest = it;
+            if (oldest == mirrors_.end()) break;
+            mirror_bytes_ -= oldest->second.size * (oldest->second.direct ? Mirror::kVersions : 1);
+            retired_mirrors_.push_back(std::move(oldest->second));  // (destroyed once its last submit is done)
+            mirrors_.erase(oldest);
+        }
+        if (mirror_bytes_ + size > budget) {
             static int logged = 0;
             if (logged++ < 4) NVN_LOG("espejos: sin presupuesto para %llu MB más\n", static_cast<unsigned long long>(size >> 20));
             return nullptr;

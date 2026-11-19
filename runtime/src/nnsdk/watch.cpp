@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/ini.h"
@@ -50,6 +52,25 @@ struct Lock {
     }
     ~Lock() { g_lock.clear(std::memory_order_release); }
 };
+
+// The pool addresses that see each heap page (under g_lock). collect() closes them along with the heap address, so a
+// write through any of them is caught. Before, a heap page seen by a pool was marked for good (kAliased) and treated as
+// changed at every check: as the game's streaming mapped more of the heap into its pools during a session, more and
+// more of the buffers mirrored by the executor were copied whole every frame (an Adreno 725 went from 30 to 22 fps
+// after 40 minutes of a hunt, with "copia a espejos" doubling; a restart put it back). Now kAliased goes when the last
+// pool address that saw the page is mapped to something else.
+std::unordered_map<int64_t, std::vector<uintptr_t>>* g_aliases = nullptr;
+
+void unalias(int64_t h, uintptr_t address) {
+    auto it = g_aliases->find(h);
+    if (it == g_aliases->end()) return;
+    std::vector<uintptr_t>& v = it->second;
+    v.erase(std::remove(v.begin(), v.end(), address), v.end());
+    if (v.empty()) {
+        g_aliases->erase(it);
+        g_state[h].store(g_state[h].load(std::memory_order_relaxed) & ~kAliased, std::memory_order_relaxed);
+    }
+}
 
 std::atomic<uint64_t> g_faults{0}, g_protects{0}, g_protect_ns{0};
 bool g_enabled = false;
@@ -156,6 +177,7 @@ void init_heap(uintptr_t map, size_t size) {
     }
     g_map = map;
     g_size = size;
+    g_aliases = new std::unordered_map<int64_t, std::vector<uintptr_t>>;  // (never freed: lives as long as the heap)
 }
 
 void heap_changed(uintptr_t address, size_t size) {
@@ -170,7 +192,7 @@ void heap_forget(uintptr_t address, size_t size) {
     Lock lock;
     for (uintptr_t a = address & ~(kPage - 1); a < address + size; a += kPage)
         if (const int64_t h = heap_page(a); h >= 0) {
-            g_state[h].store(0, std::memory_order_relaxed);
+            g_state[h].store(g_state[h].load(std::memory_order_relaxed) & kAliased, std::memory_order_relaxed);  // (its pool addresses still see it)
             g_version[h].fetch_add(1, std::memory_order_relaxed);
         }
 }
@@ -196,8 +218,11 @@ void virtual_mapped(uintptr_t address, size_t size, uintptr_t heap) {
         std::vector<std::pair<uintptr_t, size_t>> close;  // las seguidas, en un solo mprotect
         for (uintptr_t off = 0; off < size; off += kPage) {
             const int64_t h = heap ? heap_page(heap + off) : -1;
-            v.pages[(address + off - v.base) / kPage].store(h >= 0 ? static_cast<uint32_t>(h + 1) : 0, std::memory_order_relaxed);
+            std::atomic<uint32_t>& slot = v.pages[(address + off - v.base) / kPage];
+            if (const uint32_t old = slot.load(std::memory_order_relaxed)) unalias(static_cast<int64_t>(old) - 1, address + off);
+            slot.store(h >= 0 ? static_cast<uint32_t>(h + 1) : 0, std::memory_order_relaxed);
             if (h < 0) continue;
+            (*g_aliases)[h].push_back(address + off);
             const uint8_t s = g_state[h].load(std::memory_order_relaxed);
             g_state[h].store(s | kAliased, std::memory_order_relaxed);
             // El mmap nuevo es escribible: si la página está vigilada y cerrada, aquí también se cierra.
@@ -255,7 +280,6 @@ void collect(uintptr_t address, size_t size, std::vector<uint64_t>& keys, std::v
             bool is_virtual = false;
             const int64_t h = heap_page(a, &is_virtual);
             uint64_t key = kZeroKey;
-            bool always = false;
             if (h >= 0) {
                 const uint8_t s = g_state[h].load(std::memory_order_relaxed);
                 if (!(s & kWatched) || (s & kOpen)) {
@@ -263,12 +287,16 @@ void collect(uintptr_t address, size_t size, std::vector<uint64_t>& keys, std::v
                     g_version[h].fetch_add(1, std::memory_order_relaxed);
                     add_run(close, a);
                     if (is_virtual) add_run(per_page ? close : close_heap, heap_address(h));
+                    // Every pool address that sees it too (still mapped to this page: a pool that was let go keeps its
+                    // table, so the address is checked first), so a write there is caught as well
+                    if (s & kAliased)
+                        if (auto it = g_aliases->find(h); it != g_aliases->end())
+                            for (uintptr_t alias : it->second)
+                                if (alias != a && heap_page(alias) == h) add_run(per_page ? close : close_heap, alias);
                 }
-                // En el heap y con alias: la otra dirección no se cierra desde aquí (no se sabe cuál es).
-                always = !is_virtual && (s & kAliased);
                 key = static_cast<uint64_t>(h) << 32 | g_version[h].load(std::memory_order_relaxed);
             }
-            if (keys[p] == key && !always) continue;
+            if (keys[p] == key) continue;
             keys[p] = key;
             const size_t off = p * kPage - (address & (kPage - 1));
             if (runs) {
