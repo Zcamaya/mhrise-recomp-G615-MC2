@@ -44,7 +44,7 @@ The log (`log.txt` in the data folder) says what the port picked for your phone.
 - **Touch controls** laid out like a real controller, with a full editor (size, position, opacity, your own pictures
   and shapes), combos and turbo, plus any USB or Bluetooth controller.
 - **Settings menu** in the game: resolution, aspect ratio, FPS limit, shadows, effects, overlay stats (FPS, frame time,
-  CPU, GPU, RAM, temperature), Local Play and more.
+  CPU, GPU, RAM), Local Play and more.
 - **Frame generation:** a built-in one (three quality levels), or Lossless Scaling's if you have its DLL.
 - **Mods and cheats** like Eden: add a mod's zip, turn each one on or off, and use Atmosphere cheat files with a
   toggle per cheat.
@@ -159,8 +159,9 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_robust` | On Mali, robust buffer access is on by default: a shader reading past the end of a buffer gets 0 instead of a GPU page fault (`GROUP_ERROR_FATAL` in the log), which on Mali drops the whole batch of work and leaves black or magenta screens. This turns it off (Settings → Debug → Driver workarounds). `robusto` turns it on on other GPUs. At start-up. |
 | `cutout` | Expand into the cutout (Settings → Display): the game's window also covers the strip beside the camera cutout, as Eden and Azahar can. Next start. |
 | `gpu_unswizzle` | GPU texture unswizzle (Settings → Performance, off by default): textures go to the GPU in the console's tiled order, one straight copy, and a compute shader puts them in rows there instead of the CPU, like Eden's option. Less stutter when areas and monsters load. Not for textures decoded or re-encoded on the CPU. Applies at once. |
+| `pipeline_threads_1`, `pipeline_threads_3`, `pipeline_threads_4` | Pipeline worker threads (Settings → Performance, 2 by default): how many background threads build pipelines, like Eden's setting. Next start. |
+| `async_present` | Asynchronous presentation (Settings → Performance, off by default): the frame is put on screen (swapchain image, frame generation, present) by a thread of its own, so NvnSubmit goes on with the next frame's command lists. At most one frame behind. Applies at once. |
 | `system_bars` | Show Android's bars (Settings → Display): keeps the status and navigation bars on screen. By default both are hidden while playing (a swipe in from the edge shows them for a moment), so three-button navigation no longer sits over the game. |
-| `no_hud_heat` | Hides the overlay's HEAT line (Android's thermal headroom: 100 % is hard throttling). |
 | `tight_barriers` | Skip empty GPU barriers (Settings → Performance, off by default): the full barriers with nothing recorded since the previous one (about half of the ~250 a frame) are skipped; each still drained the GPU on Turnip. Live. |
 | `dynamic_state`, `vertex_input_state` | Extended dynamic state and vertex input dynamic state (Settings → Graphics → Extensions, shown only where the driver has `VK_EXT_extended_dynamic_state` / `VK_EXT_vertex_input_dynamic_state`; off by default). The first sets cull mode, front face, depth test/write/compare and the stencil test and ops per draw; the second the vertex attributes' formats and the streams' strides and step rates. Either way, far fewer pipelines to build and switch. At start-up. |
 | `no_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |

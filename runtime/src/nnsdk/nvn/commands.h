@@ -299,10 +299,6 @@ void refresh_critical_threads();
 std::vector<pid_t> critical_threads();
 // Lo que dura un frame ahora (window.cpp: el límite de FPS del menú, o el intervalo que pide el juego), en ns
 int64_t frame_period_ns();
-// How close the phone is to thermal throttling (perf_hint.cpp: Android's thermal headroom, 0 cool .. 1 throttling hard;
-// above 1 it already is), for the overlay's HEAT line; read every 10 s on its own thread; negative where Android
-// doesn't give it (before 12)
-float thermal_headroom();
 // Pistas de rendimiento de Android (perf_hint.cpp): una vez por frame del juego, desde el hilo que presenta.
 void perf_hint_frame(int64_t period_ns);
 // Shadow, model and texture detail settings inside the game (game_tweaks.cpp), once per present

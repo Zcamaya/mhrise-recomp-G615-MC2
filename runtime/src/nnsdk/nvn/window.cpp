@@ -3,9 +3,11 @@
 // Primer paso: se presenta el último ClearColor que el juego hizo sobre la textura.
 
 #include <android/native_window.h>
+#include <pthread.h>
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -662,48 +664,14 @@ std::atomic<int64_t> g_frame_period_ns{33'333'333};
 
 int64_t nvn::frame_period_ns() { return g_frame_period_ns.load(std::memory_order_relaxed); }
 
-void nvn::present(Window& w, int index) {
+namespace {
+// The picture on screen: frame generation's pictures, then the real one (blit to a swapchain image and present). On
+// NvnSubmit after the pacing, or with asynchronous presentation on the Presenter thread (see nvn::present).
+void show(nvn::Window& w, nvn::Texture* t) {
+    using namespace nvn;
     VkContext* c = vk();
-    if (!c || index < 0 || index >= static_cast<int>(w.textures.size())) return;
     std::lock_guard present_lock(g_present_mutex);
-    follow_native_window(w);
-    Texture* t = g_textures.get(w.textures[index]);
-    // Intervalo de presentación de NVN (NieR pide 2: 30 fps, como en la Switch). FIFO solo garantiza
-    // uno por vsync, así que el resto lo pone este ritmo. El reloj del juego mide tiempo real (pasos de 1/60 s,
-    // entre 1 y 2 por frame): a 60 va a su velocidad, y por debajo de 30 a cámara lenta (eso es NieR; MH Rise mide su
-    // paso, ver GameClock). Con <datos>/60fps se fuerza el intervalo 1 (y, en MH Rise, MaxFps 60). Sin el lock del
-    // ejecutor: dormido con él, los hilos del juego que esperaban un sync se quedaban parados hasta 33 ms.
-    {
-        using clock = std::chrono::steady_clock;
-        static clock::time_point next = clock::now();
-        static int64_t logged_period = 0;
-        const int cap = fps_cap();
-        const float game_fps = game_max_fps(cap);
-        // Con límite, el frame dura lo que pide (lo que el juego tenga de MaxFps; sin su reloj, el límite tal cual); sin él,
-        // el intervalo de NVN que pide el juego (x 16,7 ms)
-        const float fps = cap ? (game_fps > 0.0f ? game_fps : static_cast<float>(cap)) : 0.0f;
-        const int64_t period_ns = fps > 0.0f ? static_cast<int64_t>(1e9 / fps) : 16'666'667LL * std::max(w.present_interval, 1);
-        g_frame_period_ns.store(period_ns, std::memory_order_relaxed);
-        dynamic_resolution(period_ns);
-        game_tweaks();
-        if (period_ns != logged_period) {
-            NVN_LOG("ritmo de presentación: %.1f ms por frame (%.0f fps)%s\n", period_ns / 1e6, 1e9 / period_ns,
-                    cap ? " (límite del menú)" : "");
-            logged_period = period_ns;
-        }
-        const auto period = std::chrono::nanoseconds(period_ns);
-        // Con frames de más de 20 ms se despierta 2 ms antes (FIFO pone el resto). A 60, en `next`: un frame de menos de
-        // 16,7 ms le cuenta al juego como uno entero y lo aceleraría un poco.
-        const auto early = std::chrono::milliseconds(period_ns > 20'000'000 ? 2 : 0);
-        auto now = clock::now();
-        if (now < next - early) std::this_thread::sleep_until(next - early);
-        next = std::max(next + period, clock::now() + period / 2);
-    }
-    if (!w.swapchain) {  // sin ventana (en segundo plano): el juego sigue a su ritmo, sin presentar
-        std::lock_guard executor_lock(executor_mutex());
-        next_frame();
-        return;
-    }
+    if (!w.swapchain) return;
     hud::real_frame(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
     // LSFG 2x encendido: antes del real, el frame intermedio (lsfg/framegen.cpp).
@@ -795,13 +763,111 @@ void nvn::present(Window& w, int index) {
         std::lock_guard queue_lock(vk_queue_mutex());
         vkQueuePresentKHR(c->queue, &pi);
     }
-    executor_lock.lock();  // el frame del ejecutor y sus volcados
-    debug_dump_frame(t);
-    next_frame();
-    executor_lock.unlock();
-
     w.presented++;
     if (w.presented == 60) nvn::driver::works();  // (un driver del usuario que ya ha dibujado: se queda elegido)
+}
+
+// Asynchronous presentation (Settings → Performance, async_present; Eden's option of the same name): NvnSubmit hands the
+// frame to this thread after its pacing and goes on with the next frame's command lists while this one waits for a
+// swapchain image, makes the generated pictures and presents. One frame at most: NvnSubmit waits for the last one before
+// it paces the next (so the game's window texture is never drawn over before its blit is on the queue).
+struct AsyncPresenter {
+    std::mutex m;
+    std::condition_variable cv;
+    nvn::Window* window = nullptr;
+    nvn::Texture* texture = nullptr;
+    bool busy = false, started = false;
+
+    void wait_idle() {
+        std::unique_lock lock(m);
+        cv.wait(lock, [&] { return !busy; });
+    }
+    void post(nvn::Window& w, nvn::Texture* t) {
+        std::lock_guard lock(m);
+        if (!started) {
+            started = true;
+            std::thread([this] { loop(); }).detach();  // (lives as long as the process)
+        }
+        window = &w;
+        texture = t;
+        busy = true;
+        cv.notify_all();
+    }
+    void loop() {
+        pthread_setname_np(pthread_self(), "Presenter");
+        nvn::pin_critical_thread();
+        std::unique_lock lock(m);
+        for (;;) {
+            cv.wait(lock, [&] { return window != nullptr; });
+            nvn::Window* w = std::exchange(window, nullptr);
+            nvn::Texture* t = texture;
+            lock.unlock();
+            show(*w, t);
+            lock.lock();
+            busy = false;
+            cv.notify_all();
+        }
+    }
+};
+AsyncPresenter g_presenter_thread;
+}  // namespace
+
+void nvn::present(Window& w, int index) {
+    VkContext* c = vk();
+    if (!c || index < 0 || index >= static_cast<int>(w.textures.size())) return;
+    g_presenter_thread.wait_idle();  // (the last frame's present, with asynchronous presentation: done first)
+    Texture* t = nullptr;
+    {
+        std::lock_guard present_lock(g_present_mutex);
+        follow_native_window(w);
+        t = g_textures.get(w.textures[index]);
+    }
+    // Intervalo de presentación de NVN (NieR pide 2: 30 fps, como en la Switch). FIFO solo garantiza
+    // uno por vsync, así que el resto lo pone este ritmo. El reloj del juego mide tiempo real (pasos de 1/60 s,
+    // entre 1 y 2 por frame): a 60 va a su velocidad, y por debajo de 30 a cámara lenta (eso es NieR; MH Rise mide su
+    // paso, ver GameClock). Con <datos>/60fps se fuerza el intervalo 1 (y, en MH Rise, MaxFps 60). Sin el lock del
+    // ejecutor: dormido con él, los hilos del juego que esperaban un sync se quedaban parados hasta 33 ms.
+    {
+        using clock = std::chrono::steady_clock;
+        static clock::time_point next = clock::now();
+        static int64_t logged_period = 0;
+        const int cap = fps_cap();
+        const float game_fps = game_max_fps(cap);
+        // Con límite, el frame dura lo que pide (lo que el juego tenga de MaxFps; sin su reloj, el límite tal cual); sin él,
+        // el intervalo de NVN que pide el juego (x 16,7 ms)
+        const float fps = cap ? (game_fps > 0.0f ? game_fps : static_cast<float>(cap)) : 0.0f;
+        const int64_t period_ns = fps > 0.0f ? static_cast<int64_t>(1e9 / fps) : 16'666'667LL * std::max(w.present_interval, 1);
+        g_frame_period_ns.store(period_ns, std::memory_order_relaxed);
+        dynamic_resolution(period_ns);
+        game_tweaks();
+        if (period_ns != logged_period) {
+            NVN_LOG("ritmo de presentación: %.1f ms por frame (%.0f fps)%s\n", period_ns / 1e6, 1e9 / period_ns,
+                    cap ? " (límite del menú)" : "");
+            logged_period = period_ns;
+        }
+        const auto period = std::chrono::nanoseconds(period_ns);
+        // Con frames de más de 20 ms se despierta 2 ms antes (FIFO pone el resto). A 60, en `next`: un frame de menos de
+        // 16,7 ms le cuenta al juego como uno entero y lo aceleraría un poco.
+        const auto early = std::chrono::milliseconds(period_ns > 20'000'000 ? 2 : 0);
+        auto now = clock::now();
+        if (now < next - early) std::this_thread::sleep_until(next - early);
+        next = std::max(next + period, clock::now() + period / 2);
+    }
+    if (!w.swapchain) {  // sin ventana (en segundo plano): el juego sigue a su ritmo, sin presentar
+        std::lock_guard executor_lock(executor_mutex());
+        next_frame();
+        return;
+    }
+    if (NVN_FLAG("async_present")) {
+        g_presenter_thread.post(w, t);
+    } else {
+        show(w, t);
+    }
+    {
+        std::lock_guard executor_lock(executor_mutex());  // el frame del ejecutor y sus volcados
+        debug_dump_frame(t);
+        next_frame();
+    }
     log_pace(w);
     // Rendimiento: frames por segundo cada ~5 s.
     static auto window_start = std::chrono::steady_clock::now();

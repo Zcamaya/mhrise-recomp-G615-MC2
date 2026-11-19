@@ -253,8 +253,6 @@ final class SettingsMenu {
         flag("GPU usage", "How busy the GPU is. Only where the phone lets apps read it (many Adreno phones do; most "
                 + "others show N/A).", "no_hud_gpu", true);
         flag("Memory", "The game's own RAM, then the phone's used / total.", "no_hud_ram", true);
-        flag("Heat", "How close the phone is to slowing itself down from heat (Android's own measure, Android 12 and "
-                + "later): at 100 % it throttles hard. Yellow from 80 %, red from 95 %.", "no_hud_heat", true);
         flag("Shaders building", "Pipelines being made in the background right now. Above 0, a new effect or area is "
                 + "being prepared: short hitches then are that.", "no_hud_shaders", true);
     }
@@ -494,6 +492,17 @@ final class SettingsMenu {
                         + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.",
                 "tight_barriers", false);
+        exclusive("Pipeline worker threads",
+                "Background threads that build the GPU pipelines for new effects and areas (like Eden's setting). More "
+                        + "build them sooner, so fewer objects pop in late, on a phone with cores to spare; 1 keeps the heat "
+                        + "and battery down. Takes effect on the next start.",
+                new String[] {"1", "2 (default)", "3", "4"},
+                new String[] {"pipeline_threads_1", null, "pipeline_threads_3", "pipeline_threads_4"});
+        flag("Asynchronous presentation",
+                "Puts each finished frame on screen from a thread of its own (like Eden's setting), so the renderer starts "
+                        + "the next frame instead of waiting for the screen. Can give a few fps back on a busy phone. Off by "
+                        + "default: if the picture stutters or tears with it, turn it off. Applies at once.",
+                "async_present", false);
         flag("GPU texture unswizzle",
                 "Switch textures are stored in a tiled order, and each one is put back in plain rows before the GPU gets "
                         + "it. On: the GPU does that instead of the CPU, which then only copies each texture as it is, so "
@@ -1700,7 +1709,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "gpu_unswizzle", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
+        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",

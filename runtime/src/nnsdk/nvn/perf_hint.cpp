@@ -135,37 +135,5 @@ void perf_hint_frame(int64_t period_ns) {
     if (work > 0) a.report(s, work);
 }
 
-// ---- thermal headroom ----------------------------------------------------------------------------------------------
-// Android's own forecast of throttling (AThermal_getThermalHeadroom, Android 12): for the overlay's HEAT line. Android asks for no more than one reading every 10 s, so a thread of its own keeps
-// the last one; the frame only reads an atomic.
-
-namespace {
-struct AThermalManager;
-std::atomic<float> g_headroom{-1.0f};
-}  // namespace
-
-float thermal_headroom() {
-    static const bool started = [] {
-        std::thread([] {
-            pthread_setname_np(pthread_self(), "Thermal");
-            void* lib = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
-            auto acquire = lib ? reinterpret_cast<AThermalManager* (*)()>(dlsym(lib, "AThermal_acquireManager")) : nullptr;
-            auto headroom = lib ? reinterpret_cast<float (*)(AThermalManager*, int)>(dlsym(lib, "AThermal_getThermalHeadroom"))
-                                : nullptr;
-            AThermalManager* m = acquire && headroom ? acquire() : nullptr;
-            NVN_LOG("thermal headroom: %s\n", m ? "yes" : "no (Android older than 12)");
-            if (!m) return;
-            for (;;) {
-                const float h = headroom(m, 0);  // (now, not a forecast: forecasts are less accurate)
-                if (h == h) g_headroom.store(h, std::memory_order_relaxed);  // (NaN: too soon, or not on this phone)
-                timespec ts{11, 0};
-                nanosleep(&ts, nullptr);
-            }
-        }).detach();
-        return true;
-    }();
-    (void)started;
-    return g_headroom.load(std::memory_order_relaxed);
-}
 
 }  // namespace nvn

@@ -7067,7 +7067,12 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
         job.rp = rp;
         if (!async_started_) {
             async_started_ = true;
-            for (int k = 0; k < 2; k++) std::thread([this] { async_loop(); }).detach();  // viven lo que el proceso
+            // Pipeline worker threads (Settings → Performance, like Eden's): 2 by default; more build new effects' pipelines
+            // sooner on a phone with cores to spare, 1 keeps the heat down. Read once, at the first pipeline.
+            const int workers = NVN_FLAG("pipeline_threads_4") ? 4 : NVN_FLAG("pipeline_threads_3") ? 3
+                                : NVN_FLAG("pipeline_threads_1") ? 1 : 2;
+            NVN_LOG("pipelines: %d worker thread(s)\n", workers);
+            for (int k = 0; k < workers; k++) std::thread([this] { async_loop(); }).detach();  // viven lo que el proceso
         }
         {
             std::lock_guard lock(async_mutex_);
