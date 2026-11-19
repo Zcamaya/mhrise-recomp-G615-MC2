@@ -549,6 +549,17 @@ final class SettingsMenu {
                     new String[] {"Auto", "On", "Off"}, new String[] {null, "short_subgroups", "no_short_subgroups"});
         header("Driver workarounds");
         if (gpu.adreno()) {
+            note("Render pass shortcuts: for flicker that only shows without Turnip's system memory rendering. Turn "
+                    + "one off at a time to find which one it is. Each costs a little speed. Applies at once.");
+            flag("No clears in the pass",
+                    "A clear the game asks for is done on its own, not folded into the start of the next render pass.",
+                    "no_deferred_clear", false);
+            flag("Save every image",
+                    "Everything a render pass draws is written back, even what the port thinks isn't read again.",
+                    "no_store_ops", false);
+            flag("Full render area",
+                    "Each render pass covers the whole image, not just the part that's drawn.",
+                    "no_area", false);
             flag("Qualcomm: return after a switch",
                     "On Qualcomm's driver, a return on a switch's impossible path instead of \"unreachable\" (without "
                             + "it the hunter's face wasn't drawn)." + next,
@@ -1170,7 +1181,7 @@ final class SettingsMenu {
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
         "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
         "no_return_mali", "no_return_qualcomm", "no_count_check", "no_safe_translation", "no_shadows", "no_short_subgroups",
-        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
+        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_area", "no_deferred_clear", "no_store_ops", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
         "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
         "shadow_half", "shadow_quarter", "short_subgroups", "single_thread_pipelines", "small_object_culling",
         "texture_bias_1", "texture_bias_2", "tv_mode", "ultrawide", "verbose_log", "wide_view",

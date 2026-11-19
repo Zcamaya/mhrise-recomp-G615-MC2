@@ -2045,6 +2045,7 @@ private:
         bool watched = false;         // con vigilancia de escrituras (nnsdk/watch.h): sin hashes
         uint64_t checked = 0;         // submit_index_ de la última revisión
         uint64_t used_frame = 0, used_submit = 0;  // último frame y envío de Vulkan que lo usaron (para soltarlo)
+        bool unread = false;  // revisado por preload_mirrors y sin leer aún en este envío (ver cpu_wrote_mirrors)
     };
     static constexpr uint64_t kMirrorMin = 1ull << 20, kMirrorPage = 64ull << 10, kMirrorBudget = 384ull << 20;
     std::map<uint64_t, Mirror> mirrors_;  // por dirección de inicio
@@ -2062,8 +2063,18 @@ private:
     uint64_t mirror_bytes_ = 0, prof_mirror_bytes_ = 0;
     // may_upload = false (con el render pass ya empezado): solo uno revisado en este envío.
     const Mirror* mirror(uint64_t address, uint64_t size, VkDeviceSize* offset, bool may_upload = true);
-    // <datos>/mirrors_at_start: los espejos del último frame, revisados al empezar cada envío (ver preload_mirrors).
+    // Los espejos del último frame, revisados al empezar cada envío (ver preload_mirrors); <datos>/no_mirrors_at_start: no.
     void preload_mirrors();
+    // La CPU escribe [address, address + size) al reproducir (ClearBuffer, UpdateBuffer, CopyBuffer): un espejo que
+    // preload_mirrors revisó y que nadie ha leído aún en este envío se vuelve a revisar al leerse, como si no se hubiera
+    // adelantado (el primer draw que lo lee ve lo que había entonces, igual que antes).
+    void cpu_wrote_mirrors(uint64_t address, uint64_t size) {
+        if (mirrors_.empty() || !size) return;
+        auto it = mirrors_.upper_bound(address);
+        if (it != mirrors_.begin()) --it;
+        for (; it != mirrors_.end() && it->first < address + size; ++it)
+            if (it->second.unread && it->first + it->second.size > address) it->second.checked = 0, it->second.unread = false;
+    }
     bool mirror_batch_ = false, mirror_batch_barrier_ = false;  // dentro de preload_mirrors: una barrera para todos
     uint64_t prof_mirror_preloads_ = 0;  // perfil: espejos con páginas subidas al empezar el envío
     void destroy_mirror(Mirror& m);
@@ -3448,7 +3459,7 @@ void Executor::run(const std::vector<const CommandList*>& lists) {
     buffer_cache_.prof = prof_timing_ ? &fine_.vtx : nullptr;
     read_flags();
     begin();
-    if (NVN_FLAG("mirrors_at_start")) preload_mirrors();
+    if (!NVN_FLAG("no_mirrors_at_start")) preload_mirrors();
     run_lists_ = &lists;  // la mirada adelante de los render passes (scan_pass) recorre lo que queda
     run_serial_++;
     for (cur_list_ = 0; cur_list_ < lists.size(); cur_list_++)
@@ -3691,6 +3702,7 @@ void Executor::apply(const Command& c) {
                 const std::vector<uint64_t> partial =
                     keep == overlays_.end() ? overlays_before_cpu_write(v.address, v.size) : std::vector<uint64_t>{};
                 for (uint64_t k = 0; k < v.size / 4; k++) p[k] = v.value;
+                cpu_wrote_mirrors(v.address, v.size);
                 if (keep != overlays_.end()) {
                     patch_overlay(keep, v.address, v.size);
                 } else if (keep_gpu_overlays_ && patch_overlays_) {
@@ -3712,6 +3724,7 @@ void Executor::apply(const Command& c) {
                 const std::vector<uint64_t> partial =
                     keep == overlays_.end() ? overlays_before_cpu_write(v.address, v.size) : std::vector<uint64_t>{};
                 memcpy(reinterpret_cast<void*>(v.address), v.data, v.size);
+                cpu_wrote_mirrors(v.address, v.size);
                 if (keep != overlays_.end()) {
                     patch_overlay(keep, v.address, v.size);
                 } else if (keep_gpu_overlays_ && patch_overlays_) {
@@ -3765,6 +3778,7 @@ void Executor::apply(const Command& c) {
                 const std::vector<uint64_t> partial =
                     keep == overlays_.end() ? overlays_before_cpu_write(v.dst, v.size) : std::vector<uint64_t>{};
                 memmove(reinterpret_cast<void*>(v.dst), reinterpret_cast<const void*>(v.src), v.size);
+                cpu_wrote_mirrors(v.dst, v.size);
                 if (keep != overlays_.end()) {
                     patch_overlay(keep, v.dst, v.size);
                 } else if (keep_gpu_overlays_ && patch_overlays_) {
@@ -8516,6 +8530,7 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
     m->used_frame = frame_;
     m->used_submit = submitted_.load(std::memory_order_relaxed) + 1;
     *offset = address - base;
+    m->unread = mirror_batch_;
     if (m->checked == submit_index_) return m;
     // Revisión: las páginas que cambiaron (todas la primera vez), en tramos seguidos, por el staging. Vigilado, lo
     // dicen las escrituras que saltaron (y las páginas quedan cerradas antes de copiarlas); si no, el hash.
@@ -8580,11 +8595,13 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
     return m;
 }
 
-// <datos>/mirrors_at_start: los espejos que se leyeron en el último frame se revisan (y se suben sus páginas cambiadas)
+// Por defecto (<datos>/no_mirrors_at_start lo quita): los espejos que se leyeron en el último frame se revisan (y se suben sus páginas cambiadas)
 // al empezar el envío, fuera de todo pase y con dos barreras completas para todos. Sin esto, el primer draw de cada envío
 // que lee uno (los de 4 MB se reescriben enteros cada frame: ~18 MB/frame en una cacería) cierra el pase abierto (en la
 // escena: el tiler guarda y vuelve a cargar sus adjuntos) y pone dos barreras completas por espejo. Lo que el juego
 // escribió antes de enviar ya está en su memoria; uno que este envío no lea se revisa de más (memcpy de lo cambiado).
+// Tras una misión (Adreno 825, 2026-11-19) el juego reescribía unos diez de 4 MB por frame y el pre-pase de profundidad
+// salía partido en cinco por sus subidas: 10 ms de GPU en vez de 2,5.
 void Executor::preload_mirrors() {
     if (in_render_pass_ || mirrors_.empty()) return;  // al empezar el envío no hay pase abierto
     mirror_batch_ = true;
