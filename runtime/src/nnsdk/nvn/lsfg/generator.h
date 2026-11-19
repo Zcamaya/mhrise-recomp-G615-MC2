@@ -30,6 +30,12 @@ public:
     virtual const Image& output() const = 0;
     virtual void record_shared(VkCommandBuffer cmd, uint64_t n) const = 0;
     virtual void record_generate(VkCommandBuffer cmd, uint64_t n) const = 0;
+    // Adaptive frame generation (more than one picture between a pair): where the next picture goes, from 0 (A) to 1
+    // (B); 0.5 until it's set. Takes effect in what's recorded after it, and with LSFG it rewrites the chain's
+    // constants, so the GPU has to be done with the last generation first. false: this generator can't.
+    virtual bool set_time(float t) = 0;
+    // One more picture for the pair record_generate did (its shared work and flows are kept), at the time set
+    virtual void record_again(VkCommandBuffer cmd, uint64_t n) const = 0;
     virtual VkExtent2D extent() const = 0;
     virtual VkFormat format() const = 0;
     virtual float flow() const = 0;

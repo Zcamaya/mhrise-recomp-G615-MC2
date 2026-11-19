@@ -34,6 +34,7 @@ struct Module {
     static constexpr size_t kProbeAreaSize = 64 << 10;  // el final del área: sondas de depuración (probe.cpp)
     uint32_t seg_off[3] = {}, seg_size[3] = {};
     uint32_t bss_size = 0;
+    uint8_t build_id[32] = {};  // the module ID in the NSO header (+0x40)
     std::vector<ElfSym> symbols;
     std::vector<Rela> relocs;
     uint64_t init = 0, init_array = 0, init_array_size = 0;

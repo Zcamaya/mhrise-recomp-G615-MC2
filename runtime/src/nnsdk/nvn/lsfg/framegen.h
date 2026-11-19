@@ -27,6 +27,9 @@ uint32_t swapchain_images(const VkSurfaceCapabilitiesKHR& caps);
 // Tiempo de GPU que hay que reservarle a LSFG en cada frame real (ns; 0 si está apagado): executor.cpp se lo suma al
 // tiempo de GPU que mide la resolución dinámica del juego, para que esta deje sitio al frame generado.
 int64_t reserved_ns();
+// How far apart the pictures of one real frame go on screen (a refresh, or more with a target below the refresh rate):
+// window.cpp presents the real frame this long after the last generated one.
+int64_t spacing_ns();
 // Devuelve cuándo presentó el generado (steady_clock en ns, CLOCK_MONOTONIC), o 0 si no hubo; en *id, su presentID
 // de VK_GOOGLE_display_timing (impar).
 int64_t present_generated(Window& w, Texture* t, uint32_t* id = nullptr);

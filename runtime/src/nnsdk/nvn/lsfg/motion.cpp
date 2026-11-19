@@ -23,6 +23,7 @@ struct Push {
     int32_t size[2], src_size[2];
     float inv[2];
     int32_t flags, extra;
+    float t;  // fg_warp: where the picture goes between A (0) and B (1)
 };
 
 constexpr VkFormat kLumaFormat = VK_FORMAT_R32_SFLOAT, kFieldFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -359,7 +360,8 @@ void Motion::dispatch(VkCommandBuffer cmd, Pass pass, VkDescriptorSet set, VkExt
               {static_cast<int32_t>(src.width), static_cast<int32_t>(src.height)},
               {1.0f / static_cast<float>(extent_.width), 1.0f / static_cast<float>(extent_.height)},
               flags,
-              extra};
+              extra,
+              time_};
     vkCmdPushConstants(cmd, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, &push);
     if (groups) vkCmdDispatch(cmd, size.width, size.height, 1);
     else vkCmdDispatch(cmd, (size.width + 7) / 8, (size.height + 7) / 8, 1);
@@ -392,7 +394,12 @@ void Motion::record_generate(VkCommandBuffer cmd, uint64_t n) const {
         for (int w = 0; w < 2; w++) dispatch(cmd, kDensify, dense_set_[p][w][l], e, grid(e), 0, 0);
         compute_barrier(cmd);
     }
-    dispatch(cmd, kWarp, warp_set_[p], extent_, flows_[0][0].extent, light ? 0 : 1, static_cast<int>(finest_));
+    record_again(cmd, n);
+}
+
+// Another picture between the same pair (adaptive frame generation): the flows are there already, only the warp
+void Motion::record_again(VkCommandBuffer cmd, uint64_t n) const {
+    dispatch(cmd, kWarp, warp_set_[n % 2], extent_, flows_[0][0].extent, finest_ >= 4 ? 0 : 1, static_cast<int>(finest_));
 }
 
 }  // namespace nvn::lsfg

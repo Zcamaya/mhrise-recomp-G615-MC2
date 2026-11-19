@@ -48,6 +48,11 @@ public:
     const Image& output() const override { return output_; }
     void record_shared(VkCommandBuffer cmd, uint64_t n) const override;
     void record_generate(VkCommandBuffer cmd, uint64_t n) const override;
+    bool set_time(float t) override {
+        time_ = t;
+        return true;
+    }
+    void record_again(VkCommandBuffer cmd, uint64_t n) const override;
     VkExtent2D extent() const override { return extent_; }
     VkFormat format() const override { return format_; }
     float flow() const override { return flow_; }
@@ -81,6 +86,7 @@ private:
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     int levels_ = kLevels;
     float flow_ = 0.25f;
+    float time_ = 0.5f;  // the next warp's place between A and B (set_time)
     uint32_t finest_ = 4;  // picture pixels per texel of the finest flow level
     bool initialized_ = false;
     Pipeline passes_[kPasses];

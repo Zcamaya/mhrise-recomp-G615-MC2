@@ -122,9 +122,9 @@ final class SettingsMenu {
     // ---- sections -------------------------------------------------------------------------------------------------------
 
     private String[] sectionNames() {
-        return new String[] {"Display", "Graphics", "Performance",
+        return new String[] {"Display", "Graphics", "GPU driver", "Frame generation", "Performance",
                 "Touch controls", "Combos", "Controller",
-                "Multiplayer", "Debug"};
+                "Multiplayer", "Mods & cheats", "Debug"};
     }
 
     private void build() {
@@ -151,11 +151,14 @@ final class SettingsMenu {
         switch (section) {
             case 0: buildDisplay(); break;
             case 1: buildGraphics(); break;
-            case 2: buildPerformance(); break;
-            case 3: buildTouch(); break;
-            case 4: buildCombos(); break;
-            case 5: buildController(); break;
-            case 6: buildMultiplayer(); break;
+            case 2: buildDriver(); break;
+            case 3: buildFrameGen(); break;
+            case 4: buildPerformance(); break;
+            case 5: buildTouch(); break;
+            case 6: buildCombos(); break;
+            case 7: buildController(); break;
+            case 8: buildMultiplayer(); break;
+            case 9: buildMods(); break;
             default: buildDebug(); break;
         }
     }
@@ -353,13 +356,135 @@ final class SettingsMenu {
                                 + "one). Off by default, for the same reason. Takes effect on the next start.",
                         "vertex_input_state", false);
         }
+    }
+
+    // ---- GPU driver and frame generation (Drivers: the same files as the first-start screen, DriverActivity) ----------
+
+    private static String sessionDriver;  // the driver the game started with (it can't change until the next start)
+    private static boolean sessionDriverRead;
+
+    private void buildDriver() {
+        if (!sessionDriverRead) {
+            sessionDriverRead = true;
+            sessionDriver = Drivers.chosen(activity);
+        }
+        String failed = Drivers.takeFailure(activity);
+        if (failed != null) note("The last driver didn't work (" + failed + "): the system's is in use.");
         header("Driver");
-        action("GPU driver",
-                "The system's, or one of your own for an Adreno (Turnip…), added from a .zip. Takes effect on the next start.",
-                () -> {
-                    dialog.dismiss();
-                    activity.startActivity(new Intent(activity, DriverActivity.class).putExtra(DriverActivity.FROM_GAME, true));
+        note("The phone's own driver, or one you add from a .zip (meta.json and the .so, as for AdrenoTools: Turnip and "
+                + "the like). Adreno (Snapdragon) only, at your own risk. A change takes effect the next time the game "
+                + "starts; if the game can't draw with the new one, it goes back to the system's by itself.");
+        List<Drivers.Driver> drivers = Drivers.list(activity);
+        String chosen = Drivers.chosen(activity);
+        String[] names = new String[drivers.size() + 1];
+        names[0] = "System driver";
+        int current = 0;
+        for (int i = 0; i < drivers.size(); i++) {
+            Drivers.Driver d = drivers.get(i);
+            names[i + 1] = d.name + (d.detail.isEmpty() ? "" : " (" + d.detail + ")");
+            if (d.dir.getName().equals(chosen)) current = i + 1;
+        }
+        pick("Driver in use", "The one the game uses from its next start.", names, current, v -> {
+            try {
+                Drivers.choose(activity, v == 0 ? null : drivers.get(v - 1).dir);
+            } catch (IOException e) {
+                android.widget.Toast.makeText(activity, "Couldn't save it: " + e.getMessage(), android.widget.Toast.LENGTH_LONG)
+                        .show();
+            }
+        });
+        action("Add a driver (.zip)", "Pick a driver's zip. It's added to the list; choose it above to use it.", () -> {
+            dialog.dismiss();
+            activity.importDriver();
+        });
+        if (!drivers.isEmpty()) {
+            String[] own = Arrays.copyOfRange(names, 1, names.length);
+            action("Remove a driver", "Deletes an added driver. If it's the one in use, the system's is used instead.",
+                    () -> dropDown("Remove a driver", own, -1, i -> dropDown("Delete " + drivers.get(i).name + "?",
+                            new String[] {"Keep it", "Delete it"}, -1, k -> {
+                                if (k == 1) {
+                                    try {
+                                        Drivers.remove(activity, drivers.get(i).dir);
+                                    } catch (IOException ignored) {
+                                        // (left as it was)
+                                    }
+                                }
+                                build();
+                            })));
+        }
+        boolean changed = chosen == null ? sessionDriver != null : !chosen.equals(sessionDriver);
+        if (changed) {
+            note("The game keeps the driver it started with. Close it and open the app again to use the new one.");
+            action("Close the game", "Closes the app now, so the next start uses the chosen driver.", () -> {
+                activity.finishAffinity();
+                android.os.Process.killProcess(android.os.Process.myPid());
+            });
+        }
+    }
+
+    private void buildFrameGen() {
+        if (folder == null) {
+            note("Pick the game folder first.");
+            return;
+        }
+        File dll = Drivers.losslessDll(activity);
+        File builtin = new File(folder, "fg_builtin");
+        boolean own = !dll.isFile() || builtin.exists();
+        header("Frame generation");
+        note("Shows about twice the game's fps (30 → 60) by making a picture between each two of the game's. With your own "
+                + "Lossless.dll (from Lossless Scaling on Steam, Windows: in the program's folder; not included with the "
+                + "app) it can use Lossless Scaling's; otherwise the port's own.");
+        toggle("Frame generation", "On or off while you play (the same as the in-game panel's row).",
+                () -> has("lsfg") ? 1 : 0, v -> ini.set("lsfg", v != 0 ? "1" : "0"));
+        if (dll.isFile()) {
+            String[] kinds = {"Lossless Scaling", "Built-in"};
+            String size = String.format(java.util.Locale.ROOT, "%.1f MB", dll.length() / 1048576.0);
+            pick("Generator", "Lossless Scaling: sharper, heavier on the GPU (Lossless.dll, " + size + "). Built-in: lighter, "
+                    + "runs on any GPU. Takes effect the next time the game starts.", kinds, own ? 1 : 0, k -> {
+                if (k == 0) Drivers.deleteTree(builtin);
+                else builtin.mkdirs();
+            });
+        }
+        exclusive("Target",
+                "Off: one generated picture between each two real ones (30 → 60). With a target, as many as it takes to "
+                        + "reach it, like Lossless Scaling's adaptive mode: at 20 real fps two (60), on a 120 Hz screen up "
+                        + "to three. Never above the screen's refresh rate, and each extra picture costs about as much GPU "
+                        + "as the first, so on a busy GPU it can slow the real frames down. The built-in generator does "
+                        + "this more cheaply than Lossless Scaling's. Applies at once.",
+                new String[] {"Off (2x)", "60 fps", "90 fps", "120 fps"},
+                new String[] {null, "fg_target_60", "fg_target_90", "fg_target_120"});
+        File half = new File(folder, "lsfg_flow_50"), full = new File(folder, "lsfg_flow_100");
+        int level = full.exists() ? 2 : half.exists() ? 1 : 0;
+        String[] presets = own ? new String[] {"Light (motion at 1/4)", "Balanced (motion at 1/3)", "Sharp (motion at 1/2)"}
+                               : new String[] {"Light (flow 25 %)", "Balanced (flow 50 %)", "Sharp (flow 100 %)"};
+        pick("Quality Preset", "How finely " + (own ? "the generator" : "Lossless Scaling") + " follows motion. Higher is "
+                + "sharper with less smearing, and heavier on the GPU (each step about twice the work). Applies at once.",
+                presets, level, k -> {
+                    Drivers.deleteTree(half);
+                    Drivers.deleteTree(full);
+                    if (k == 1) half.mkdirs();
+                    if (k == 2) full.mkdirs();
                 });
+        action(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll",
+                "Pick Lossless.dll from your copy of Lossless Scaling. Takes effect the next time the game starts.", () -> {
+                    dialog.dismiss();
+                    activity.importLosslessDll();
+                });
+        if (dll.isFile())
+            action("Remove Lossless.dll", "Deletes the imported copy; frame generation goes on with the built-in one.", () -> {
+                dll.delete();
+                build();
+            });
+    }
+
+    // A row whose value opens a drop-down, whatever the number of options (choice() flips two on a tap)
+    private void pick(String title, String help, String[] options, int current, IntConsumer set) {
+        String shown = options[current];
+        int paren = shown.indexOf(" (");
+        row(title, (paren > 0 ? shown.substring(0, paren) : shown) + "  ▾", help, x -> dropDown(title, options, current, k -> {
+            set.accept(k);
+            changed();
+            build();
+        }), false);
     }
 
     private void buildPerformance() {
@@ -369,6 +494,12 @@ final class SettingsMenu {
                         + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.",
                 "tight_barriers", false);
+        flag("GPU texture unswizzle",
+                "Switch textures are stored in a tiled order, and each one is put back in plain rows before the GPU gets "
+                        + "it. On: the GPU does that instead of the CPU, which then only copies each texture as it is, so "
+                        + "loading an area or a monster stutters less (like Eden's option). Off by default until it's been "
+                        + "tried on more phones. Applies at once.",
+                "gpu_unswizzle", false);
         if (gpu.adreno()) {
             header("GPU");
             flag("GPU boost (Adreno)",
@@ -1264,6 +1395,77 @@ final class SettingsMenu {
         chip.setBackground(plate(on ? GOLD : ROW, 1, 4));
     }
 
+    // ---- mods and cheats (ModFiles; the runtime's side is fs.cpp and cheats.cpp) ----------------------------------------
+
+    private void buildMods() {
+        if (folder == null) {
+            note("Pick the game folder first.");
+            return;
+        }
+        List<ModFiles.Mod> mods = ModFiles.list(folder);
+        header("Mods");
+        note("Each mod is a folder in " + ModFiles.modsDir(folder) + ", laid out as for Eden: romfs/ with the game files it "
+                + "replaces, cheats/ with its cheat files. Adding a mod or turning one on or off applies the next time the "
+                + "game starts.");
+        action("Add a mod (.zip)",
+                "Pick a mod's zip, as made for Eden or Yuzu. Its romfs (or its game folders, natives/...) and cheats go into "
+                        + "a folder of their own under mods. Patches for exefs aren't used by this port.",
+                () -> {
+                    dialog.dismiss();
+                    activity.importMod();
+                });
+        for (ModFiles.Mod m : mods) {
+            String what = m.romfs && m.cheats ? "Game files and cheats" : m.romfs ? "Game files (romfs)"
+                    : m.cheats ? "Cheats only" : "Nothing the port uses (no romfs or cheats folder)";
+            toggle(m.name, what + ". In " + m.dir.getName() + ".", () -> m.on ? 1 : 0, v -> {
+                if (!ModFiles.setOn(m, v != 0)) android.widget.Toast.makeText(activity, "Couldn't rename " + m.dir.getName(),
+                        android.widget.Toast.LENGTH_LONG).show();
+                build();
+            });
+        }
+        if (!mods.isEmpty()) {
+            String[] names = new String[mods.size()];
+            for (int i = 0; i < names.length; i++) names[i] = mods.get(i).name;
+            action("Remove a mod", "Deletes the mod's folder and everything in it.", () -> dropDown("Remove a mod", names, -1,
+                    i -> dropDown("Delete " + names[i] + "?", new String[] {"Keep it", "Delete it"}, -1, k -> {
+                        if (k == 1) ModFiles.delete(mods.get(i));
+                        build();
+                    })));
+        }
+
+        String buildId = ModFiles.buildId(folder);
+        header("Cheats");
+        note(buildId != null
+                ? "Atmosphere cheats, as in Eden. This game's build ID is " + buildId + ", so a mod's cheat file is cheats/"
+                        + buildId + ".txt. A cheat turned on starts working within a second; the master code of its file "
+                        + "({...}) runs along with it."
+                : "Can't read the game's build ID (the exefs isn't where the setup found it), so no cheats can be listed.");
+        action("Add a cheat file (.txt)",
+                "Pick a cheat .txt for this version of the game. It goes into a mod of its own, named after the file. A file "
+                        + "named after another build ID is for another game version and isn't taken.",
+                () -> {
+                    dialog.dismiss();
+                    activity.importCheats();
+                });
+        boolean any = false;
+        for (ModFiles.Mod m : mods) {
+            if (!m.on) continue;
+            List<File> files = ModFiles.cheatFiles(m, buildId);
+            for (File f : files) {
+                List<ModFiles.Cheat> cheats = ModFiles.cheats(m, f);
+                note("◆ " + m.name + (files.size() > 1 ? " · " + f.getName() : ""));
+                for (ModFiles.Cheat c : cheats) {
+                    if (c.master) continue;
+                    any = true;
+                    flag(c.name, "From " + m.name + ". On: it runs 12 times a second, as on the console.", c.key, false);
+                }
+            }
+            int other = ModFiles.otherBuilds(m, buildId);
+            if (other > 0) note(m.name + ": " + other + " cheat file(s) for another game version, not used.");
+        }
+        if (!any) note("No cheats yet. Add a cheat file, or a mod with a cheats folder.");
+    }
+
     // ---- rows -----------------------------------------------------------------------------------------------------------
 
     private void header(String title) {
@@ -1498,7 +1700,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "dynamic_state", "vertex_input_state",
+        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "gpu_unswizzle", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",

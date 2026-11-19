@@ -92,10 +92,6 @@ public final class DriverActivity extends Activity {
         build();
     }
 
-    private File root() {
-        return new File(getFilesDir(), "drivers");
-    }
-
     // ---- pantalla -------------------------------------------------------------------------------------------------------
 
     private void build() {
@@ -107,26 +103,15 @@ public final class DriverActivity extends Activity {
         status.setPadding(dp(4), dp(6), dp(4), 0);
         status.setVisibility(View.GONE);
         list.addView(status);
-        File failed = new File(root(), "fallo");
-        if (failed.isFile()) {
-            say("The last one didn't work: " + firstLine(failed)
-                    + ". The system's is in use.", true);
-            failed.delete();
-        }
+        String failed = Drivers.takeFailure(this);
+        if (failed != null) say("The last one didn't work: " + failed + ". The system's is in use.", true);
 
         String chosen = selected()[0];
         header("Drivers");
         entry("System driver", "The one that came with the phone",
                 chosen == null, () -> choose(null), null);
-        File[] folders = root().listFiles(File::isDirectory);
-        if (folders != null) {
-            Arrays.sort(folders, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
-            for (File dir : folders) {
-                String[] info = describe(dir);
-                if (info == null) continue;
-                entry(info[0], info[1], dir.getName().equals(chosen), () -> choose(dir), () -> remove(dir));
-            }
-        }
+        for (Drivers.Driver d : Drivers.list(this))
+            entry(d.name, d.detail, d.dir.getName().equals(chosen), () -> choose(d.dir), () -> remove(d.dir));
         TextView add = button("Add a driver (.zip)", true);
         add.setOnClickListener(v -> pick());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
@@ -176,6 +161,70 @@ public final class DriverActivity extends Activity {
         list.addView(r, lp);
     }
 
+    // A setting with a few choices: its name and what it is, the current choice on the right with a ▾, and a tap opens
+    // the list (dropDown)
+    private void choiceRow(String name, String value, String detail, Runnable open, Runnable remove) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(dp(14), dp(10), dp(8), dp(10));
+        r.setBackground(plate(ROW, 1, 2));
+        LinearLayout words = new LinearLayout(this);
+        words.setOrientation(LinearLayout.VERTICAL);
+        words.addView(text(name, 16, CREAM, false));
+        if (detail != null && !detail.isEmpty()) words.addView(text(detail, 13, DIM, false));
+        r.addView(words, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView v = text(value + "  ▾", 16, GOLD, true);
+        v.setPadding(dp(10), 0, dp(10), 0);
+        r.addView(v);
+        if (remove != null) {
+            TextView x = button("Remove", false);
+            x.setOnClickListener(c -> remove.run());
+            r.addView(x, new LinearLayout.LayoutParams(dp(92), dp(40)));
+        }
+        r.setOnClickListener(c -> open.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(4);
+        list.addView(r, lp);
+    }
+
+    // The list of choices, as a panel like the settings menu's: the current one marked
+    private void dropDown(String title, String[] options, int current, java.util.function.IntConsumer pick) {
+        final android.app.Dialog d = new android.app.Dialog(this);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackground(plate(PANEL, 2, 0));
+        root.setPadding(dp(10), dp(8), dp(10), dp(10));
+        TextView t = text("◆  " + title, 18, GOLD, true);
+        t.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
+        t.setPadding(dp(6), dp(4), dp(6), dp(8));
+        root.addView(t);
+        for (int i = 0; i < options.length; i++) {
+            final int k = i;
+            final boolean on = i == current;
+            TextView o = text((on ? "◆  " : "") + options[i], 16, on ? GOLD : CREAM, on);
+            o.setPadding(dp(14), dp(12), dp(14), dp(12));
+            o.setBackground(plate(on ? 0xFF3E2616 : ROW, on ? 2 : 1, 2));
+            o.setOnClickListener(v -> {
+                d.dismiss();
+                if (k != current) pick.accept(k);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(4);
+            root.addView(o, lp);
+        }
+        d.setContentView(root);
+        android.view.Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
+            w.setLayout(Math.min(dp(460), (int) (getResources().getDisplayMetrics().widthPixels * 0.6f)),
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        d.show();
+    }
+
     private void say(String s, boolean bad) {
         status.setText(s);
         status.setTextColor(bad ? 0xFFE07060 : CREAM);
@@ -184,34 +233,26 @@ public final class DriverActivity extends Activity {
 
     // ---- elegir, quitar -------------------------------------------------------------------------------------------------
 
-    // [carpeta, librería] del elegido, o [null, null]: el del sistema
-    private String[] selected() {
-        List<String> lines = lines(new File(root(), "elegido"));
-        if (lines.size() < 2 || !new File(new File(root(), lines.get(0)), lines.get(1)).isFile()) return new String[2];
-        return new String[] {lines.get(0), lines.get(1)};
+    private String[] selected() {  // (the folder name only; [1] is unused now)
+        return new String[] {Drivers.chosen(this), null};
     }
 
     private void choose(File dir) {
-        File chosen = new File(root(), "elegido");
-        new File(root(), "probando").delete();  // (lo que quedara de otro driver)
-        if (dir == null) {
-            chosen.delete();
-        } else {
-            List<String> info = lines(new File(dir, "driver.txt"));
-            if (info.size() < 2) return;
-            try (FileWriter w = new FileWriter(chosen)) {
-                w.write(dir.getName() + "\n" + info.get(1) + "\n");
-            } catch (IOException e) {
-                say("Could not save it: " + e.getMessage(), true);
-                return;
-            }
+        try {
+            Drivers.choose(this, dir);
+        } catch (IOException e) {
+            say("Could not save it: " + e.getMessage(), true);
+            return;
         }
         build();
     }
 
     private void remove(File dir) {
-        if (dir.getName().equals(selected()[0])) choose(null);
-        deleteTree(dir);
+        try {
+            Drivers.remove(this, dir);
+        } catch (IOException e) {
+            say("Could not remove it: " + e.getMessage(), true);
+        }
         build();
     }
 
@@ -222,7 +263,7 @@ public final class DriverActivity extends Activity {
     // switch is the lsfg folder in the game folder, as before. The swapchain is sized at start-up, so both changes take
     // effect the next time the game starts.
     private File losslessDll() {
-        return new File(getFilesDir(), "Lossless.dll");
+        return Drivers.losslessDll(this);
     }
 
     private File gameFolder() {
@@ -262,13 +303,15 @@ public final class DriverActivity extends Activity {
 
         if (dll.isFile()) {
             String size = String.format(java.util.Locale.ROOT, "%.1f MB", dll.length() / 1048576.0);
-            entry("Generator", (own ? "Built-in" : "Lossless Scaling") + " · Lossless.dll imported (" + size + "). Tap for the "
-                    + (own ? "Lossless Scaling one (sharper, heavier)." : "built-in one (lighter, any GPU)."), !own, () -> {
-                if (builtin == null) return;
-                if (builtin.exists()) deleteTree(builtin);
-                else if (!builtin.mkdirs()) say("Couldn't write to the game folder.", true);
-                build();
-            }, () -> {
+            String[] kinds = {"Lossless Scaling", "Built-in"};
+            choiceRow("Generator", kinds[own ? 1 : 0], "Lossless Scaling: sharper, heavier on the GPU (Lossless.dll "
+                    + "imported, " + size + "). Built-in: lighter, runs on any GPU.", () -> dropDown("Generator", kinds,
+                    own ? 1 : 0, k -> {
+                        if (builtin == null) return;
+                        if (k == 0) deleteTree(builtin);
+                        else if (!builtin.isDirectory() && !builtin.mkdirs()) say("Couldn't write to the game folder.", true);
+                        build();
+                    }), () -> {
                 dll.delete();
                 build();
             });
@@ -279,18 +322,20 @@ public final class DriverActivity extends Activity {
             // more. The game picks it up at once.
             File half = new File(folder, "lsfg_flow_50"), full = new File(folder, "lsfg_flow_100");
             int level = full.exists() ? 2 : half.exists() ? 1 : 0;
-            String[] names = own ? new String[] {"Light (motion at 1/4)", "Balanced (motion at 1/3)", "Sharp (motion at 1/2)"}
-                                 : new String[] {"Light (flow 25 %)", "Balanced (flow 50 %)", "Sharp (flow 100 %)"};
-            entry("Quality", names[level] + ". How finely " + (own ? "the generator" : "Lossless Scaling") + " follows "
-                    + "motion: higher is sharper with less smearing, and heavier on the GPU (each step about twice the "
-                    + "work). Tap for " + names[(level + 1) % 3] + ".", level > 0, () -> {
-                deleteTree(half);
-                deleteTree(full);
-                int next = (level + 1) % 3;
-                if (next == 1 && !half.mkdirs()) say("Couldn't write to the game folder.", true);
-                if (next == 2 && !full.mkdirs()) say("Couldn't write to the game folder.", true);
-                build();
-            }, null);
+            String[] names = {"Light", "Balanced", "Sharp"};
+            String[] detail = own ? new String[] {"motion at 1/4", "motion at 1/3", "motion at 1/2"}
+                                  : new String[] {"flow 25 %", "flow 50 %", "flow 100 %"};
+            String[] options = new String[3];
+            for (int i = 0; i < 3; i++) options[i] = names[i] + " (" + detail[i] + ")";
+            choiceRow("Quality Preset", names[level], "How finely " + (own ? "the generator" : "Lossless Scaling")
+                    + " follows motion. Higher is sharper with less smearing, and heavier on the GPU (each step about "
+                    + "twice the work). Applies at once.", () -> dropDown("Quality Preset", options, level, k -> {
+                        deleteTree(half);
+                        deleteTree(full);
+                        if (k == 1 && !half.mkdirs()) say("Couldn't write to the game folder.", true);
+                        if (k == 2 && !full.mkdirs()) say("Couldn't write to the game folder.", true);
+                        build();
+                    }), null);
         }
         TextView add = button(dll.isFile() ? "Replace Lossless.dll" : "Import Lossless.dll", false);
         add.setOnClickListener(v -> pickDll());
@@ -310,34 +355,8 @@ public final class DriverActivity extends Activity {
         }
     }
 
-    // Copies the picked file next to the drivers, after checking it's a Windows DLL (starts with "MZ")
     private String importDll(Uri uri) throws IOException {
-        File tmp = new File(getFilesDir(), "Lossless.dll.new");
-        long total = 0;
-        try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(tmp)) {
-            if (in == null) throw new IOException("couldn't open the file");
-            byte[] buf = new byte[1 << 16];
-            boolean first = true;
-            for (int n; (n = in.read(buf)) > 0; ) {
-                if (first && (n < 2 || buf[0] != 'M' || buf[1] != 'Z')) throw new IOException("that's not a .dll");
-                first = false;
-                out.write(buf, 0, n);
-                total += n;
-            }
-        } catch (IOException e) {
-            tmp.delete();
-            throw e;
-        }
-        if (total < 1 << 20) {
-            tmp.delete();
-            throw new IOException("too small to be Lossless.dll");
-        }
-        File dll = losslessDll();
-        dll.delete();
-        if (!tmp.renameTo(dll)) throw new IOException("couldn't save it");
-        File folder = gameFolder();
-        if (folder != null) new Ini(folder).set("lsfg", "1");  // (on by default once it's there)
-        return String.format(java.util.Locale.ROOT, "%.1f MB", total / 1048576.0);
+        return Drivers.importDll(this, uri, gameFolder());
     }
 
     // ---- agregar --------------------------------------------------------------------------------------------------------
@@ -398,109 +417,12 @@ public final class DriverActivity extends Activity {
         }, "AgregarDriver").start();
     }
 
-    // El meta.json y las librerías .so del zip (sin sus carpetas) en una carpeta nueva; driver.txt guarda lo que se enseña
-    // y el nombre de la librería. Devuelve el nombre que se enseña.
     private String unpack(Uri zip) throws IOException {
-        File dir = new File(root(), "nuevo");
-        deleteTree(dir);
-        if (!dir.mkdirs()) throw new IOException("couldn't create the folder");
-        JSONObject meta = null;
-        List<String> libraries = new ArrayList<>();
-        try (InputStream in = getContentResolver().openInputStream(zip); ZipInputStream z = new ZipInputStream(in)) {
-            for (ZipEntry e; (e = z.getNextEntry()) != null; ) {
-                if (e.isDirectory()) continue;
-                String name = e.getName().substring(e.getName().lastIndexOf('/') + 1);
-                if (name.equalsIgnoreCase("meta.json")) {
-                    try {
-                        meta = new JSONObject(new String(readAll(z), "UTF-8"));
-                    } catch (JSONException bad) {
-                        throw new IOException("meta.json can't be read");
-                    }
-                } else if (name.endsWith(".so") && !name.contains("..")) {
-                    try (OutputStream out = new FileOutputStream(new File(dir, name))) {
-                        copy(z, out);
-                    }
-                    libraries.add(name);
-                }
-            }
-        } catch (IOException e) {
-            deleteTree(dir);
-            throw e;
-        }
-        if (libraries.isEmpty()) {
-            deleteTree(dir);
-            throw new IOException("the zip has no .so library");
-        }
-        String library = meta != null ? meta.optString("libraryName", "") : "";
-        if (library.isEmpty() || !libraries.contains(library)) library = libraries.get(0);
-        library = notTheSystems(dir, library);
-        String name = meta != null ? meta.optString("name", "").trim() : "";
-        String version = meta != null ? meta.optString("driverVersion", "").trim() : "";
-        String vendor = meta != null ? meta.optString("vendor", "").trim() : "";
-        if (name.isEmpty()) name = library;
-        String detail = (vendor + " " + version).trim();
-
-        String folder = name.replaceAll("[^A-Za-z0-9._-]+", "_");
-        if (folder.isEmpty() || folder.equals("nuevo")) folder = "driver";
-        File target = new File(root(), folder);
-        for (int n = 2; target.exists(); n++) target = new File(root(), folder + "_" + n);
-        try (FileWriter w = new FileWriter(new File(dir, "driver.txt"))) {
-            w.write(name + "\n" + library + "\n" + detail + "\n");
-        }
-        if (!dir.renameTo(target)) {
-            deleteTree(dir);
-            throw new IOException("couldn't save it");
-        }
-        return name;
-    }
-
-    // El sistema ya tiene abierta su vulkan.adreno.so (y las de /vendor/lib64/hw): una librería con ese mismo nombre no se
-    // llegaría a cargar y correría la suya sin avisar. Se le da un nombre propio.
-    private static String notTheSystems(File dir, String library) {
-        boolean clash = library.equals("vulkan.adreno.so") || library.equals("libvulkan.so")
-                || new File("/vendor/lib64/hw/" + library).exists() || new File("/system/lib64/hw/" + library).exists();
-        if (!clash) return library;
-        String own = "vulkan.propio.so";
-        return new File(dir, library).renameTo(new File(dir, own)) ? own : library;
-    }
-
-    // [nombre, detalle] de un driver agregado, o null si su carpeta no lo es
-    private static String[] describe(File dir) {
-        List<String> info = lines(new File(dir, "driver.txt"));
-        if (info.size() < 2 || !new File(dir, info.get(1)).isFile()) return null;
-        return new String[] {info.get(0), info.size() > 2 ? info.get(2) : ""};
-    }
-
-    // ---- ficheros -------------------------------------------------------------------------------------------------------
-
-    private static List<String> lines(File f) {
-        try {
-            return Files.readAllLines(f.toPath());
-        } catch (IOException e) {
-            return new ArrayList<>();
-        }
-    }
-
-    private static String firstLine(File f) {
-        List<String> l = lines(f);
-        return l.isEmpty() ? "" : l.get(0);
-    }
-
-    private static byte[] readAll(InputStream in) throws IOException {
-        ByteArrayOutputStream b = new ByteArrayOutputStream();
-        copy(in, b);
-        return b.toByteArray();
-    }
-
-    private static void copy(InputStream in, OutputStream out) throws IOException {
-        byte[] buf = new byte[1 << 16];
-        for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+        return Drivers.unpack(this, zip);
     }
 
     private static void deleteTree(File f) {
-        File[] subs = f.listFiles();
-        if (subs != null) for (File s : subs) deleteTree(s);
-        f.delete();
+        Drivers.deleteTree(f);
     }
 
     // ---- piezas (las del menú de ajustes) -------------------------------------------------------------------------------

@@ -70,6 +70,8 @@ public:
     const Image& output() const override { return output_; }
     void record_shared(VkCommandBuffer cmd, uint64_t n) const override;
     void record_generate(VkCommandBuffer cmd, uint64_t n) const override;
+    bool set_time(float t) override;
+    void record_again(VkCommandBuffer cmd, uint64_t n) const override { record_generate(cmd, n); }
 
     VkExtent2D extent() const override { return extent_; }
     VkFormat format() const override { return format_; }
@@ -115,6 +117,8 @@ private:
     VkBuffer ubo_ = VK_NULL_HANDLE;
     VkDeviceMemory ubo_memory_ = VK_NULL_HANDLE;
     VkDeviceSize ubo_stride_ = 0;
+    uint8_t* ubo_mapped_ = nullptr;  // (kept mapped: set_time rewrites the timestamps)
+    float time_ = 0.5f;
     VkSampler sampler_ = VK_NULL_HANDLE, border_sampler_ = VK_NULL_HANDLE, edge_sampler_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     uint32_t set_count_ = 0;

@@ -143,6 +143,8 @@ int nier_run(const RunConfig& cfg) {
     host.ask_text = cfg.ask_text;
     host.main_base = g_main.base;
     host.main_size = g_main.size;
+    host.main_text_size = (size_t{g_main.seg_off[0]} + g_main.seg_size[0] + 0xFFF) & ~size_t{0xFFF};
+    memcpy(host.main_build_id, g_main.build_id, sizeof host.main_build_id);
     if (!host.game_malloc || !host.game_free || !host.game_new || !host.game_delete)
         die("main no exporta malloc/free/new/delete");
     reinterpret_cast<void (*)(const NnsdkHost*)>(nnsdk_symbol("nnsdk_attach"))(&host);

@@ -27,7 +27,14 @@ void on_thread_start() {
 }
 }  // namespace nnsdk
 
-extern "C" void nnsdk_attach(const NnsdkHost* host) { g_host = *host; }
+namespace nnsdk {
+void start_cheats();  // cheats.cpp
+}
+
+extern "C" void nnsdk_attach(const NnsdkHost* host) {
+    g_host = *host;
+    nnsdk::start_cheats();
+}
 
 // El crt0 de cada módulo la llama desde DT_INIT con sus tablas; si no devuelve 1, el
 // propio crt0 recorre el .init_array. Con 0 dejamos que lo haga él.

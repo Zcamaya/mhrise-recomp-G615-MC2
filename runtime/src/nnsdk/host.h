@@ -72,6 +72,10 @@ struct NnsdkHost {
     // Dónde quedó main (base y tamaño): para leer y tocar datos del juego por su offset (ver window.cpp, MaxFps).
     const uint8_t* main_base;
     size_t main_size;
+    // For the cheats (cheats.cpp): main's code segment (what's executable, from main_base) and its build ID, the first
+    // 32 bytes of the NSO header's module ID (cheat files are named after the first 8, in hex)
+    size_t main_text_size;
+    uint8_t main_build_id[32];
     // El teclado (NnsdkText); nullptr en la terminal: nombre.txt o "Flip", como antes.
     NnsdkText* text_input;
     void (*ask_text)(NnsdkText*);

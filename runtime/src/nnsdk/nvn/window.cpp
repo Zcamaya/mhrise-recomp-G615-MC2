@@ -786,7 +786,7 @@ void nvn::present(Window& w, int index) {
     if (generated_ns && c->display_timing) {
         when.presentID = generated_id + 1;  // par: el real detrás del generado generated_id
         when.desiredPresentTime =
-            static_cast<uint64_t>(generated_ns + 16666667 + g_lsfg_pacer.margin_ns(c->device, w.swapchain));
+            static_cast<uint64_t>(generated_ns + lsfg::spacing_ns() + g_lsfg_pacer.margin_ns(c->device, w.swapchain));
         times.swapchainCount = 1;
         times.pTimes = &when;
         pi.pNext = &times;

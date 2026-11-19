@@ -1212,6 +1212,17 @@ private:
                     std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
     bool bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
                        uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions);
+    // GPU texture unswizzle (Settings → Performance, <data>/gpu_unswizzle; Eden has the same idea): the level goes to
+    // staging as it is in the game's memory, one straight copy, and shaders/deswizzle.comp puts it in rows on the GPU,
+    // instead of the CPU picking it apart 16 bytes at a time. For levels whose rows are whole 16-byte sectors and that
+    // are uploaded as they are (not decoded or re-encoded on the CPU, not checked for missing ASTC blocks).
+    bool unswizzle_on_gpu();
+    bool gpu_unswizzle(const LevelLayout& lv, uint32_t bpb, const uint8_t* src, const Staging::Alloc& out);
+    VkDescriptorSetLayout unswizzle_set_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout unswizzle_layout_ = VK_NULL_HANDLE;
+    VkPipeline unswizzle_pipeline_ = VK_NULL_HANDLE;
+    bool unswizzle_setup_done_ = false;
+    uint64_t prof_gpu_unswizzled_ = 0;
     uint64_t prof_count_checked_ = 0;  // multi-draws drawn with the draw count check (count_check.h)
     uint64_t prof_astc_encoded_ = 0, prof_astc_cached_ = 0, prof_astc_empty_ = 0, prof_astc_direct_ = 0;  // levels stored as ASTC: encoded here / from the disk cache
     // Deferred encodes: a big level that isn't in the ASTC cache is encoded by a background thread instead of inside the
@@ -2515,6 +2526,13 @@ public:
 
 private:
     uint64_t draws_ = 0, skipped_draws_ = 0, dispatches_ = 0, gpu_dispatches_ = 0;
+    // Skipped draws by why (the verbose log's draw line lists them): tess, multi, absurd_ind, absurd_dir, no_vs,
+    // bindless, pass, pipeline, set, count_set, gpu_data, indices
+    uint64_t skipped_why_[12] = {};
+    void skip_draw(int why) {
+        skipped_draws_++;
+        skipped_why_[why]++;
+    }
 };
 
 // El desglose ordenado de más a menos (lo de menos de 0,5 ms no sale) y el resto sin medir (draws, dispatches, estado…).
@@ -4327,6 +4345,85 @@ bool Executor::bc_on_gpu(const Texture& t) {
 #endif
 }
 
+bool Executor::unswizzle_on_gpu() {
+#ifdef HAVE_deswizzle_SPV
+    if (!NVN_FLAG("gpu_unswizzle")) return false;
+    if (!unswizzle_setup_done_) {
+        unswizzle_setup_done_ = true;
+        VkContext* c = vk();
+        const VkDescriptorSetLayoutBinding b[2] = {
+            {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        dl.bindingCount = 2;
+        dl.pBindings = b;
+        const VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 9 * sizeof(uint32_t)};
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &unswizzle_set_layout_;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pc;
+        VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        mi.codeSize = sizeof k_deswizzle_spv;
+        mi.pCode = k_deswizzle_spv;
+        VkShaderModule module = VK_NULL_HANDLE;
+        if (vkCreateDescriptorSetLayout(c->device, &dl, nullptr, &unswizzle_set_layout_) == VK_SUCCESS &&
+            vkCreatePipelineLayout(c->device, &pl, nullptr, &unswizzle_layout_) == VK_SUCCESS &&
+            vkCreateShaderModule(c->device, &mi, nullptr, &module) == VK_SUCCESS) {
+            VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName = "main";
+            ci.layout = unswizzle_layout_;
+            if (vkCreateComputePipelines(c->device, VK_NULL_HANDLE, 1, &ci, nullptr, &unswizzle_pipeline_) != VK_SUCCESS)
+                unswizzle_pipeline_ = VK_NULL_HANDLE;
+        }
+        if (module) vkDestroyShaderModule(c->device, module, nullptr);
+        NVN_LOG("GPU texture unswizzle: %s\n", unswizzle_pipeline_ ? "on" : "the shader didn't build, unswizzled on the CPU");
+    }
+    return unswizzle_pipeline_ != VK_NULL_HANDLE;
+#else
+    return false;  // (spirv.h from before deswizzle.comp: tools/shaders.sh adds it)
+#endif
+}
+
+// The level as it is (src, lv.size bytes) into staging, and a dispatch that writes its rows to out. false: nothing was
+// recorded (no staging or set), and the caller unswizzles on the CPU.
+bool Executor::gpu_unswizzle(const LevelLayout& lv, uint32_t bpb, const uint8_t* src, const Staging::Alloc& out) {
+    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
+    Staging::Alloc tiled = staging_->alloc(lv.size, align);
+    const VkDescriptorSet set = tiled.data ? descriptor_set(unswizzle_set_layout_) : VK_NULL_HANDLE;
+    if (!set) return false;
+    memcpy(tiled.data, src, lv.size);
+    const uint32_t row_bytes = lv.width_blocks * bpb, rows = std::max(lv.depth, 1u) * lv.height_blocks;
+    const uint32_t gobs_per_row = lv.row_gobs ? lv.row_gobs : (row_bytes + 63) / 64;
+    const uint32_t bh = lv.block_height_gobs, bd = std::max(lv.block_depth, 1u);
+    const uint32_t block_size = 512 * bh * bd, block_row_size = block_size * gobs_per_row;
+    const uint32_t slice_size = block_row_size * ((lv.height_blocks + 8 * bh - 1) / (8 * bh));
+    const size_t linear_size = size_t{row_bytes} * rows;
+    const VkDescriptorBufferInfo in{tiled.buffer, tiled.offset, lv.size}, to{out.buffer, out.offset, linear_size};
+    VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+    for (int k = 0; k < 2; k++) {
+        w[k].dstSet = set;
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[k].pBufferInfo = k ? &to : &in;
+    }
+    vkUpdateDescriptorSets(vk()->device, 2, w, 0, nullptr);
+    const uint32_t groups = static_cast<uint32_t>((linear_size / 16 + 63) / 64);
+    const uint32_t gx = std::min<uint32_t>(groups, 65535), gy = (groups + gx - 1) / gx;
+    const uint32_t params[9] = {row_bytes / 16, rows, lv.height_blocks, bh, bd, block_size, block_row_size, slice_size, gx};
+    note_gpu_work();
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, unswizzle_pipeline_);
+    vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, unswizzle_layout_, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd_, unswizzle_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
+    vkCmdDispatch(cmd_, gx, gy, 1);
+    prof_gpu_unswizzled_++;
+    return true;
+}
+
 bool Executor::bc_gpu_decode(const Texture& t, const LevelLayout& lv, VkBuffer blocks, VkDeviceSize offset, uint32_t level,
                              uint32_t layer, std::vector<std::pair<VkBuffer, VkBufferImageCopy>>& regions) {
     const bcn::Kind kind = static_cast<bcn::Kind>(t.bcn);
@@ -4509,6 +4606,7 @@ void Executor::upload(Texture& t) {
     };
     int astc_missing = -1;  // el nivel más alto con bloques a cero
     const bool upload_v1 = NVN_FLAG("upload_v1");
+    bool unswizzled_on_gpu = false;  // a dispatch wrote rows for the copies below: a barrier first
     for (uint32_t layer = 0; layer < std::min(L.layers, t.layers); layer++) {
         for (uint32_t level = 0; level < L.levels.size() && level < static_cast<uint32_t>(std::max(t.desc.levels, 1)); level++) {
             const LevelLayout& lv = L.levels[level];
@@ -4552,7 +4650,11 @@ void Executor::upload(Texture& t) {
             Staging::Alloc a{};
             static thread_local std::vector<uint8_t> bc_scratch;
             const bool bc_gpu = t.bcn && !t.astc && bc_on_gpu(t);
-            if (bc_gpu) {
+            const bool count_zeros = astc && bpb == 16;
+            // Unswizzled by the GPU: only what's copied to the image as it is
+            const bool gpu_rows = !L.linear && !t.bcn && !count_zeros && !upload_v1 && (lv.width_blocks * bpb) % 16 == 0 &&
+                                  lv.size <= kStagingChunk && linear_size >= 16 && unswizzle_on_gpu();
+            if (bc_gpu || gpu_rows) {
                 a = staging_->alloc(linear_size, std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16));
                 if (!a.data) return;
             } else if (t.bcn) {
@@ -4568,9 +4670,10 @@ void Executor::upload(Texture& t) {
             // memoria del juego: antes se releían del staging (HOST_COHERENT sin HOST_CACHED: sin caché de la CPU,
             // cada carga va a la RAM), 2 cargas de 8 bytes por bloque de cada nivel ASTC subido.
             // <datos>/upload_v1: como antes (copia trozo a trozo y bloques a cero releídos del staging).
-            const bool count_zeros = astc && bpb == 16;
             size_t zeros = 0;
-            if (upload_v1) {
+            if (gpu_rows && gpu_unswizzle(lv, bpb, src, a)) {
+                unswizzled_on_gpu = true;
+            } else if (upload_v1) {
                 if (L.linear) {
                     for (uint32_t y = 0; y < lv.height_blocks; y++)
                         memcpy(a.data + size_t{y} * lv.width_blocks * bpb, src + size_t{y} * L.stride, lv.width_blocks * bpb);
@@ -4623,6 +4726,13 @@ void Executor::upload(Texture& t) {
         t.min_level = std::max(t.min_level, std::min(astc_missing + 1, std::max(t.desc.levels, 1) - 1));
     t.min_level_base = t.min_level;
     refresh_min_level(t);
+    if (unswizzled_on_gpu) {
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+    }
     for (size_t k = 0; k < regions.size();) {
         size_t end = k;
         std::vector<VkBufferImageCopy> batch;
@@ -7439,7 +7549,7 @@ void Executor::draw(const cmd::Draw& in) {
             if (logged++ < 4)
                 NVN_LOG("draw con teselación sin dibujar: control %d, evaluación %d, primitiva %d, feature %d\n", tcs, tes,
                         d.primitive, vk()->tessellation);
-            skipped_draws_++;
+            skip_draw(0);  // (tess)
             return;
         }
     }
@@ -7450,7 +7560,7 @@ void Executor::draw(const cmd::Draw& in) {
         if (logged++ < 4)
             NVN_LOG("multi-draw no soportado (stride %d, args %#llx, número %#llx)\n", d.stride,
                     static_cast<unsigned long long>(d.indirect), static_cast<unsigned long long>(d.draw_count));
-        skipped_draws_++;
+        skip_draw(1);  // (multi)
         return;
     }
     const uint8_t* args_host = nullptr;   // DEPURACIÓN (migas): los argumentos vistos desde la CPU
@@ -7592,13 +7702,13 @@ void Executor::draw(const cmd::Draw& in) {
                 NVN_LOG("indirecto con argumentos imposibles en %#llx: %u x %u, devuelto %#llx\n",
                         static_cast<unsigned long long>(in.indirect), a[0], a[1],
                         static_cast<unsigned long long>(delivered_range(in.indirect)));
-            skipped_draws_++;
+            skip_draw(2);  // (absurd_ind)
             return;
         }
     } else if (!gpu_args && !multi && absurd_draw(static_cast<uint32_t>(d.count), static_cast<uint32_t>(d.instances))) {
         static int logged_direct = 0;
         if (logged_direct++ < 16) NVN_LOG("draw directo imposible: %d x %d\n", d.count, d.instances);
-        skipped_draws_++;
+        skip_draw(3);  // (absurd_dir)
         return;
     }
     draws_++;
@@ -7664,7 +7774,7 @@ void Executor::draw(const cmd::Draw& in) {
     }
     const ProgramStage* vs = st_.stages[static_cast<int>(Stage::Vertex)];
     if (!vs) {
-        skipped_draws_++;
+        skip_draw(4);  // (no_vs)
         return;
     }
     auto prof_t = prof_now();  // perfil por secciones (solo en los frames medidos)
@@ -7786,7 +7896,7 @@ void Executor::draw(const cmd::Draw& in) {
         return bindless_set(st_.stages, early_layout ? early_layout->bindless : VK_NULL_HANDLE);
     }() : VK_NULL_HANDLE;
     if (wants_bindless && !bindless) {
-        skipped_draws_++;
+        skip_draw(5);  // (bindless)
         return;
     }
     prof_split(1, prof_s);
@@ -7802,7 +7912,7 @@ void Executor::draw(const cmd::Draw& in) {
         else prof_split_storage_++;
     }
     if (!ensure_render_pass()) {
-        skipped_draws_++;
+        skip_draw(6);  // (pass)
         return;
     }
     if (writes_storage) storage_since_barrier_ = true;
@@ -7843,7 +7953,7 @@ void Executor::draw(const cmd::Draw& in) {
     st_.color.blend_enable = saved_blend;
     st_.depth_stencil = saved_depth;
     if (!p) {
-        skipped_draws_++;
+        skip_draw(7);  // (pipeline)
         return;
     }
     if (p != bound_graphics_) {  // seguidos con el mismo estado: sin volver a enlazarlo
@@ -8085,7 +8195,7 @@ void Executor::draw(const cmd::Draw& in) {
             if (prof_timing_) fine_.set_alloc_ns += ns_since(alloc_t0);
             prof_mark_sub(3, prof_sub);
             if (!set) {
-                skipped_draws_++;
+                skip_draw(8);  // (set)
                 return;
             }
             const auto update_t0 = prof_now();
@@ -8149,7 +8259,7 @@ void Executor::draw(const cmd::Draw& in) {
             count_check_sets_[key] = cs;
         }
         if (!cs || !l.count_check) {
-            skipped_draws_++;
+            skip_draw(9);  // (count_set)
             return;
         }
         vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, l.pipeline, kCountCheckSet, 1, &cs, 0, nullptr);
@@ -8258,7 +8368,7 @@ void Executor::draw(const cmd::Draw& in) {
         if (logged++ < 8)
             NVN_LOG("draw con datos de la GPU no soportado (primitiva %d, índices %d, args %d, índices en la GPU %d)\n",
                     d.primitive, d.index_type, gpu_args != VK_NULL_HANDLE, gpu_index != VK_NULL_HANDLE);
-        skipped_draws_++;
+        skip_draw(10);  // (gpu_data)
         return;
     }
     if (indices && !gpu_index) note_read(1, d.index_address, uint64_t{isize} * d.count);
@@ -8301,7 +8411,7 @@ void Executor::draw(const cmd::Draw& in) {
         host_index_offset = al.offset;
     }
     if (gpu_args && indices && !gpu_index && !cached_indices && !host_index && !mirror_index) {
-        skipped_draws_++;
+        skip_draw(11);  // (indices)
         return;
     }
     // Con índices escritos por la GPU no se sabe cuántos vértices se leen: los streams se copian enteros. Con
@@ -8572,8 +8682,15 @@ void Executor::draw(const cmd::Draw& in) {
         begin();  // dump_depth envió lo grabado hasta aquí
     }
     if (draws_ % 5000 == 0 && NVN_FLAG("verbose_log"))
-        NVN_LOG("%llu draws (%llu sin dibujar), %zu pipelines\n", static_cast<unsigned long long>(draws_),
-                static_cast<unsigned long long>(skipped_draws_), pipelines_.size());
+    {
+        static const char* const kWhy[12] = {"tess", "multi", "absurd_ind", "absurd_dir", "no_vs", "bindless", "pass",
+                                             "pipeline", "set", "count_set", "gpu_data", "indices"};
+        std::string why;
+        for (int k = 0; k < 12; k++)
+            if (skipped_why_[k]) why += std::string(why.empty() ? "" : ", ") + kWhy[k] + " " + std::to_string(skipped_why_[k]);
+        NVN_LOG("%llu draws (%llu sin dibujar%s%s), %zu pipelines\n", static_cast<unsigned long long>(draws_),
+                static_cast<unsigned long long>(skipped_draws_), why.empty() ? "" : ": ", why.c_str(), pipelines_.size());
+    }
 }
 
 VkPipeline Executor::compute_pipeline(const ProgramStage& cs, Layout& l) {

@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <iterator>
 #include <cstdio>
 #include <cstdlib>
@@ -65,7 +66,19 @@ std::string data_path(const char* name) {
     return std::string(data ? data : ".") + "/" + name;
 }
 
+// Adaptive frame generation (Settings → Frame generation → Target, fg_target_60/90/120): up to kMaxExtra more pictures
+// between a pair, each its own submit and present, after the first (the Slot's own)
+constexpr int kMaxExtra = 2;
+constexpr int kTargetFrames = 15;  // real frames a new multiplier has to hold before it's used (no flip-flopping)
+struct Extra {
+    VkCommandBuffer cmd = VK_NULL_HANDLE, blit = VK_NULL_HANDLE;
+    VkSemaphore acquired = VK_NULL_HANDLE, rendered = VK_NULL_HANDLE;
+    VkFence done = VK_NULL_HANDLE;
+    bool pending = false;
+};
+
 struct Slot {
+    Extra extra[kMaxExtra];
     VkCommandBuffer cmd = VK_NULL_HANDLE, blit = VK_NULL_HANDLE;
     VkSemaphore acquired = VK_NULL_HANDLE, rendered = VK_NULL_HANDLE;
     VkFence done = VK_NULL_HANDLE;
@@ -79,7 +92,10 @@ public:
     void present(Window& w, Texture* t);
     uint64_t generated() const { return total_generated_; }  // desde el arranque (las estadísticas se reinician)
     // Lo que le cuesta a la GPU un frame generado (media móvil, ns) mientras LSFG está encendido; 0 apagado.
-    int64_t reserved_ns() const { return enabled_ ? std::max<int64_t>(cost_ns_.load(std::memory_order_relaxed), 6000000) : 0; }
+    int64_t reserved_ns() const {
+        return enabled_ ? std::max<int64_t>(cost_ns_.load(std::memory_order_relaxed), 6000000) * (multiplier_ - 1) : 0;
+    }
+    int64_t spacing_ns() const { return spacing_ns_; }
     int64_t last_present_ns() const { return last_present_ns_; }
     uint32_t last_id() const { return last_id_; }
 
@@ -99,7 +115,14 @@ private:
     bool compile(std::string* why, bool* missing);
     void log_stats(Clock::time_point now);
     bool record_lsfg(int index, const Texture& t, const VkRect2D& crop, uint64_t n, bool generate);
-    bool record_blit(Slot& s, const Window& w, uint32_t image);
+    bool record_blit(VkCommandBuffer blit, const Window& w, uint32_t image);
+    bool wait_generations(uint64_t timeout_ns);
+    int64_t refresh_ns(const Window& w);
+    void present_extras(Window& w, Slot& s, uint64_t n, int m, int64_t first_ns);
+    int multiplier_ = 2, wanted_ = 2, wanted_frames_ = 0;  // pictures per real frame, the real one included
+    float chain_time_ = 0.5f;
+    int64_t spacing_ns_ = 16666667, refresh_ns_ = 0;
+    VkSwapchainKHR refresh_of_ = VK_NULL_HANDLE;
 
     enum class State { Off, Waiting, Ready, Failed };
     State state_ = State::Off;  // Waiting: compilando o montando la cadena en el hilo de fondo
@@ -150,11 +173,11 @@ uint32_t FrameGen::swapchain_images(const VkSurfaceCapabilitiesKHR& caps) {
     uint32_t n = 3;
     const std::string dll = find_dll();
     if (!dll.empty()) {
-        n = 4;
-        NVN_LOG("lsfg: hay %s: swapchain de 4 imágenes (el frame generado y el real van seguidos)\n", dll.c_str());
+        n = 4 + kMaxExtra;
+        NVN_LOG("lsfg: hay %s: swapchain de %u imágenes (los frames generados y el real van seguidos)\n", dll.c_str(), n);
     } else if (Motion::available()) {  // (the built-in generator needs no DLL: it can be turned on any time)
-        n = 4;
-        NVN_LOG("lsfg: sin Lossless.dll, generador propio disponible: swapchain de 4 imágenes\n");
+        n = 4 + kMaxExtra;
+        NVN_LOG("lsfg: sin Lossless.dll, generador propio disponible: swapchain de %u imágenes\n", n);
     }
     return caps.maxImageCount ? std::min(n, caps.maxImageCount) : n;
 }
@@ -190,6 +213,16 @@ bool FrameGen::setup() {
             return disable("sin memoria para los envíos"), false;
         s.cmd = cmds[0];
         s.blit = cmds[1];
+        for (Extra& e : s.extra) {
+            VkCommandBuffer more[2];
+            if (vkAllocateCommandBuffers(c->device, &ai, more) != VK_SUCCESS ||
+                vkCreateSemaphore(c->device, &si, nullptr, &e.acquired) != VK_SUCCESS ||
+                vkCreateSemaphore(c->device, &si, nullptr, &e.rendered) != VK_SUCCESS ||
+                vkCreateFence(c->device, &fi, nullptr, &e.done) != VK_SUCCESS)
+                return disable("sin memoria para los envíos"), false;
+            e.cmd = more[0];
+            e.blit = more[1];
+        }
     }
     // Tiempo de GPU de LSFG: dos timestamps por envío.
     uint32_t count = 0;
@@ -230,6 +263,9 @@ void FrameGen::collect(int index) {
 }
 
 void FrameGen::poll_slots() {
+    for (Slot& s : slots_)
+        for (Extra& e : s.extra)
+            if (e.pending && vkGetFenceStatus(vk()->device, e.done) == VK_SUCCESS) e.pending = false;
     for (int i = 0; i < kSlots; i++) {
         if (!slots_[i].pending) continue;
         VkResult r = vkGetFenceStatus(vk()->device, slots_[i].done);
@@ -251,16 +287,23 @@ void FrameGen::retire() {
 
 void FrameGen::reap(bool wait) {
     if (!retired_) return;
-    VkFence fences[kSlots];
+    VkFence fences[kSlots * (1 + kMaxExtra)];
     uint32_t n = 0;
     for (Slot& s : slots_)
-        if (s.pending && s.chain == retired_) fences[n++] = s.done;
+        if (s.pending && s.chain == retired_) {
+            fences[n++] = s.done;
+            for (Extra& e : s.extra)
+                if (e.pending) fences[n++] = e.done;
+        }
     if (n) {
         VkResult r = vkWaitForFences(vk()->device, n, fences, VK_TRUE, wait ? kRetireWaitNs : 0);
         if (r == VK_TIMEOUT) return;
         if (r != VK_SUCCESS) return disable(std::string("vkWaitForFences: ") + vk_result_name(r));
         for (int i = 0; i < kSlots; i++)
-            if (slots_[i].pending && slots_[i].chain == retired_) collect(i);
+            if (slots_[i].pending && slots_[i].chain == retired_) {
+                collect(i);
+                for (Extra& e : slots_[i].extra) e.pending = false;
+            }
     }
     delete retired_;
     retired_ = nullptr;
@@ -502,11 +545,11 @@ bool FrameGen::record_lsfg(int index, const Texture& t, const VkRect2D& crop, ui
 }
 
 // La salida de la cadena (1280x720) escalada a la imagen del swapchain, igual que window.cpp hace con el real.
-bool FrameGen::record_blit(Slot& s, const Window& w, uint32_t image) {
+bool FrameGen::record_blit(VkCommandBuffer blit, const Window& w, uint32_t image) {
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkResetCommandBuffer(s.blit, 0);
-    if (VkResult r = vkBeginCommandBuffer(s.blit, &bi); r != VK_SUCCESS)
+    vkResetCommandBuffer(blit, 0);
+    if (VkResult r = vkBeginCommandBuffer(blit, &bi); r != VK_SUCCESS)
         return disable(std::string("vkBeginCommandBuffer: ") + vk_result_name(r)), false;
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -515,7 +558,7 @@ bool FrameGen::record_blit(Slot& s, const Window& w, uint32_t image) {
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = w.images[image];
     b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(s.blit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+    vkCmdPipelineBarrier(blit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
                          1, &b);
     const Image& out = chain_->output();
     // Con FSR, como el frame real (window.cpp): si no, el generado salía más blando y la nitidez parpadeaba a 30 Hz.
@@ -526,25 +569,25 @@ bool FrameGen::record_blit(Slot& s, const Window& w, uint32_t image) {
     if (rect.width != w.extent.width || rect.height != w.extent.height) {
         const VkClearColorValue black{};
         const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdClearColorImage(s.blit, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+        vkCmdClearColorImage(blit, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
     }
-    if (!fsr::record(s.blit, out.view, out.extent, out.extent, w.images[image], w.format, rect, at)) {
+    if (!fsr::record(blit, out.view, out.extent, out.extent, w.images[image], w.format, rect, at)) {
         VkImageBlit region{};
         region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.srcOffsets[1] = {static_cast<int32_t>(out.extent.width), static_cast<int32_t>(out.extent.height), 1};
         region.dstOffsets[0] = {at.x, at.y, 0};
         region.dstOffsets[1] = {at.x + static_cast<int32_t>(rect.width), at.y + static_cast<int32_t>(rect.height), 1};
-        vkCmdBlitImage(s.blit, out.image, VK_IMAGE_LAYOUT_GENERAL, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+        vkCmdBlitImage(blit, out.image, VK_IMAGE_LAYOUT_GENERAL, w.images[image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                        &region, VK_FILTER_LINEAR);
     }
-    hud::record(s.blit, w.images[image], w.extent, w.format);  // el HUD también en los generados
+    hud::record(blit, w.images[image], w.extent, w.format);  // el HUD también en los generados
     b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     b.dstAccessMask = 0;
     b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    vkCmdPipelineBarrier(s.blit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+    vkCmdPipelineBarrier(blit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &b);
-    if (VkResult r = vkEndCommandBuffer(s.blit); r != VK_SUCCESS)
+    if (VkResult r = vkEndCommandBuffer(blit); r != VK_SUCCESS)
         return disable(std::string("vkEndCommandBuffer: ") + vk_result_name(r)), false;
     return true;
 }
@@ -623,7 +666,34 @@ void FrameGen::present(Window& w, Texture* t) {
     // The pace the presenter keeps (window.cpp: the FPS limit, or the game's own MaxFps): 30 or slower. A 40 or 60 that
     // falls behind is still too fast to double on a 60 Hz screen (and generating there made it flicker on and off,
     // slowing the real frames each time)
-    const bool pace_ok = w.present_interval == 2 && ema_ >= kTooFastMs && frame_period_ns() >= 32'000'000;
+    // Adaptive (a target): as many pictures per real frame as reach it, as far as the screen's refreshes between two
+    // real frames allow (one picture each) and 4 at most; it has to hold for kTargetFrames before it changes. Without a
+    // target, 2x at 30 fps as always.
+    const int target = NVN_FLAG("fg_target_120") ? 120 : NVN_FLAG("fg_target_90") ? 90 : NVN_FLAG("fg_target_60") ? 60 : 0;
+    const int64_t vblank = refresh_ns(w);
+    const double real_ms = std::max(ema_, frame_period_ns() / 1e6);
+    const int vblanks = std::max(1, static_cast<int>(real_ms * 1e6 / static_cast<double>(vblank) + 0.25));
+    int want = 2;
+    if (target) want = std::clamp(static_cast<int>(std::lround(target * real_ms / 1000.0)), 1, std::min(vblanks, 1 + kMaxExtra + 1));
+    if (want == multiplier_) {
+        wanted_frames_ = 0;
+    } else if (want != wanted_) {
+        wanted_ = want;
+        wanted_frames_ = 1;
+    } else if (++wanted_frames_ >= kTargetFrames || !target) {
+        if (target) NVN_LOG("lsfg: objetivo %d fps: %dx (%.1f ms por frame real, %d refrescos de %.1f ms)\n", target, want,
+                            real_ms, vblanks, vblank / 1e6);
+        multiplier_ = want;
+        wanted_frames_ = 0;
+    }
+    const int m = std::min(multiplier_, vblanks);
+    // With display timing each picture gets its time: evenly between the real ones, on whole refreshes
+    // (Without a target, 16.7 ms as before, whatever the screen: on a 120 Hz one the real frame right after the generated
+    // one would show the generated one for a quarter of the time)
+    spacing_ns_ = !target ? 16666667
+                          : vblank * (vk()->display_timing ? std::max(1, vblanks / std::max(m, 1)) : 1);
+    const bool pace_ok = target ? m >= 2 && ema_ >= kTooFastMs * 0.6
+                                : w.present_interval == 2 && ema_ >= kTooFastMs && frame_period_ns() >= 32'000'000;
     if (pace_ok == pace_logged_) {
         pace_logged_ = !pace_ok;
         if (!pace_ok)
@@ -644,6 +714,15 @@ void FrameGen::present(Window& w, Texture* t) {
 
     const int index = next_;
     Slot& s = slots_[index];
+    for (Extra& e : s.extra)  // (its extra pictures, the same 3 real frames ago)
+        if (e.pending) {
+            if (vkWaitForFences(c->device, 1, &e.done, VK_TRUE, kSlotWaitNs) != VK_SUCCESS) {
+                skip_busy_++;
+                warm_ = 0;
+                return;
+            }
+            e.pending = false;
+        }
     if (s.pending) {  // el envío de hace 3 frames reales
         VkResult r = vkWaitForFences(c->device, 1, &s.done, VK_TRUE, kSlotWaitNs);
         if (r == VK_TIMEOUT) {
@@ -657,16 +736,28 @@ void FrameGen::present(Window& w, Texture* t) {
     const uint64_t n = warm_;
     bool generate = false;
     uint32_t image = 0;
-    if (n >= kWarmFrames) {
+    // The first picture's time (1 / m; 0.5 for 2x). LSFG's constants can only change once the GPU is done with the
+    // last generation; if that takes too long, this frame goes without.
+    const float t0 = 1.0f / static_cast<float>(std::max(m, 2));
+    bool timed = true;
+    if (n >= kWarmFrames && t0 != chain_time_) {
+        if (chain_->name()[0] == 'L' && !wait_generations(kSlotWaitNs)) {
+            timed = false;
+            skip_busy_++;
+        } else if (chain_->set_time(t0)) {
+            chain_time_ = t0;
+        }
+    }
+    if (n >= kWarmFrames && timed) {
         VkResult r = vkAcquireNextImageKHR(c->device, w.swapchain, kAcquireNs, s.acquired, VK_NULL_HANDLE, &image);
         if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) generate = true;
         else if (r == VK_TIMEOUT || r == VK_NOT_READY || r == VK_ERROR_OUT_OF_DATE_KHR) skip_image_++;
         else return disable(std::string("vkAcquireNextImageKHR: ") + vk_result_name(r));
-    } else {
+    } else if (n < kWarmFrames) {
         warming_++;
     }
     // Sin imagen se graba igual la copia y lo compartido: la historia sigue llena para el frame siguiente.
-    if (!record_lsfg(index, *t, crop, n, generate) || (generate && !record_blit(s, w, image))) return;
+    if (!record_lsfg(index, *t, crop, n, generate) || (generate && !record_blit(s.blit, w, image))) return;
 
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si[2] = {{VK_STRUCTURE_TYPE_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_SUBMIT_INFO}};
@@ -714,6 +805,112 @@ void FrameGen::present(Window& w, Texture* t) {
     last_present_ns_ = queued_ns;
     if (!announced_) NVN_LOG("lsfg: generando: un frame intermedio entre cada par de frames reales\n");
     announced_ = true;
+    if (m > 2) present_extras(w, s, n, m, queued_ns);
+}
+
+// Every submit still reading the generator (the GPU has to be done before LSFG's constants change)
+bool FrameGen::wait_generations(uint64_t timeout_ns) {
+    VkFence fences[kSlots * (1 + kMaxExtra)];
+    uint32_t count = 0;
+    for (Slot& s : slots_) {
+        if (s.pending && s.chain == chain_) fences[count++] = s.done;
+        for (Extra& e : s.extra)
+            if (e.pending) fences[count++] = e.done;
+    }
+    return !count || vkWaitForFences(vk()->device, count, fences, VK_TRUE, timeout_ns) == VK_SUCCESS;
+}
+
+// How long the screen shows each picture (VK_GOOGLE_display_timing's refresh cycle; 60 Hz without it)
+int64_t FrameGen::refresh_ns(const Window& w) {
+    if (w.swapchain != refresh_of_) {
+        refresh_of_ = w.swapchain;
+        refresh_ns_ = 16666667;
+        VkContext* c = vk();
+        auto get = c && c->display_timing ? reinterpret_cast<PFN_vkGetRefreshCycleDurationGOOGLE>(
+                                                vkGetDeviceProcAddr(c->device, "vkGetRefreshCycleDurationGOOGLE"))
+                                          : nullptr;
+        VkRefreshCycleDurationGOOGLE d{};
+        if (get && get(c->device, w.swapchain, &d) == VK_SUCCESS && d.refreshDuration >= 4000000 &&
+            d.refreshDuration <= 50000000)
+            refresh_ns_ = static_cast<int64_t>(d.refreshDuration);
+        NVN_LOG("lsfg: la pantalla refresca cada %.2f ms (%.0f Hz)\n", refresh_ns_ / 1e6, 1e9 / refresh_ns_);
+    }
+    return refresh_ns_;
+}
+
+// The pictures after the first between the same pair (m - 2 of them), at 2 / m, 3 / m...: the flows (or LSFG's shared
+// passes) are kept, so each is only the last part of the generation, its blit and its present, spaced spacing_ns_
+// apart. One that can't get a swapchain image (or, with LSFG, waits too long for the one before) ends the run; the
+// real frame follows as always.
+void FrameGen::present_extras(Window& w, Slot& s, uint64_t n, int m, int64_t first_ns) {
+    VkContext* c = vk();
+    const bool lsfg = chain_->name()[0] == 'L';
+    for (int k = 2; k < m && k - 2 < kMaxExtra; k++) {
+        Extra& e = s.extra[k - 2];
+        const VkFence before = k == 2 ? s.done : s.extra[k - 3].done;
+        if (lsfg && vkWaitForFences(c->device, 1, &before, VK_TRUE, kSlotWaitNs) != VK_SUCCESS) return;
+        if (!chain_->set_time(static_cast<float>(k) / static_cast<float>(m))) return;
+        chain_time_ = static_cast<float>(k) / static_cast<float>(m);
+        uint32_t image = 0;
+        VkResult r = vkAcquireNextImageKHR(c->device, w.swapchain, kAcquireNs, e.acquired, VK_NULL_HANDLE, &image);
+        if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
+            skip_image_++;
+            return;
+        }
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkResetCommandBuffer(e.cmd, 0);
+        if (vkBeginCommandBuffer(e.cmd, &bi) != VK_SUCCESS) return disable("vkBeginCommandBuffer");
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};  // (after the last picture's blit read the output)
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(e.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+        chain_->record_again(e.cmd, n);
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(e.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+        if (vkEndCommandBuffer(e.cmd) != VK_SUCCESS) return disable("vkEndCommandBuffer");
+        if (!record_blit(e.blit, w, image)) return;
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        VkSubmitInfo si[2] = {{VK_STRUCTURE_TYPE_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_SUBMIT_INFO}};
+        si[0].commandBufferCount = 1;
+        si[0].pCommandBuffers = &e.cmd;
+        si[1].waitSemaphoreCount = 1;
+        si[1].pWaitSemaphores = &e.acquired;
+        si[1].pWaitDstStageMask = &wait_stage;
+        si[1].commandBufferCount = 1;
+        si[1].pCommandBuffers = &e.blit;
+        si[1].signalSemaphoreCount = 1;
+        si[1].pSignalSemaphores = &e.rendered;
+        vkResetFences(c->device, 1, &e.done);
+        if (VkResult q = vkQueueSubmit(c->queue, 2, si, e.done); q != VK_SUCCESS)
+            return disable(std::string("vkQueueSubmit: ") + vk_result_name(q));
+        e.pending = true;
+        VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+        pi.waitSemaphoreCount = 1;
+        pi.pWaitSemaphores = &e.rendered;
+        pi.swapchainCount = 1;
+        pi.pSwapchains = &w.swapchain;
+        pi.pImageIndices = &image;
+        VkPresentTimeGOOGLE when{static_cast<uint32_t>(2 * total_generated_ + 1),
+                                 static_cast<uint64_t>(first_ns + (k - 1) * spacing_ns_)};
+        VkPresentTimesInfoGOOGLE times{VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE};
+        if (c->display_timing) {
+            times.swapchainCount = 1;
+            times.pTimes = &when;
+            pi.pNext = &times;
+        }
+        r = vkQueuePresentKHR(c->queue, &pi);
+        if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR)
+            return disable(std::string("vkQueuePresentKHR: ") + vk_result_name(r));
+        generated_++;
+        hud::generated_frame();
+        last_id_ = when.presentID;
+        total_generated_++;
+        last_present_ns_ = first_ns + (k - 1) * spacing_ns_;  // (the real one goes spacing_ns_ after this)
+    }
 }
 
 }  // namespace
@@ -721,6 +918,8 @@ void FrameGen::present(Window& w, Texture* t) {
 uint32_t swapchain_images(const VkSurfaceCapabilitiesKHR& caps) { return g_framegen.swapchain_images(caps); }
 
 int64_t reserved_ns() { return g_framegen.reserved_ns(); }
+
+int64_t spacing_ns() { return g_framegen.spacing_ns(); }
 
 int64_t present_generated(Window& w, Texture* t, uint32_t* id) {
     const uint64_t before = g_framegen.generated();

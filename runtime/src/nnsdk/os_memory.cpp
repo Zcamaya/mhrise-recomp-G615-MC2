@@ -234,3 +234,12 @@ void SetMemoryAllocatorForThreadLocal(void* (*allocate)(size_t, size_t), void (*
 void SetDyingMessageRegion(uintptr_t, size_t) {}
 
 }  // namespace nn::os
+
+namespace nnsdk {
+// Where the game's heap is now (for the cheats' heap-relative addresses): its start and its current size
+void heap_range(uintptr_t* base, size_t* size) {
+    std::lock_guard lock(g_m);
+    *base = g_base;
+    *size = g_heap_size;
+}
+}  // namespace nnsdk

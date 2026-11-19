@@ -437,7 +437,7 @@ bool Chain::build_images(std::string* why) {
         k.ui_threshold = 0.5f;
         memcpy(static_cast<uint8_t*>(mapped) + v * ubo_stride_, &k, sizeof k);
     }
-    vkUnmapMemory(c->device, ubo_memory_);
+    ubo_mapped_ = static_cast<uint8_t*>(mapped);  // (host-coherent: stays mapped for set_time)
 
     sampler_ = make_sampler(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_COMPARE_OP_NEVER, false);
     border_sampler_ = make_sampler(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_COMPARE_OP_NEVER, true);
@@ -657,6 +657,8 @@ void Chain::destroy() {
         if (s) vkDestroySampler(c->device, s, nullptr);
     if (pool_) vkDestroyDescriptorPool(c->device, pool_, nullptr);  // con él, sus sets
     memory_ = ubo_memory_ = VK_NULL_HANDLE;
+    ubo_mapped_ = nullptr;
+    time_ = 0.5f;
     ubo_ = VK_NULL_HANDLE;
     sampler_ = border_sampler_ = edge_sampler_ = VK_NULL_HANDLE;
     pool_ = VK_NULL_HANDLE;
@@ -726,6 +728,19 @@ void Chain::dispatch_delta(VkCommandBuffer cmd, int j, uint64_t n) const {
     for (int s = 1; s <= 4; s++) run(cmd, p.get(shader::kDelta[s]), d.sets[s - 1], e, 3);
     run(cmd, p.get(shader::kDelta[5]), d.sixth[n % kHistory], e, 3);
     for (int s = 6; s < kDeltaStages; s++) run(cmd, p.get(shader::kDelta[s]), d.sets[s - 2], e, 3);
+}
+
+// Every variant but the mipmaps' carries the generated picture's time: 0.5 for 2x, k / m for the k-th of m - 1
+bool Chain::set_time(float t) {
+    if (!ubo_mapped_) return false;
+    if (t == time_) return true;
+    for (int v = 0; v < kUboCount; v++) {
+        if (v == kUboMipmaps) continue;
+        Constants* k = reinterpret_cast<Constants*>(ubo_mapped_ + v * ubo_stride_);
+        k->timestamp = t;
+    }
+    time_ = t;
+    return true;
 }
 
 void Chain::record_generate(VkCommandBuffer cmd, uint64_t n) const {

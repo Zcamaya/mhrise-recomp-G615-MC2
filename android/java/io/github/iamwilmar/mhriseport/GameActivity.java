@@ -290,7 +290,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     // ---- pictures for buttons, and layout files (the system's file picker answers in onActivityResult) ----------------
 
-    private static final int PICK_IMAGE = 41, EXPORT_LAYOUT = 42, IMPORT_LAYOUT = 43;
+    private static final int PICK_IMAGE = 41, EXPORT_LAYOUT = 42, IMPORT_LAYOUT = 43, IMPORT_MOD = 44, IMPORT_CHEATS = 45, IMPORT_DRIVER = 46, IMPORT_DLL = 47;
     private Controls.Ctl imageFor;      // the control a picked image goes to
     private Runnable afterPick;         // the menu or the editor's dialog, shown again
 
@@ -314,6 +314,54 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         start(i, IMPORT_LAYOUT);
     }
 
+    // Settings → Mods & cheats: a mod's zip or a cheat file, copied into the mods folder (ModFiles), then the menu again
+    void importMod() {
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
+                        "application/octet-stream"}), IMPORT_MOD);
+    }
+
+    void importCheats() {
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"text/plain", "application/octet-stream"}), IMPORT_CHEATS);
+    }
+
+    // Settings → GPU driver and Frame generation
+    void importDriver() {
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
+                        "application/octet-stream"}), IMPORT_DRIVER);
+    }
+
+    void importLosslessDll() {
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), IMPORT_DLL);
+    }
+
+    private void importInto(int request, Uri uri) {
+        File data = SettingsMenu.gameFolder(this);
+        if (uri == null || data == null) {
+            new SettingsMenu(this, controls).show();
+            return;
+        }
+        Toast.makeText(this, "Adding it…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String done;
+            try {
+                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importZip(getContentResolver(), uri, data);
+                else if (request == IMPORT_CHEATS) done = "Cheats added: " + ModFiles.importCheats(getContentResolver(), uri, data);
+                else if (request == IMPORT_DRIVER) done = "Driver added: " + Drivers.unpack(this, uri) + ". Choose it in the list to use it.";
+                else done = "Lossless.dll imported (" + Drivers.importDll(this, uri, data) + "). It's used from the next start.";
+            } catch (java.io.IOException | RuntimeException e) {
+                done = "Couldn't add it: " + e.getMessage();
+            }
+            final String msg = done;
+            runOnUiThread(() -> {
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+                if (!isFinishing()) new SettingsMenu(this, controls).show();
+            });
+        }, "ModImport").start();
+    }
+
     private void start(Intent i, int request) {
         pad.releaseAll();
         try {
@@ -327,7 +375,9 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
-        if (request == PICK_IMAGE) {
+        if (request == IMPORT_MOD || request == IMPORT_CHEATS || request == IMPORT_DRIVER || request == IMPORT_DLL) {
+            importInto(request, uri);
+        } else if (request == PICK_IMAGE) {
             if (uri != null && imageFor != null) {
                 try {
                     controls.setImage(imageFor, LayoutFiles.readImage(getContentResolver(), uri));

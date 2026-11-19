@@ -1,63 +1,54 @@
 <p align="center"><img src="docs/icon.png" width="128" alt=""></p>
 
-# Monster Hunter Rise port for Retroid Pocket 5 & Flip 2
+# Monster Hunter Rise for Android
 
-**Made for the Adreno 650.** A native Android port of the console version of **Monster Hunter Rise**, built exclusively for the
-**Retroid Pocket 5** and the **Retroid Pocket Flip 2** (Snapdragon 865), from **your own copy** of the game. The game's
-own ARM64 code runs directly on the device's CPU, while this project reimplements the parts of the console it talks to.
+A native Android port of the Switch version of **Monster Hunter Rise**, made from **your own copy** of the game. It
+isn't an emulator: the game's own ARM64 code runs straight on the phone's CPU, and this project rewrites the parts of the
+console it talks to (files, threads, input, audio, and the NVN graphics API on top of Vulkan).
 
-> **Free, unofficial fan project.** Not affiliated with, endorsed or sponsored by the console maker or
-> Capcom. All trademarks belong to their owners. This repository contains **no game code and no game assets**. To use
-> it you need a copy of the game that you bought, with its files extracted on your own console.
+> **Free, unofficial fan project.** Not affiliated with, endorsed or sponsored by Nintendo or Capcom. All trademarks
+> belong to their owners. This repository has **no game code and no game assets**: you need a copy of the game you
+> bought, with its files extracted on your own console.
+
+This started as [IamWilmar's port](https://github.com/IamWilmar/mhrise-recomp) for the Retroid Pocket 5 and Flip 2
+(Snapdragon 865). This fork takes it to phones in general: other Adrenos, Mali, Xclipse and PowerVR, stock drivers
+and custom ones, high end and low end.
 
 ## Status
 
-**Release 1.2.0 — playable.** Kamura village and hunts run at a locked 30 fps: when a scene gets too heavy the
-port lowers the game's internal resolution for a moment (dynamic resolution) instead of dropping frames. Upscaled to
-1080p with AMD FSR 1. Sunbreak and the other DLC load if you provide them.
+**Playable.** Kamura, the hunts and Sunbreak (if you have it) run. When a scene gets too heavy the game's internal
+resolution drops for a moment instead of the frame rate, and FSR 1 scales the picture up to your screen.
 
-- First visits to new areas can hitch while shaders are compiled; it gets smoother as the shader cache fills up.
-- Known issues: occasional speckles on the first loading screen after choosing a save; some effects may look wrong.
+- The first visit to a place can hitch while its shaders are built. They're cached, so it gets smoother as you play.
+- Some effects may still look wrong on some GPUs. A bug report from the menu (see below) is the quickest way to get
+  one fixed.
 
-## Why only the Retroid Pocket 5 and Flip 2
+## Phones and GPUs
 
-This port was written for one chip, the **Snapdragon 865 with its Adreno 650 GPU**, and tuned to its limits instead of
-trying to run everywhere:
-
-- **Run the game, not a whole console.** Translating the full console system costs CPU, GPU and memory this chip does not
-  have to spare. Here the game's own ARM64 code runs natively and only what it actually calls (files, threads, input,
-  audio, graphics) is reimplemented, so almost the whole device is left for the game.
-- **Built around the Adreno 650 and its stock Qualcomm Vulkan driver** (Vulkan 1.1). The graphics layer uses exactly the
-  features this driver offers and works around its quirks; for example, GPU shader code that relies on features the
-  Adreno 650 only has in compute shaders is rewritten so it renders correctly.
-- **A 33 ms budget per frame.** The GPU usually runs at ~587 MHz, so the target is a **locked 30 fps**: the game renders
-  at its handheld resolution (around 720p) and AMD FSR 1 upscales it to the 1080p screen. Where a game can get heavier
-  than that budget, the internal resolution drops for a moment instead of the frame rate.
-- **About 2.7 GB of free memory** out of 8 GB while a game runs. GPU caches have fixed limits so a big area never
-  pushes the game out of memory, and translated shaders are stored on the device so each one is only built once.
-- **Eight cores, used deliberately.** The game's threads run on the four big Cortex-A77 cores; background work (shader
-  building, pipeline compiling) goes to the small Cortex-A55 cores so it does not steal time from the game.
-- **Optional frame generation** to show ~60 fps, only when the GPU has room left after the real 30.
-
-Developed and tested on the **Retroid Pocket Flip 2** (Android 13). The **Retroid Pocket 5** has the same chip, memory and
-driver, so it should behave the same. Other Snapdragon 865 / Adreno 650 devices might work but are untested.
-
-**Other phones (experimental, untested).** The port now also tries to run on other GPUs and on weaker phones:
-
-- **Mali (MediaTek, Exynos) and PowerVR** can't read the BC texture formats the game uses. On those, each texture is
-  decompressed on the CPU as it loads (BC1 to BC7, checked against a reference decoder) and kept uncompressed. Loading
-  takes longer and textures use 4 to 8 times the memory.
+- **Adreno** (Snapdragon): Qualcomm's own driver or Turnip. You can also load a driver of your own from a `.zip` in the
+  usual AdrenoTools format (Settings → GPU driver, or on the start screen); if the game can't draw with it,
+  the app goes back to the system driver by itself and tells you why.
+- **Mali** (MediaTek, Google Tensor, some Exynos): ARM's driver or PanVK. Mali can't read the game's BC textures, so
+  they're decoded on the GPU or re-encoded to ASTC (in the background, with a cache so each texture is only done
+  once).
+- **Xclipse** (Exynos 2200 and newer): BC textures handled as on Mali, and the shader fixes these AMD-based GPUs need.
 - **PowerVR:** pipelines are built on one thread, because its shader compiler crashes building several at once.
-- **GPUs without multi-viewport** get shaders that don't ask for it.
-- **Phones with less than 5 GB of RAM** keep smaller caches (spare staging and buffer mirrors at half).
-- Other Adreno generations (6xx, 7xx) use the same Qualcomm paths as the Adreno 650.
-- **A GPU driver of your own (Adreno only).** If the stock driver draws parts of the game black or refuses some of its
-  shaders (seen on an Adreno 730), *GPU driver* (in the in-game settings, under Graphics, or on the start screen) adds a
-  driver from a `.zip` in the usual AdrenoTools format (`meta.json` plus the `.so`, e.g. a Turnip build) and uses it from
-  the next start, through [libadrenotools](https://github.com/bylaws/libadrenotools). If the game can't draw with it, it
-  goes back to the system's driver by itself and the screen says why.
+- **Low memory** (under 5 GB): smaller caches.
+- **Benchmark builds** (`-antutu` and `-ludashi` APKs): the same app under a benchmark's package name, which many
+  MediaTek and Chinese-brand phones run at full clocks.
 
-None of this has been tested on such a device yet: the log (`log.txt` in the game folder) says what the port chose.
+The log (`log.txt` in the data folder) says what the port picked for your phone.
+
+## What's in it
+
+- **Touch controls** laid out like a real controller, with a full editor (size, position, opacity, your own pictures
+  and shapes), combos and turbo, plus any USB or Bluetooth controller.
+- **Settings menu** in the game: resolution, aspect ratio, FPS limit, shadows, effects, overlay stats (FPS, frame time,
+  CPU, GPU, RAM, temperature), Local Play and more.
+- **Frame generation:** a built-in one (three quality levels), or Lossless Scaling's if you have its DLL.
+- **Mods and cheats** like Eden: add a mod's zip, turn each one on or off, and use Atmosphere cheat files with a
+  toggle per cheat.
+- **Local Play** over Wi-Fi with other copies of the port.
 
 ## What you need
 
@@ -77,7 +68,7 @@ about the app itself are always welcome in the issues; just please don't share o
 
 ## Install and first run
 
-1. Download `mhriseport-vX.Y.Z.apk` from the [latest release](https://github.com/IamWilmar/mhrise-recomp/releases/latest) (or build
+1. Download `mhriseport-vX.Y.Z.apk` from the [latest release](https://github.com/klark231/mhrise-recomp/releases/latest) (or build
    it yourself, below) and install it on the device.
 2. Copy your extracted game folders to the device, anywhere you like (for example one folder `MHRise` with the ExeFS
    and RomFS folders inside).
@@ -106,10 +97,9 @@ may stutter while its shaders are translated and compiled; they are cached for t
 
 ## Controls and the settings panel
 
-- **The face buttons follow the device's controller mode.** In both of the Retroid's modes (Xbox and Retro) every button
-  does what the button in that same place does on the game's original console: B at the bottom, A on the right, X on top,
-  Y on the left. You can change the mode from the quick settings while the game is running. Any other controller, over
-  USB or Bluetooth (a DualSense, for example), is read by position too: its bottom button is B.
+- **Controllers are read by position.** Whatever is printed on them, the bottom face button is B, the right one A, the
+  top one X and the left one Y, as on the game's own console. That goes for a handheld's built-in controls and for any
+  pad over USB or Bluetooth (a DualSense, for example).
 - **Settings panel.** Swipe in from the right edge of the screen (the system's back gesture, the one that shows an arrow)
   and a panel slides out over the game. It has a switch for the FPS counter (your choice is remembered) and *Change
   folder*, which brings the folder screen back the next time you open the app. The same swipe, a tap outside the panel
@@ -147,7 +137,7 @@ may stutter while its shaders are translated and compiled; they are cached for t
 ## Options
 
 The in-game settings menu (the gear of the touch controls) sets the common ones by section; choices with more than two options open a drop-down, and Display > Menu size scales the menu's text: **Display** (base
-resolution, dynamic resolution, FSR, FPS limit, FPS counter), **Graphics** (shadows, texture arrays, anisotropic filtering, GPU driver),
+resolution, dynamic resolution, FSR, FPS limit, FPS counter), **Graphics** (shadows, texture arrays, anisotropic filtering), **GPU driver** (the system's or one of your own), **Frame generation** (on/off, generator, Quality Preset, Lossless.dll),
 **Performance** (performance hints, fast cores, low memory, shader warm-up, pipelines on one thread), and the touch
 controls, combos and controller. Underneath, each is a `name = value` line (`1` is on) in `mhr.ini` in your data
 folder, which the game checks once a second; the ones only read at start-up say so. You can edit `mhr.ini` by hand
@@ -156,8 +146,9 @@ with adb); changing that setting in the menu moves it into the ini.
 
 | Name | Effect |
 |---|---|
-| `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam): import it from the GPU driver screen (it's copied into the app), or copy it into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. Read at start-up. Its flow scale (how finely it follows motion) is 25 % by default; `lsfg_flow_50` / `lsfg_flow_100` (GPU driver screen → Frame generation → Quality) are sharper and heavier. |
-| `lsfg/motion.*`, `shaders/fg_*.comp` | The built-in frame generator: no Lossless.dll, plain Vulkan 1.1 compute. Dense optical flow both ways (A to B and B to A) by inverse search, the method of Kroeger et al., *Fast Optical Flow using Dense Inverse Search* (ECCV 2016): a luma pyramid from a quarter of the picture down to 1/32, 8x8 patches every 4 texels refined by Lucas-Kanade against the template's own gradients, then densified per texel by how well each patch fits there. The picture between follows both flows back, uses a forward-backward check to tell covered from uncovered areas and takes those from the frame that sees them, and keeps still pixels such as the HUD unwarped; bicubic samples. Quality (GPU driver screen → Frame generation → Quality, the same `lsfg_flow_50` / `lsfg_flow_100` switches as LSFG's flow): the finest flow level at 1/4 of the picture (Light, default), 1/3 (Balanced) or 1/2 (Sharp). Used when there's no DLL or Lossless's chain can't run on the GPU, or always with `fg_builtin` (GPU driver screen → Frame generation → Generator). Turned on with `lsfg`, as before. |
+| `lsfg/` | Frame generation (Lossless Scaling's LSFG) to show ~60 fps. Needs **your own** `Lossless.dll` from the Windows app *Lossless Scaling* (sold on Steam): import it in Settings → Frame generation or on the start screen's GPU driver page (it's copied into the app), or copy it into that `lsfg` folder or to `Download/Lossless.dll`. Not included here. Read at start-up. Its flow scale (how finely it follows motion) is 25 % by default; `lsfg_flow_50` / `lsfg_flow_100` (Settings → Frame generation → Quality Preset) are sharper and heavier. |
+| `lsfg/motion.*`, `shaders/fg_*.comp` | The built-in frame generator: no Lossless.dll, plain Vulkan 1.1 compute. Dense optical flow both ways (A to B and B to A) by inverse search, the method of Kroeger et al., *Fast Optical Flow using Dense Inverse Search* (ECCV 2016): a luma pyramid from a quarter of the picture down to 1/32, 8x8 patches every 4 texels refined by Lucas-Kanade against the template's own gradients, then densified per texel by how well each patch fits there. The picture between follows both flows back, uses a forward-backward check to tell covered from uncovered areas and takes those from the frame that sees them, and keeps still pixels such as the HUD unwarped; bicubic samples. Quality Preset (Settings → Frame generation, the same `lsfg_flow_50` / `lsfg_flow_100` switches as LSFG's flow): the finest flow level at 1/4 of the picture (Light, default), 1/3 (Balanced) or 1/2 (Sharp). Used when there's no DLL or Lossless's chain can't run on the GPU, or always with `fg_builtin` (Settings → Frame generation → Generator). Turned on with `lsfg`, as before. |
+| `fg_target_60`, `fg_target_90`, `fg_target_120` | Adaptive frame generation (Settings → Frame generation → Target): instead of one generated picture per real frame, as many as reach the target (up to three), placed evenly between the real ones (at 1/3 and 2/3, say), never more than the screen's refreshes between two real frames. A new multiplier has to hold for 15 real frames before it's used. With Lossless Scaling's generator each extra picture waits for the one before on the GPU; the built-in one only redoes its last pass. Applies at once. |
 | `resolution_240`, `resolution_360`, `resolution_432`, `resolution_480`, `resolution_576`, `resolution_648`, `resolution_720` | Base resolution of the 3D scene: 427x240 (the lowest, for the weakest GPUs; FSR helps the upscale), 640x360, 768x432, 854x480 (lower, for weak GPUs), 1024x576, 1152x648 or 1280x720 instead of the game's 960x540 (720p fills the whole 720p picture, with no scaling inside the game). In docked mode, the same ratios of the docked scene. Live. |
 | `aspect_4_3`, `aspect_21_9`, `aspect_16_10`, `aspect_stretch` | Aspect ratio, like Eden's: the picture in the largest rectangle of that shape on the screen, centred, black around it. None of them: 16:9, the game's own (black bars at the sides on a long phone). `aspect_stretch` fills the screen. Display → Aspect ratio. Live. |
 | `dock_mode` | Docked mode: the game believes it's on the dock (1080p TV picture, about twice the pixels, and the controls as player 1's Pro Controller). For strong GPUs. Read at start-up. |
@@ -167,6 +158,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `sync_astc` | On Mali (BC textures stored as ASTC), a big texture level that isn't in the ASTC cache yet is encoded by a background thread instead of inside the frame, and drawn from its next smaller mip until it's ready (a moment of blur instead of a freeze, the first time a monster's or effect's textures load). This switch encodes them in the frame, as before. Live. |
 | `no_robust` | On Mali, robust buffer access is on by default: a shader reading past the end of a buffer gets 0 instead of a GPU page fault (`GROUP_ERROR_FATAL` in the log), which on Mali drops the whole batch of work and leaves black or magenta screens. This turns it off (Settings → Debug → Driver workarounds). `robusto` turns it on on other GPUs. At start-up. |
 | `cutout` | Expand into the cutout (Settings → Display): the game's window also covers the strip beside the camera cutout, as Eden and Azahar can. Next start. |
+| `gpu_unswizzle` | GPU texture unswizzle (Settings → Performance, off by default): textures go to the GPU in the console's tiled order, one straight copy, and a compute shader puts them in rows there instead of the CPU, like Eden's option. Less stutter when areas and monsters load. Not for textures decoded or re-encoded on the CPU. Applies at once. |
 | `system_bars` | Show Android's bars (Settings → Display): keeps the status and navigation bars on screen. By default both are hidden while playing (a swipe in from the edge shows them for a moment), so three-button navigation no longer sits over the game. |
 | `no_hud_heat` | Hides the overlay's HEAT line (Android's thermal headroom: 100 % is hard throttling). |
 | `tight_barriers` | Skip empty GPU barriers (Settings → Performance, off by default): the full barriers with nothing recorded since the previous one (about half of the ~250 a frame) are skipped; each still drained the GPU on Turnip. Live. |
@@ -183,7 +175,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `shadow_half`, `shadow_quarter` | Shadow maps at half or a quarter of the game's own size (never below 256), through the game's own shadow setting (the PC version's shadow quality). Blurrier edges, much less GPU work. Live. MH Rise 16.0.1 only. |
 | `model_detail_low`, `model_detail_lowest`, `model_detail_min`, `model_detail_high` | Scales the game's mesh LOD rate (the PC version's mesh quality) by 0.75, 0.5, 0.25 or 1.5. Live. MH Rise 16.0.1 only. |
 | `texture_bias_1`, `texture_bias_2` | The texture streamer skips one or two more of the largest mip levels (the game's TextureLoadLevelBias). Live. MH Rise 16.0.1 only. |
-| `60fps` | Unlocks 60 fps mode (the Flip 2 GPU reaches ~45 in the village, less in hunts). |
+| `60fps` | Unlocks 60 fps mode (needs a strong GPU: most phones won't hold it in hunts). |
 | `no_fps` | Hides the FPS counter (the same switch as in the settings panel). |
 | `xbox_buttons`, `retro_buttons` | Force the face buttons to be read by position (`xbox_buttons`) or by name (`retro_buttons`) if a controller comes out swapped. |
 | `bc_on_cpu` | Decompresses BC textures on the CPU even where the GPU reads them, the way Mali and PowerVR GPUs need (to try that path on an Adreno). |
@@ -294,11 +286,10 @@ If the problem is hard to catch with the menu open, turn on **Capture button** i
 then sits over the game: tap it to capture the frame you're looking at (it turns green when the frame is saved), hold
 it to save the report, and drag it wherever it's out of the way.
 
-## Support
+## Credits
 
-Everything here is free and stays free: every build is public and the same for everyone, and donations do not unlock
-anything. If this port saved you a weekend and you want to say thanks, you can buy me a coffee at
-[ko-fi.com/iamwilmar](https://ko-fi.com/iamwilmar). It helps me keep working on these ports. Thank you!
+The port itself is [IamWilmar](https://github.com/IamWilmar)'s work; this fork builds on it. If you'd like to thank
+him, he has a Ko-fi at [ko-fi.com/iamwilmar](https://ko-fi.com/iamwilmar).
 
 ## License
 
@@ -316,19 +307,16 @@ CPU y este proyecto reimplementa el SDK de la consola y la API gráfica NVN sobr
   carpetas normales. Salen de tu propia copia: si tu consola tiene firmware modificado, sus herramientas homebrew los
   extraen. La app solo lee esas carpetas y te dice qué falta si algo no está. Este repositorio no tiene código ni
   archivos del juego.
-- Descarga la APK de [Releases](https://github.com/IamWilmar/mhrise-recomp/releases/latest) e instálala. Copia esas carpetas al
+- Descarga la APK de [Releases](https://github.com/klark231/mhrise-recomp/releases/latest) e instálala. Copia esas carpetas al
   dispositivo, abre la app, dale el permiso de archivos, elige la carpeta y pulsa *Iniciar juego*.
   Las partidas y la caché de shaders se guardan en esa misma carpeta.
-- Hecho exclusivamente para la Retroid Pocket 5 y la Retroid Pocket Flip 2 (Snapdragon 865, Adreno 650): todo está
-  ajustado a ese chip y a sus límites (30 fps fijos con presupuesto de 33 ms por frame, ~2,7 GB de memoria libre, núcleos
-  grandes para el juego). Probado en la Flip 2.
-- Los botones quedan donde están en la consola original del juego en los dos modos del mando de la Retroid (Xbox y
-  Retro), y cualquier otro mando, por USB o Bluetooth, se lee por posición. Deslizando un dedo desde el borde derecho de
+- Funciona en móviles en general: Adreno (driver de Qualcomm o Turnip), Mali (driver de ARM o PanVK), Xclipse y
+  PowerVR. Empezó como el port de IamWilmar para la Retroid Pocket 5 y la Flip 2.
+- Los mandos se leen por posición, por USB o Bluetooth, y hay controles táctiles con editor. Deslizando un dedo desde el borde derecho de
   la pantalla sale un panel de ajustes, con el interruptor del contador de FPS y el de volver a elegir la
   carpeta. Con la carpeta ya elegida, la app abre el juego directamente.
 - Proyecto de fans, gratis (las donaciones son opcionales y no desbloquean nada), sin relación con el fabricante de la consola ni
   con Capcom.
-- Si quieres apoyar el trabajo: [ko-fi.com/iamwilmar](https://ko-fi.com/iamwilmar). Es opcional y no desbloquea nada: todas las versiones son gratis e iguales para todos.
 
 ## Mods
 
@@ -338,4 +326,18 @@ under `romfs/natives/NSW/...`). A mod's file takes the place of the game's with 
 has none. With several mods, the first by folder name wins for a file both have. To switch a mod off without
 deleting it, start its folder name with `#`. Mods are read when the game starts; the log lists each one (`[fs] mod:`)
 and the first files it served (`[fs] mod file:`). Your game folder is never changed.
+
+Settings → **Mods & cheats** does the same from the app: **Add a mod (.zip)** takes a zip made for Eden or Yuzu (it
+finds the `romfs`/`cheats` folders inside, or a bare `natives/...` tree), and each mod gets an on/off row and can be
+removed. `exefs` patches aren't used.
+
+### Cheats
+
+Atmosphere cheats, the same files Eden and Yuzu read: `<data folder>/mods/<mod name>/cheats/<build id>.txt`. The menu
+shows this game's build ID, lists every cheat of the mods that are on, and turns each one on or off (`cheat_<hash>` in
+mhr.ini); a change starts working within a second, no restart. **Add a cheat file (.txt)** puts a loose file into a
+mod of its own, and refuses one named after another build ID (another game version). The game's own code runs natively
+here, so cheats behave as on the console: pointer chains from main and code patches work. A cheat with a fixed heap
+offset may miss, because this port's heap hands out memory in its own order. The log says which cheats are on and why
+one stopped (`[cheats]`).
 

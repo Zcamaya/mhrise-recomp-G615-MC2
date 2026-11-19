@@ -16,6 +16,7 @@ endif()
 # define se enlaza al juego con prioridad sobre bionic y sobre los stubs.
 add_library(nnsdk SHARED
   src/nnsdk/account.cpp
+  src/nnsdk/cheats.cpp
   src/nnsdk/audio.cpp
   src/nnsdk/codec.cpp
   src/nnsdk/cxx.cpp

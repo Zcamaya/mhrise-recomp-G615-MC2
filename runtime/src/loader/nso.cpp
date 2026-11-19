@@ -146,6 +146,7 @@ bool load_nso(const std::string& path, Module& mod, std::string& err) {
     }
     mod.name = path.substr(path.find_last_of('/') + 1);
     mod.bss_size = rd<uint32_t>(h + 0x3C);
+    memcpy(mod.build_id, h + 0x40, sizeof mod.build_id);
     mod.size = page_up(size_t{mod.seg_off[2]} + mod.seg_size[2] + mod.bss_size);
     void* mem = mmap(nullptr, Module::kPatchAreaSize + mod.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
                      -1, 0);
