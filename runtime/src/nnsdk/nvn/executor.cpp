@@ -2046,6 +2046,18 @@ private:
         uint64_t checked = 0;         // submit_index_ de la última revisión
         uint64_t used_frame = 0, used_submit = 0;  // último frame y envío de Vulkan que lo usaron (para soltarlo)
         bool unread = false;  // revisado por preload_mirrors y sin leer aún en este envío (ver cpu_wrote_mirrors)
+        // Direct mirrors (see promote_mirror): one the game rewrites whole frame after frame (MH Rise's 4 MB rings of
+        // per-frame data, ~8 of them after a quest) gets three copies in memory the CPU writes and the GPU reads, used in
+        // turn: each change is a memcpy into the copy no submit in flight is reading, and that one is bound. No staging,
+        // no vkCmdCopyBuffer, no barriers, no render pass cut. buffer is the copy in use.
+        static constexpr int kVersions = 3;
+        bool direct = false;
+        int hot = 0;  // checks in a row that rewrote (nearly) all of it
+        int cur = 0;
+        VkBuffer versions[kVersions]{};
+        VkDeviceMemory version_memory[kVersions]{};
+        uint8_t* version_data[kVersions]{};
+        uint64_t version_submit[kVersions]{};  // the last submit that read each copy
     };
     static constexpr uint64_t kMirrorMin = 1ull << 20, kMirrorPage = 64ull << 10, kMirrorBudget = 384ull << 20;
     std::map<uint64_t, Mirror> mirrors_;  // por dirección de inicio
@@ -2060,7 +2072,7 @@ private:
         if (t.storage && !mirrors_.empty())
             note_gpu_write_vs_mirrors(reinterpret_cast<uintptr_t>(t.storage), t.layout.total_size(), what);
     }
-    uint64_t mirror_bytes_ = 0, prof_mirror_bytes_ = 0;
+    uint64_t mirror_bytes_ = 0, prof_mirror_bytes_ = 0, prof_mirrors_direct_ = 0, prof_direct_bytes_ = 0;
     // may_upload = false (con el render pass ya empezado): solo uno revisado en este envío.
     const Mirror* mirror(uint64_t address, uint64_t size, VkDeviceSize* offset, bool may_upload = true);
     // Los espejos del último frame, revisados al empezar cada envío (ver preload_mirrors); <datos>/no_mirrors_at_start: no.
@@ -2078,6 +2090,7 @@ private:
     bool mirror_batch_ = false, mirror_batch_barrier_ = false;  // dentro de preload_mirrors: una barrera para todos
     uint64_t prof_mirror_preloads_ = 0;  // perfil: espejos con páginas subidas al empezar el envío
     void destroy_mirror(Mirror& m);
+    bool promote_mirror(Mirror& m);  // the three copies of a direct mirror; false: it stays as it was
     // Multi-draw: no se sabe qué índices lee cada draw; su espejo es una ventana del memory pool que empieza en el
     // bloque de 8 MB de la dirección y sigue 24 MB (o hasta el final del pool): todos los de un bloque la comparten.
     static constexpr uint64_t kIndexWindowAlign = 8ull << 20, kIndexWindow = 24ull << 20;
@@ -8480,7 +8493,7 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
     if (!may_upload && (!m || m->checked != submit_index_)) return nullptr;
     if (!m) {
         if (auto it = mirrors_.find(address); it != mirrors_.end()) {  // más pequeño que esto: se sustituye
-            mirror_bytes_ -= it->second.size;
+            mirror_bytes_ -= it->second.size * (it->second.direct ? Mirror::kVersions : 1);
             retired_mirrors_.push_back(std::move(it->second));
             mirrors_.erase(it);
         }
@@ -8531,6 +8544,7 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
     m->used_submit = submitted_.load(std::memory_order_relaxed) + 1;
     *offset = address - base;
     m->unread = mirror_batch_;
+    if (m->direct) m->version_submit[m->cur] = m->used_submit;
     if (m->checked == submit_index_) return m;
     // Revisión: las páginas que cambiaron (todas la primera vez), en tramos seguidos, por el staging. Vigilado, lo
     // dicen las escrituras que saltaron (y las páginas quedan cerradas antes de copiarlas); si no, el hash.
@@ -8558,6 +8572,40 @@ const Executor::Mirror* Executor::mirror(uint64_t address, uint64_t size, VkDevi
     check_timer.reset();
     uint64_t copy_bytes = 0;
     for (auto [run_at, run_len] : byte_runs) copy_bytes += run_len;
+    if (!m->direct && copy_bytes) {
+        m->hot = copy_bytes * 4 >= m->size * 3 ? m->hot + 1 : 0;
+        if (m->hot >= 8 && !m->pages.empty() && !NVN_FLAG("no_direct_mirrors")) promote_mirror(*m);
+    }
+    if (m->direct) {
+        // A copy no submit in flight reads (the in-use one read by this submit too: never that one); none free, the
+        // oldest once its submit is done. Then all of it from the game's memory: a direct mirror changes whole.
+        m->checked = submit_index_;
+        if (!copy_bytes) return m;
+        const uint64_t done = completed_.load(std::memory_order_acquire);
+        int pick = -1;
+        for (int k = 1; k <= Mirror::kVersions && pick < 0; k++) {
+            const int v = (m->cur + k) % Mirror::kVersions;
+            if (v != m->cur && m->version_submit[v] <= done) pick = v;
+        }
+        if (pick < 0) {
+            int oldest = (m->cur + 1) % Mirror::kVersions;
+            for (int v = 0; v < Mirror::kVersions; v++)
+                if (v != m->cur && m->version_submit[v] < m->version_submit[oldest]) oldest = v;
+            if (m->version_submit[oldest] > submitted_.load(std::memory_order_relaxed) ||
+                !wait_submit_fence(m->version_submit[oldest], 250'000'000))
+                return m;  // (nothing to write into: this submit reads the last copy, as a late upload would)
+            pick = oldest;
+        }
+        std::optional<LoadTimer> copy_timer2;
+        copy_timer2.emplace(*this, kLdMirrorCopy, m->size);
+        memcpy(m->version_data[pick], reinterpret_cast<const void*>(base), m->size);
+        prof_direct_bytes_ += m->size;
+        prof_mirror_top_[base] += m->size;
+        m->cur = pick;
+        m->buffer = m->versions[pick];
+        m->version_submit[pick] = submitted_.load(std::memory_order_relaxed) + 1;
+        return m;
+    }
     std::optional<LoadTimer> copy_timer;
     if (copy_bytes) copy_timer.emplace(*this, kLdMirrorCopy, copy_bytes);
     std::vector<std::pair<Staging::Alloc, VkBufferCopy>> copies;
@@ -8660,10 +8708,79 @@ bool Executor::index_window(uint64_t address, uint64_t* base, uint64_t* size) {
 
 void Executor::destroy_mirror(Mirror& m) {
     VkContext* c = vk();
+    if (m.direct) {
+        for (int v = 0; v < Mirror::kVersions; v++) {
+            if (m.versions[v]) vkDestroyBuffer(c->device, m.versions[v], nullptr);
+            if (m.version_memory[v]) vkFreeMemory(c->device, m.version_memory[v], nullptr);  // (unmapped with it)
+            m.versions[v] = VK_NULL_HANDLE;
+            m.version_memory[v] = VK_NULL_HANDLE;
+            m.version_data[v] = nullptr;
+        }
+        m.direct = false;
+        m.buffer = VK_NULL_HANDLE;  // (one of the versions)
+    }
     if (m.buffer) vkDestroyBuffer(c->device, m.buffer, nullptr);
     if (m.memory) vkFreeMemory(c->device, m.memory, nullptr);
     m.buffer = VK_NULL_HANDLE;
     m.memory = VK_NULL_HANDLE;
+}
+
+// See Mirror::direct. The device-local copy is retired (freed once the GPU is done with it). Host-visible memory is
+// the GPU's own on these phones (one memory for both); without a host-coherent type the mirror stays as it was.
+bool Executor::promote_mirror(Mirror& m) {
+    VkContext* c = vk();
+    if (mirror_bytes_ + m.size * Mirror::kVersions > (low_memory() ? kMirrorBudget / 2 : kMirrorBudget)) return false;
+    Mirror fresh;
+    for (int v = 0; v < Mirror::kVersions; v++) {
+        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bi.size = m.size;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        VkMemoryRequirements req;
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        void* data = nullptr;
+        bool ok = vkCreateBuffer(c->device, &bi, nullptr, &fresh.versions[v]) == VK_SUCCESS;
+        if (ok) {
+            vkGetBufferMemoryRequirements(c->device, fresh.versions[v], &req);
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = find_memory(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (ai.memoryTypeIndex == UINT32_MAX)
+                ai.memoryTypeIndex = find_memory(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            ok = ai.memoryTypeIndex != UINT32_MAX &&
+                 vkAllocateMemory(c->device, &ai, nullptr, &fresh.version_memory[v]) == VK_SUCCESS &&
+                 vkBindBufferMemory(c->device, fresh.versions[v], fresh.version_memory[v], 0) == VK_SUCCESS &&
+                 vkMapMemory(c->device, fresh.version_memory[v], 0, VK_WHOLE_SIZE, 0, &data) == VK_SUCCESS;
+        }
+        if (!ok) {
+            fresh.direct = true;  // (destroy_mirror frees what was made)
+            destroy_mirror(fresh);
+            return false;
+        }
+        fresh.version_data[v] = static_cast<uint8_t*>(data);
+    }
+    Mirror old;  // the device-local copy, retired
+    old.buffer = m.buffer;
+    old.memory = m.memory;
+    old.used_submit = submitted_.load(std::memory_order_relaxed) + 1;
+    retired_mirrors_.push_back(std::move(old));
+    for (int v = 0; v < Mirror::kVersions; v++) {
+        m.versions[v] = fresh.versions[v];
+        m.version_memory[v] = fresh.version_memory[v];
+        m.version_data[v] = fresh.version_data[v];
+        m.version_submit[v] = 0;
+    }
+    m.memory = VK_NULL_HANDLE;
+    m.direct = true;
+    m.cur = 0;
+    m.buffer = m.versions[0];
+    mirror_bytes_ += m.size * (Mirror::kVersions - 1);
+    prof_mirrors_direct_++;
+    NVN_LOG("espejo directo: %llu KB en 3 copias que lee la GPU (se reescribía entero en cada frame)\n",
+            static_cast<unsigned long long>(m.size >> 10));
+    return true;
 }
 
 // Los espejos sin usar en 10 s (o sustituidos) se sueltan cuando la GPU ya no los puede estar leyendo.
@@ -8679,7 +8796,7 @@ void Executor::reap_mirrors() {
         }
     for (auto it = mirrors_.begin(); it != mirrors_.end();)
         if (it->second.used_frame + 300 < frame_ && it->second.used_submit <= done) {
-            mirror_bytes_ -= it->second.size;
+            mirror_bytes_ -= it->second.size * (it->second.direct ? Mirror::kVersions : 1);
             destroy_mirror(it->second);
             it = mirrors_.erase(it);
         } else {
@@ -10947,10 +11064,12 @@ void Executor::profile_frame() {
             prof_sub_us_[0] / timed, prof_sub_us_[1] / timed, prof_sub_us_[2] / timed, prof_sub_us_[3] / timed,
             prof_dispatch_us_ / timed, prof_draw_total_us_ / timed);
     NVN_LOG("perfil: %.2f MB de uniform/storage buffers copiados por frame; espejos: %zu (%llu MB), %.2f MB subidos por frame "
-            "(%.1f al empezar el envío)\n",
+            "(%.1f al empezar el envío); %llu directos, %.2f MB/frame escritos en ellos\n",
             prof_copied_bytes_ / double(period) / 1048576.0, mirrors_.size(), static_cast<unsigned long long>(mirror_bytes_ >> 20),
-            prof_mirror_bytes_ / double(period) / 1048576.0, prof_mirror_preloads_ / double(period));
+            prof_mirror_bytes_ / double(period) / 1048576.0, prof_mirror_preloads_ / double(period),
+            static_cast<unsigned long long>(prof_mirrors_direct_), prof_direct_bytes_ / double(period) / 1048576.0);
     prof_mirror_bytes_ = 0;
+    prof_direct_bytes_ = 0;
     prof_mirror_preloads_ = 0;
     size_t bindless_layouts = 0;
     {

@@ -120,8 +120,8 @@ may stutter while its shaders are translated and compiled; they are cached for t
   lands on no control still reaches the game's touch screen.
 - **Controls menu.** The gear between − and + opens it:
   - *Touch:* on or off, opacity, size, vibration (off, light, medium, strong), sliding between buttons, the sticks' dead
-    zone, the tap for L3 / R3, camera swipe and its speed, and *Show / hide buttons*: a switch per control (turn the
-    right stick on there, and camera swipe off, to turn the camera with a stick).
+    zone, the tap for L3 / R3, and camera swipe and its speed (to turn the camera with a stick instead, show the right
+    stick in *Edit layout* and turn camera swipe off).
   - *Edit layout:* drag each control where you want it, change its size or hide it from the bar at the top, or put the
     traditional layout back. *Edit* opens the chosen control: a size slider and, for a button, its shape (circle,
     rounded square, square), an icon instead of its letters, and *Tap to hold* (a tap keeps it pressed until the next
@@ -199,6 +199,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_readback_copies` | Without `use_return`, the port still returns to the game's memory the buffers the game fills with a GPU copy out of GPU-written data, which is how it reads results back on the CPU. MH Rise's occlusion test works that way: without it the CPU saw zeros and never drew endemic life or wirebugs (they could still be gathered). This switch turns that off. Graphics → Occlusion results. Live. |
 | `capture_button` | A floating button over the game: tap to capture a frame, hold to save the report, drag to move it. Debug → Capture button. Live. |
 | `no_deferred_clear`, `no_store_ops`, `no_area` | The render pass shortcuts, one each: a clear folded into the next pass as loadOp CLEAR; storeOp DONT_CARE for what isn't read again; the render area cut to what's drawn. Off, the pass loads, stores and covers everything. For flicker that only shows with tiled rendering (Turnip in GMEM on Adreno 8xx). Debug → Driver workarounds (Adreno). Live. |
+| `no_direct_mirrors` | A mirror the game rewrites whole frame after frame (MH Rise's 4 MB rings of per-frame data: two in the village at first, about eight after a quest) normally becomes direct after 8 such frames: three copies in memory the CPU writes and the GPU reads, used in turn, so a change is a memcpy into the one no submit in flight reads, with no staging, GPU copy or barriers. This keeps them as ordinary mirrors. Live (for mirrors made from then on). |
 | `no_mirrors_at_start` | The mirrors (GPU copies of game buffers the shaders read) that were used in the last frame are no longer checked and uploaded together at the start of each submit, but by the first draw that reads each one, as before. That closed the render pass open at that moment and put two full barriers around each upload: after a quest, with about ten 4 MB buffers rewritten every frame, the depth pre-pass was split five times. Live. |
 | `perf_stats` | The profile lines ("perfil …": where the port's CPU time goes) every 10 seconds, without the rest of `verbose_log`. Debug → Performance stats. Live. |
 | `no_return_mali` | On Mali GPUs (ARM's driver and PanVK), the impossible branch Eden leaves after a switch is written as a plain return instead of an "unreachable", as on Qualcomm's driver, so the compiler can't make assumptions from it in the skinning shaders. This puts the "unreachable" back. Read at start-up. |

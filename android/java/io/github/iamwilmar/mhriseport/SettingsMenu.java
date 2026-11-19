@@ -689,7 +689,7 @@ final class SettingsMenu {
                         + "this off.",
                 () -> cfg.cameraSwipe ? 1 : 0, v -> {
                     cfg.cameraSwipe = v != 0;
-                    build();  // (the warning under Show / hide buttons)
+                    build();  // (the camera warning at the end of the page)
                 });
         number("Swipe speed", "How far the camera turns for the same drag.", 25, 300, 25, " %", () -> cfg.swipeSpeed,
                 v -> cfg.swipeSpeed = v);
@@ -723,22 +723,10 @@ final class SettingsMenu {
                     build();
                 });
 
-        header("Show / hide buttons");
-        note("Hidden controls aren't drawn and don't take touches; the area under them is the game's (and camera swipe's).");
+        // (showing and hiding each control is in Edit layout: Hide / Show on the chosen one)
         if (!cfg.shown[Controls.Ctl.RSTICK.ordinal()] && !cfg.cameraSwipe)
-            note("The right stick is hidden and camera swipe is off: nothing on the screen turns the camera.");
-        for (Controls.Ctl c : Controls.Ctl.values()) {
-            if (c == Controls.Ctl.MENU) continue;  // (always there: it's the way back to this menu)
-            if (c.combo() && cfg.combo[c.comboIndex()] == 0) continue;  // (an empty combo has no button)
-            final int k = c.ordinal();
-            String help = c == Controls.Ctl.RSTICK
-                    ? "Hidden by default: camera swipe turns the camera. Show it to turn the camera with a stick instead."
-                    : "Whether this control is on the screen.";
-            toggle(cfg.name(c), help, () -> cfg.shown[k] ? 1 : 0, v -> {
-                cfg.shown[k] = v != 0;
-                if (k == Controls.Ctl.RSTICK.ordinal()) build();  // (the warning above may change)
-            });
-        }
+            note("The right stick is hidden and camera swipe is off: nothing on the screen turns the camera. Show the stick "
+                    + "in Edit layout, or turn camera swipe on.");
     }
 
     private void buildCombos() {
