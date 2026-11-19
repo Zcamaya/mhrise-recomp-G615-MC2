@@ -7027,9 +7027,11 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     VkShaderModule modules[kStages] = {};
     uint64_t previous_for[kStages];  // (el previous_stores de la variante de cada etapa: ~0, la etapa tal cual)
     std::fill(std::begin(previous_for), std::end(previous_for), ~0ull);
-    // Los tipos de los atributos del vertex shader (vertex_input_types); <datos>/no_int_attribs al arrancar: todo
-    // float, como antes
-    static const bool typed_inputs = !NVN_FLAG("no_int_attribs");
+    // Los tipos de los atributos del vertex shader (vertex_input_types). Needed where the driver converts integer data
+    // declared as float (ARM's Mali driver: 5 becomes 5.0, and bone indices went to infinity); Adreno passes the bits
+    // through either way, and on Turnip the typed variants made characters flash, so off there by default.
+    // <data>/int_attribs or no_int_attribs (at start-up) force it on or off.
+    static const bool typed_inputs = NVN_FLAG("int_attribs") || (!NVN_FLAG("no_int_attribs") && vk()->props.vendorID != 0x5143);
     const uint64_t input_types = typed_inputs ? vertex_input_types(key, inputs) : 0;
     PipelineRecord rec;
     memset(&rec, 0, sizeof rec);

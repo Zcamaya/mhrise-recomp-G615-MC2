@@ -185,7 +185,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_quad_derivatives` | Where subgroup operations are off (ARM's driver), quad swaps still carry the game's hand-made derivatives in pixel shaders. This turns them off too, as before. Read when shaders are translated. |
 | `no_bindless_arrays`, `bindless_arrays` | Texture arrays in the shaders off or on (the menu's Graphics > Texture arrays). Auto, with neither: off with Qualcomm's own driver on an Adreno 7xx or 8xx (512.863 on an Adreno 730 rejected most of the scene's pixel shaders that index them, so things came out black), on elsewhere (Turnip, the Adreno 650). Read at start-up. |
 | `no_spirv_opt_brx` | Graphics shaders that contain a switch (a BRX) are normally also passed through spirv-opt, as compute shaders always were: the control flow Eden builds for a switch is what Qualcomm's driver miscompiled in the hunter's face skinning, and what a Mali-G615 hung on every frame. This turns that off. Read at start-up. |
-| `no_int_attribs` | Vertex attributes in integer formats (bone indices, IDs) are normally declared as integers in the vertex shader, so the shader receives their raw bits the way the Switch does. Mali GPUs converted them to floats when they were declared float, which made skinned characters stretch into spikes. This declares everything float again, as before. Read at start-up. |
+| `no_int_attribs`, `int_attribs` | Vertex attributes in integer formats (bone indices, IDs) declared as integers in the vertex shader, so it gets their raw bits the way the Switch does. Needed on Mali (ARM's driver converted them to floats: skinned characters stretched into spikes), so on by default there and on other non-Adreno GPUs. Off by default on Adreno, which passes the bits through anyway; with Turnip it made characters flash. `int_attribs` forces it on, `no_int_attribs` off (Debug → Integer vertex attributes). Read at start-up. |
 | `keep_dead_functions` | Helper functions that a translated shader never calls are normally removed before the shader goes to the driver, along with the "variable pointers" capability they bring. On Qualcomm's own driver (512.863) every pipeline with such a pixel shader was rejected, which left characters black. This sends Eden's SPIR-V unchanged. Read at start-up. |
 | `env.NAME = value` | Not a switch: lines of `mhr.ini` set in the environment before the GPU driver starts (`env.TU_DEBUG = nolrz,sysmem`). Mesa's drivers read their debug settings from them: Turnip (`TU_DEBUG=nolrz,sysmem,noubwc`, `FD_DEV_FEATURES=…`) and PanVK (`PANVK_DEBUG=…`). Debug → Driver environment writes them, with quick toggles for the Turnip ones; a `driver_env.txt` from earlier builds is moved into the ini when the menu opens. Read at start-up. |
 | `no_depth_bias` | The game's depth bias (nvnCommandBufferSetPolygonOffsetClamp) was ignored before: shadow maps drawn without it make the ground shadow itself, which shows as stripes and triangles flickering on the floor, and decals fight the terrain under them. Now it reaches Vulkan as a dynamic depth bias where the game turns it on. This goes back to ignoring it. Read at start-up. |
@@ -288,6 +288,29 @@ No terminal needed. In the game, open the settings menu (the gear) → Debug →
 If the problem is hard to catch with the menu open, turn on **Capture button** in the same place. A small round button
 then sits over the game: tap it to capture the frame you're looking at (it turns green when the frame is saved), hold
 it to save the report, and drag it wherever it's out of the way.
+
+## Saves
+
+Settings → **Saves** handles the save in the data folder's `save/`, which is in the Switch's format:
+
+- **Export (Switch, Eden)**: a zip of `data001Slot.bin` and `data00-1.bin`, which work as they are on a Switch (JKSV,
+  Checkpoint), in Eden or Yuzu, or in another copy of the port.
+- **Import a save**: from a zip or a folder. A Switch save goes in as it is. A Steam save (`win64_save`) is converted:
+  it's decrypted with the Steam ID of its account (read from its `SS1_*` files, a Goldberg/GSE `configs.user.ini` or a
+  `userdata/<id>/` path when it has one, asked for when not), then filled into the layout of the save already here. The
+  save that was here goes to `save_backups/` first (the last 10 are kept, **Restore a backup** brings one back). Close
+  the game afterwards: it still has the old save loaded.
+- **Export for Steam**: the save converted to the PC version's, in `win64_save/`, to copy into Steam's
+  `...\1446780\remote\win64_save` (with the game closed, and Steam Cloud off for it, or it may bring the old one back).
+  The PC version encrypts saves with a key made from the Steam ID, so once you've imported a Steam save here the export
+  is encrypted for that account; before that it comes out plain, for a save editor such as
+  [ree-save-editor](https://github.com/kvasszn/ree-save-editor) to encrypt.
+- **Convert a save**: the same conversions into a zip, without touching the port's save.
+
+The two versions don't have quite the same fields, and the game lays its data out counting from the start of the file,
+which isn't the same on each, so a converted save is rebuilt rather than copied: the other platform's save gives the
+layout (this port's own save going to the Switch, the last Steam save imported going to Steam) and the converted one
+gives every value both have. Have a save of your own on the target side for the best result.
 
 ## Credits
 

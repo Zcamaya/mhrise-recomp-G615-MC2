@@ -124,7 +124,7 @@ final class SettingsMenu {
     private String[] sectionNames() {
         return new String[] {"Display", "Graphics", "GPU driver", "Frame generation", "Performance",
                 "Touch controls", "Combos", "Controller",
-                "Multiplayer", "Mods & cheats", "Debug"};
+                "Multiplayer", "Saves", "Mods & cheats", "Debug"};
     }
 
     private void build() {
@@ -158,7 +158,8 @@ final class SettingsMenu {
             case 6: buildCombos(); break;
             case 7: buildController(); break;
             case 8: buildMultiplayer(); break;
-            case 9: buildMods(); break;
+            case 9: buildSaves(); break;
+            case 10: buildMods(); break;
             default: buildDebug(); break;
         }
     }
@@ -716,10 +717,14 @@ final class SettingsMenu {
                 "Strips shader code that's never called before the driver sees it. Qualcomm's driver (512.863) "
                         + "rejected the character pipelines because of it (they came out black)." + next,
                 "keep_dead_functions", true);
-        flag("Integer vertex attributes",
+        toggle("Integer vertex attributes",
                 "Integer vertex data (bone indices…) reaches the shader as integers, as on the console. Without "
-                        + "it, characters stretch into spikes on Mali GPUs." + next,
-                "no_int_attribs", true);
+                        + "it, characters stretch into spikes on Mali GPUs. Off by default on Adreno, which doesn't need "
+                        + "it (with Turnip it made characters flash)." + next,
+                () -> (gpu.adreno() ? has("int_attribs") : !has("no_int_attribs")) ? 1 : 0, v -> {
+                    put("int_attribs", gpu.adreno() && v != 0);
+                    put("no_int_attribs", !gpu.adreno() && v == 0);
+                });
         flag("spirv-opt on switch shaders",
                 "Runs shaders that contain a switch (BRX) through the optimizer; some drivers miscompile them." + next,
                 "no_spirv_opt_brx", true);
@@ -1408,6 +1413,79 @@ final class SettingsMenu {
 
     // ---- mods and cheats (ModFiles; the runtime's side is fs.cpp and cheats.cpp) ----------------------------------------
 
+    // What the last import or restore did, shown at the top of Saves (GameActivity sets it). restartSave: the save on disk
+    // isn't the one the game has loaded any more, so it has to close before it saves over it.
+    static String saveMessage;
+    static boolean restartSave;
+
+    private void buildSaves() {
+        if (folder == null) {
+            note("Pick the game folder first.");
+            return;
+        }
+        if (saveMessage != null) note(saveMessage);
+        if (restartSave) {
+            note("The game still has the old save loaded and would write it back the next time it saves. Close it now and "
+                    + "open the app again to play the new one.");
+            action("Close the game", "Closes the app now, without saving, so the next start loads the imported save.", () -> {
+                activity.finishAffinity();
+                android.os.Process.killProcess(android.os.Process.myPid());
+            });
+        }
+        header("This save");
+        note(SaveFiles.describe(folder) + " The port uses the Switch's save files, so a save exported from here works on the "
+                + "Switch (with JKSV or Checkpoint), Eden and Yuzu as it is.");
+        action("Export (Switch, Eden)", "Saves a zip of the save folder: data001Slot.bin, data00-1.bin.", () -> {
+            dialog.dismiss();
+            activity.exportSave(false);
+        });
+        action("Export for Steam", "Converts the save to the PC version's and zips it in win64_save/, to put in Steam's "
+                + "...\\1446780\\remote\\win64_save (close the game first, and turn off Steam Cloud for it or it may bring the "
+                + "old one back). It's encrypted for your account once you've imported a Steam save here.", () -> {
+            dialog.dismiss();
+            activity.exportSave(true);
+        });
+
+        header("Import");
+        note("Takes the place of this save. The one here is backed up first. A Steam save is converted on the way in: it's "
+                + "decrypted with your Steam ID (read from the save itself when it can be, asked for when not), then filled "
+                + "into this save's layout. Close the game afterwards.");
+        String[] from = {"From a .zip", "From a folder"};
+        action("Import a save", "A zip or a folder with data001Slot.bin and data00-1.bin, from the Switch, Eden, Yuzu, "
+                + "another copy of the port, or Steam (win64_save).", () -> dropDown("Import a save", from, -1, i -> {
+                    dialog.dismiss();
+                    activity.pickSave(i == 1, false);
+                }));
+        List<File> backups = SaveFiles.backups(folder);
+        if (!backups.isEmpty()) {
+            String[] names = new String[backups.size()];
+            for (int i = 0; i < names.length; i++) names[i] = backups.get(i).getName();
+            action("Restore a backup", "The save as it was before an import or restore (the last 10 are kept).",
+                    () -> dropDown("Restore a backup", names, -1, i -> dropDown("Restore the save from " + names[i] + "?",
+                            new String[] {"Keep this one", "Restore it"}, -1, k -> {
+                                if (k == 1) {
+                                    try {
+                                        saveMessage = SaveFiles.restore(folder, backups.get(i));
+                                        restartSave = true;
+                                    } catch (IOException e) {
+                                        saveMessage = "Couldn't restore it: " + e.getMessage();
+                                    }
+                                }
+                                build();
+                            })));
+        }
+
+        header("Convert");
+        note("A save from one platform into a zip for the other, without touching this one. Steam to Switch fills this "
+                + "save's layout (have one here first for the best result). Switch to Steam fills the last Steam save you "
+                + "imported, and is encrypted for that account.");
+        action("Convert a save", "Pick a Steam save to get the Switch's, or a Switch save to get Steam's; then where to "
+                + "save the zip.", () -> dropDown("Convert a save", from, -1, i -> {
+                    dialog.dismiss();
+                    activity.pickSave(i == 1, true);
+                }));
+    }
+
     private void buildMods() {
         if (folder == null) {
             note("Pick the game folder first.");
@@ -1711,7 +1789,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
+        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",

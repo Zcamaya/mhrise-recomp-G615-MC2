@@ -60,6 +60,8 @@ cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/assets/licenses/"
 cp "$ROOT/runtime/external/libadrenotools/LICENSE" "$STAGE/assets/licenses/libadrenotools.txt"
 cp "$ROOT/runtime/external/libadrenotools/lib/linkernsbypass/LICENSE" "$STAGE/assets/licenses/linkernsbypass.txt"
 cp "$ROOT/runtime/external/volk/LICENSE.md" "$STAGE/assets/licenses/volk.txt"
+# The Citrus curves for Steam saves (SaveData.java)
+cp "$ROOT/android/assets/citrus_curves.bin" "$STAGE/assets/"
 "$BT/aapt2" compile --dir "$ROOT/android/res" -o "$STAGE/res.zip"
 MANIFEST="$ROOT/android/AndroidManifest.xml" RENAME=()
 if [ -n "$PACKAGE" ]; then

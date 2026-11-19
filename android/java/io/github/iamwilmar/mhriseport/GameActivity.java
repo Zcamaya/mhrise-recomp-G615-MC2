@@ -291,6 +291,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     // ---- pictures for buttons, and layout files (the system's file picker answers in onActivityResult) ----------------
 
     private static final int PICK_IMAGE = 41, EXPORT_LAYOUT = 42, IMPORT_LAYOUT = 43, IMPORT_MOD = 44, IMPORT_CHEATS = 45, IMPORT_DRIVER = 46, IMPORT_DLL = 47;
+    private static final int SAVE_ZIP = 48, SAVE_FOLDER = 49, CONVERT_ZIP = 50, CONVERT_FOLDER = 51, SAVE_OUT = 52;
     private Controls.Ctl imageFor;      // the control a picked image goes to
     private Runnable afterPick;         // the menu or the editor's dialog, shown again
 
@@ -362,6 +363,101 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         }, "ModImport").start();
     }
 
+    // ---- Settings → Saves (SaveFiles): pick a zip or a folder, maybe ask for the Steam ID, then where a zip goes --------
+
+    private SaveFiles.Zip outgoing;  // a zip made, waiting for the picker to say where it goes
+
+    void pickSave(boolean folder, boolean convert) {
+        if (folder) start(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), convert ? CONVERT_FOLDER : SAVE_FOLDER);
+        else start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
+                        "application/octet-stream"}), convert ? CONVERT_ZIP : SAVE_ZIP);
+    }
+
+    void exportSave(boolean steam) {
+        File data = SettingsMenu.gameFolder(this);
+        if (data == null) return;
+        Toast.makeText(this, steam ? "Converting…" : "Packing…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                SaveFiles.Zip z = steam ? SaveFiles.exportSteam(this, data) : SaveFiles.exportSwitch(data);
+                runOnUiThread(() -> saveZip(z));
+            } catch (java.io.IOException | RuntimeException e) {
+                saveDone("Couldn't export it: " + e.getMessage(), false);
+            }
+        }, "SaveExport").start();
+    }
+
+    private void saveZip(SaveFiles.Zip z) {
+        outgoing = z;
+        start(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip")
+                .putExtra(Intent.EXTRA_TITLE, z.name), SAVE_OUT);
+    }
+
+    private void savePicked(int request, Uri uri) {
+        File data = SettingsMenu.gameFolder(this);
+        if (uri == null || data == null) {
+            new SettingsMenu(this, controls).show();
+            return;
+        }
+        Toast.makeText(this, "Reading the save…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                SaveFiles.Incoming in = request == SAVE_FOLDER || request == CONVERT_FOLDER
+                        ? SaveFiles.readFolder(getContentResolver(), uri) : SaveFiles.readZip(getContentResolver(), uri);
+                saveWork(in, request == CONVERT_ZIP || request == CONVERT_FOLDER, 0);
+            } catch (java.io.IOException | RuntimeException e) {
+                saveDone("Couldn't read it: " + e.getMessage(), false);
+            }
+        }, "SaveImport").start();
+    }
+
+    // On a background thread. A Steam save whose ID isn't known asks for it, and comes back here with it.
+    private void saveWork(SaveFiles.Incoming in, boolean convert, long typed) {
+        File data = SettingsMenu.gameFolder(this);
+        try {
+            if (convert) {
+                SaveFiles.Zip z = SaveFiles.convert(this, in, data, typed);
+                runOnUiThread(() -> saveZip(z));
+            } else {
+                saveDone(SaveFiles.install(this, in, data, typed), true);
+            }
+        } catch (SaveData.Citrus.NeedId e) {
+            runOnUiThread(() -> askSteamId(in, convert, typed != 0
+                    ? "That Steam ID doesn't open this save. It's the account the save was made on." : ""));
+        } catch (java.io.IOException | RuntimeException e) {
+            saveDone((convert ? "Couldn't convert it: " : "Couldn't import it: ") + e.getMessage(), false);
+        }
+    }
+
+    // The ID wasn't in the save (only its SS1_* files and an emulator's settings have it): asked for
+    private void askSteamId(SaveFiles.Incoming in, boolean convert, String error) {
+        new TextPrompt(this).show("Steam ID of the save's account", "17 digits, starting with 7656", "", error, 0, 24, false,
+                false, text -> {
+                    if (text == null) {
+                        saveDone(null, false);
+                        return;
+                    }
+                    long id = SaveData.steamId(text);
+                    if (id == 0) {
+                        askSteamId(in, convert, "That isn't a Steam ID. It's the 17-digit number on your Steam profile's "
+                                + "page (steamid.io finds it from the profile's link).");
+                        return;
+                    }
+                    Toast.makeText(this, "Decrypting…", Toast.LENGTH_SHORT).show();
+                    new Thread(() -> saveWork(in, convert, id), "SaveImport").start();
+                });
+    }
+
+    // The menu again, on Saves, with what happened
+    private void saveDone(String message, boolean restart) {
+        runOnUiThread(() -> {
+            if (message != null) SettingsMenu.saveMessage = message;
+            if (restart) SettingsMenu.restartSave = true;
+            if (!isFinishing()) new SettingsMenu(this, controls).show();
+        });
+    }
+
     private void start(Intent i, int request) {
         pad.releaseAll();
         try {
@@ -377,6 +473,23 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
         if (request == IMPORT_MOD || request == IMPORT_CHEATS || request == IMPORT_DRIVER || request == IMPORT_DLL) {
             importInto(request, uri);
+        } else if (request == SAVE_ZIP || request == SAVE_FOLDER || request == CONVERT_ZIP || request == CONVERT_FOLDER) {
+            savePicked(request, uri);
+        } else if (request == SAVE_OUT) {
+            SaveFiles.Zip z = outgoing;
+            outgoing = null;
+            if (uri == null || z == null) {
+                saveDone(null, false);
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    SaveFiles.write(getContentResolver(), uri, z.bytes);
+                    saveDone(z.message, false);
+                } catch (java.io.IOException | RuntimeException e) {
+                    saveDone("Couldn't write the zip: " + e.getMessage(), false);
+                }
+            }, "SaveExport").start();
         } else if (request == PICK_IMAGE) {
             if (uri != null && imageFor != null) {
                 try {
