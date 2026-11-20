@@ -17,8 +17,16 @@
 
 namespace {
 thread_local bool drawing = false;
-thread_local int tree_depth = 0;
-thread_local int tooltip_depth = 0;
+enum class Scope { Tree, Tooltip, Window };
+thread_local std::vector<Scope> scopes;
+void close_scope() {
+  switch (scopes.back()) {
+  case Scope::Tree: ImGui::TreePop(); break;
+  case Scope::Tooltip: ImGui::EndTooltip(); break;
+  case Scope::Window: ImGui::End(); break;
+  }
+  scopes.pop_back();
+}
 ImGuiContext *requested = nullptr;
 std::atomic<bool> visible = false;
 std::condition_variable_any completed;
@@ -38,6 +46,7 @@ enum Widget {
   Button,
   Check,
   DragInt,
+  SliderInt,
   DragFloat,
   Slider,
   Input,
@@ -45,6 +54,8 @@ enum Widget {
   Hovered,
   Tooltip,
   EndTooltip,
+  BeginWindow,
+  EndWindow,
   Combo
 };
 int widget(lua_State *L) {
@@ -60,13 +71,17 @@ int widget(lua_State *L) {
     return 1;
   case Tooltip:
     ImGui::BeginTooltip();
-    ++tooltip_depth;
+    scopes.push_back(Scope::Tooltip);
     return 0;
   case EndTooltip:
-    if (!tooltip_depth)
+    if (scopes.empty() || scopes.back() != Scope::Tooltip)
       return luaL_error(L, "end_tooltip without begin_tooltip");
-    ImGui::EndTooltip();
-    --tooltip_depth;
+    close_scope();
+    return 0;
+  case EndWindow:
+    if (scopes.empty() || scopes.back() != Scope::Window)
+      return luaL_error(L, "end_window without matching begin_window");
+    close_scope();
     return 0;
   case SameLine:
     ImGui::SameLine();
@@ -78,16 +93,31 @@ int widget(lua_State *L) {
     ImGui::Separator();
     return 0;
   case Pop:
-    if (!tree_depth)
+    if (scopes.empty() || scopes.back() != Scope::Tree)
       return luaL_error(L, "tree_pop without an open node");
-    --tree_depth;
-    ImGui::TreePop();
+    close_scope();
     return 0;
   default:
     break;
   }
   const char *label = visible_text(luaL_checkstring(L, 1));
   switch (kind) {
+  case BeginWindow: {
+    if (!*label)
+      return luaL_error(L, "begin_window requires a nonempty name");
+    bool closable = lua_isboolean(L, 2);
+    bool open = !closable || lua_toboolean(L, 2);
+    if (open) {
+      ImGui::Begin(label, closable ? &open : nullptr, luaL_optinteger(L, 3, 0));
+      // REFramework returns the open state, including for collapsed windows.
+      if (open)
+        scopes.push_back(Scope::Window);
+      else
+        ImGui::End();
+    }
+    lua_pushboolean(L, open);
+    return 1;
+  }
   case Combo: {
     luaL_checktype(L, 3, LUA_TTABLE);
     lua_settop(L, 3);
@@ -135,7 +165,7 @@ int widget(lua_State *L) {
   case Tree: {
     bool open = ImGui::TreeNode(label);
     if (open)
-      ++tree_depth;
+      scopes.push_back(Scope::Tree);
     lua_pushboolean(L, open);
     return 1;
   }
@@ -151,6 +181,14 @@ int widget(lua_State *L) {
     bool changed =
         ImGui::DragInt(label, &v, luaL_optnumber(L, 3, 1),
                        luaL_optinteger(L, 4, 0), luaL_optinteger(L, 5, 0));
+    lua_pushboolean(L, changed);
+    lua_pushinteger(L, v);
+    return 2;
+  }
+  case SliderInt: {
+    int v = luaL_checkinteger(L, 2);
+    bool changed = ImGui::SliderInt(label, &v, luaL_checkinteger(L, 3),
+                                    luaL_checkinteger(L, 4), luaL_optstring(L, 5, "%d"));
     lua_pushboolean(L, changed);
     lua_pushinteger(L, v);
     return 2;
@@ -207,17 +245,10 @@ thread_local GLint max_texture_size = 0;
 thread_local std::chrono::steady_clock::time_point last;
 } // namespace
 int mod_lua::call_ui_callback(lua_State *L) {
-  tree_depth = 0;
-  tooltip_depth = 0;
+  auto base = scopes.size();
   int status = lua_pcall(L, 0, 0, 0);
-  while (tooltip_depth) {
-    ImGui::EndTooltip();
-    --tooltip_depth;
-  }
-  while (tree_depth) {
-    ImGui::TreePop();
-    --tree_depth;
-  }
+  while (scopes.size() > base)
+    close_scope();
   return status;
 }
 bool mod_lua::ui_visible() { return visible.load(); }
@@ -243,6 +274,7 @@ void mod_lua::open_imgui(lua_State *L) {
                             {"button", Button},
                             {"checkbox", Check},
                             {"drag_int", DragInt},
+                            {"slider_int", SliderInt},
                             {"drag_float", DragFloat},
                             {"slider_float", Slider},
                             {"input_text", Input},
@@ -250,6 +282,8 @@ void mod_lua::open_imgui(lua_State *L) {
                             {"is_item_hovered", Hovered},
                             {"begin_tooltip", Tooltip},
                             {"end_tooltip", EndTooltip},
+                            {"begin_window", BeginWindow},
+                            {"end_window", EndWindow},
                             {"combo", Combo}}) {
     lua_pushinteger(L, kind);
     lua_pushcclosure(L, widget, 1);
@@ -330,6 +364,7 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeFrame(JNIEnv *, jclass, jint w,
   ImGui::SetNextWindowSize(io.DisplaySize);
   ImGui::Begin("MOD UI", nullptr,
                ImGuiWindowFlags_NoDecoration |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus |
                    ImGuiWindowFlags_NoSavedSettings);
   requested = ui;
   // Let Lua read the live game VM on UpdateScene. GLES stays on its owning
