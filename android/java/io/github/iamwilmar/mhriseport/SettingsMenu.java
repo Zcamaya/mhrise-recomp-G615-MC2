@@ -674,7 +674,18 @@ final class SettingsMenu {
 
     // Switches for testing drivers and collecting logs. Same files as always (see the options table in the README), just
     // with a name here. Most of them are only read at start-up.
+    private static native byte[] nativeLuaReport();
+
     private void buildDebug() {
+        if ("io.github.iamwilmar.mhriseport.lab".equals(activity.getPackageName())) {
+            action("MOD UI", "Open script controls.", () -> ModUi.show(activity));
+            action("Lua / TDB", "View startup script results.", () -> {
+                String text = new String(nativeLuaReport(), java.nio.charset.StandardCharsets.UTF_8);
+                new android.app.AlertDialog.Builder(activity).setTitle("Lua / TDB")
+                    .setMessage(text.isEmpty() ? "Waiting for game startup." : text)
+                    .setPositiveButton(android.R.string.ok, null).show();
+            });
+        }
         String next = " Takes effect on the next start.";
         note("For testing drivers and sending logs. If the game looks right, leave all of this as it is.");
         header("Log");

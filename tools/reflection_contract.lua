@@ -1,0 +1,47 @@
+-- Discover and invoke unrelated methods from the live TDB. No method ID is supplied.
+local math_type = assert(sdk.find_type_definition("System.Math"))
+local maximum = assert(math_type:get_method("Max(System.Int32, System.Int32)"))
+assert(maximum:is_static() and maximum:get_num_params() == 2)
+assert(maximum:call(nil, -17, 23) == 23)
+assert(maximum:call(nil, -17, nil) == 0)
+local floor = assert(math_type:get_method("Floor(System.Double)"))
+assert(floor:call(nil, -2.25) == -3)
+assert(not pcall(maximum.call, maximum, nil, "invalid", 23))
+local clock = assert(sdk.find_type_definition("via.Application"):get_method("get_UpTimeSecond"))
+assert(clock:call(nil) >= 0)
+log.info("reflection contract: static Int32 overload, Double, invalid argument, application clock passed")
+local str = sdk.find_type_definition("System.String")
+local concat = assert(str:get_method("Concat(System.String,System.String)"))
+assert(concat:call(nil,"猎人"," α") == "猎人 α")
+local weapon = assert(sdk.find_type_definition("snow.player.PlayerWeaponType") or sdk.find_type_definition("via.ModuleEntry"))
+local function assert_enum(enum)
+    local values = sdk.find_type_definition("System.Enum"):get_method("GetValues(System.Type)"):call(nil,enum:get_runtime_type())
+    local n = values:get_size()
+    assert(n > 1 and values[1] == values:get_element(1))
+    assert(not pcall(function() return values[n] end))
+    local all = values:get_elements()
+    assert(#all == n and all[2] == values[1])
+end
+assert_enum(weapon)
+local arr=sdk.create_managed_array("System.Int32",3)
+arr[1]=42
+assert(arr:get_element(1)==42 and arr:get_elements()[2]==42)
+assert(arr:get_type_definition():get_full_name()=="System.Int32[]")
+assert(not pcall(function() arr[3]=27 end))
+assert((Vector2f.new(1,2) + Vector2f.new(3,4)).y==6)
+assert(Vector4f.new(1,2,3,4):dot(Vector4f.new(0,1,0,2))==10)
+assert(Vector3f.new(1,0,0):cross(Vector3f.new(0,1,0)).z==1)
+assert(#math_type:get_methods() > 10 and str:is_a("System.Object"))
+assert(sdk.find_type_definition("via.ModuleEntry"):get_field("InitializeLog"):get_data(nil)==1)
+assert(json.load_string(json.dump_string({word="猎人", n={1,3}})).n[2]==3)
+local path="lab/reflection-contract.json"
+assert(json.dump_file(path,{value=27}) and json.load_file(path).value == 27)
+assert(#fs.glob("lab/.*contract[.]json")==1 and fs.read(path):match("27"))
+log.info("reflection contract: UTF-16, enum, array index/bounds/enumeration, metadata and JSON data passed")
+local calls=0
+re.on_application_entry("UpdateBehavior",function() calls=calls+1 end)
+local frames=0
+re.on_frame(function()
+    frames=frames+1
+    if frames==60 then assert(calls>0);log.info("frame contract: on_frame=60 UpdateBehavior="..calls) end
+end)
