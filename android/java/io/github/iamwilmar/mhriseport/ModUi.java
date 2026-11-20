@@ -1,9 +1,9 @@
 package io.github.iamwilmar.mhriseport;
 
-import android.app.Activity;
-import android.app.Dialog;
+import android.graphics.PixelFormat;
 import android.opengl.GLSurfaceView;
 import android.view.MotionEvent;
+import android.view.KeyEvent;
 import android.view.SurfaceHolder;
 import android.view.WindowManager;
 import android.view.inputmethod.BaseInputConnection;
@@ -15,37 +15,110 @@ import javax.microedition.khronos.opengles.GL10;
 
 final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
     private static native void nativeCreate(float density);
-    private static native boolean nativeFrame(int width,int height);
+    private static native int nativeFrame(int width,int height);
+    private static native void nativeSize(int width,int height);
+    private static native boolean nativePending();
+    private static native void nativeMenu(boolean open);
     private static native void nativeTouch(float x,float y,boolean down);
     private static native void nativeChar(int codepoint);
     private static native void nativeClose();
     private int width,height;
-    private boolean keyboard;
-    private ModUi(Activity a) {
-        super(a);setEGLContextClientVersion(3);setFocusableInTouchMode(true);setRenderer(this);
+    private volatile boolean menu, keyboard;
+    private boolean created;
+    private final GameActivity activity;
+    private final WindowManager.LayoutParams panel;
+    private final Runnable poll = new Runnable() {
+        public void run() {
+            if (menu && !nativeMenuOpen()) setMenu(false);
+            if (nativePending()) requestRender();
+            postOnAnimation(this);
+        }
+    };
+    ModUi(GameActivity a) {
+        super(a);
+        activity = a;
+        setEGLContextClientVersion(3);
+        setEGLConfigChooser(8, 8, 8, 8, 0, 0);
+        getHolder().setFormat(PixelFormat.TRANSLUCENT);
+        setZOrderOnTop(true);
+        setFocusableInTouchMode(true);
+        setRenderer(this);
+        setRenderMode(RENDERMODE_WHEN_DIRTY);
+        panel = new WindowManager.LayoutParams(-1, -1, WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT);
+        panel.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        panel.token = a.getWindow().getDecorView().getWindowToken();
+        panel.setTitle("Lua HUD");
+        a.getWindowManager().addView(this, panel);
     }
-    static void show(Activity a) {
-        Dialog dialog=new Dialog(a);
-        ModUi view=new ModUi(a);
-        dialog.setTitle("MOD UI");dialog.setContentView(view);
-        dialog.show();dialog.getWindow().setLayout((int)(a.getResources().getDisplayMetrics().widthPixels*.82),
-            (int)(a.getResources().getDisplayMetrics().heightPixels*.8));
-        dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
-        view.requestFocus();
+    void setMenu(boolean open) {
+        if (menu == open) return;
+        menu = open;
+        nativeMenu(open);
+        int pass = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        if (open) panel.flags &= ~pass;
+        else panel.flags |= pass;
+        activity.getWindowManager().updateViewLayout(this, panel);
+        if (open) requestFocus();
+        else setKeyboard(false);
     }
-    public void onSurfaceCreated(GL10 gl,EGLConfig config){nativeCreate(getResources().getDisplayMetrics().density);}
+    void dispose() {
+        nativeMenu(false);
+        activity.getWindowManager().removeViewImmediate(this);
+    }
+    @Override public boolean onKeyUp(int key, KeyEvent event) {
+        if (menu && key == KeyEvent.KEYCODE_BACK) {
+            setMenu(false);
+            return true;
+        }
+        return super.onKeyUp(key, event);
+    }
+    @Override public void onResume() {
+        super.onResume();
+        removeCallbacks(poll);
+        postOnAnimation(poll);
+    }
+    @Override public void onPause() {
+        removeCallbacks(poll);
+        queueEvent(this::closeRenderer);
+        super.onPause();
+    }
+    @Override protected void onDetachedFromWindow() {
+        removeCallbacks(poll);
+        super.onDetachedFromWindow();
+    }
+    private void closeRenderer() {
+        if (created) nativeClose();
+        created = false;
+    }
+    public void onSurfaceCreated(GL10 gl,EGLConfig config) {
+        closeRenderer();
+        nativeCreate(getResources().getDisplayMetrics().density);
+        created = true;
+    }
     @Override public void surfaceDestroyed(SurfaceHolder holder){
-        queueEvent(ModUi::nativeClose);
+        queueEvent(this::closeRenderer);
         super.surfaceDestroyed(holder);
     }
-    public void onSurfaceChanged(GL10 gl,int w,int h){width=w;height=h;}
+    public void onSurfaceChanged(GL10 gl,int w,int h){
+        if (!created) onSurfaceCreated(gl,null);
+        width=w;height=h;nativeSize(w,h);
+    }
     public void onDrawFrame(GL10 gl){
-        boolean wants=nativeFrame(width,height);
-        if(wants!=keyboard){keyboard=wants;post(()->{
-            InputMethodManager im=getContext().getSystemService(InputMethodManager.class);
-            if(wants)im.showSoftInput(this,InputMethodManager.SHOW_IMPLICIT);
-            else im.hideSoftInputFromWindow(getWindowToken(),0);
-        });}
+        int state=nativeFrame(width,height);
+        boolean wants = (state & 2) != 0;
+        if (menu && wants != keyboard)
+            post(() -> { if (isAttachedToWindow() && menu) setKeyboard(wants); });
+    }
+    private static native boolean nativeMenuOpen();
+    private void setKeyboard(boolean wants) {
+        if (keyboard == wants) return;
+        keyboard = wants;
+        InputMethodManager im=getContext().getSystemService(InputMethodManager.class);
+        if(wants)im.showSoftInput(this,InputMethodManager.SHOW_IMPLICIT);
+        else im.hideSoftInputFromWindow(getWindowToken(),0);
     }
     @Override public boolean onTouchEvent(MotionEvent ev){
         int action=ev.getActionMasked();float x=ev.getX(),y=ev.getY();

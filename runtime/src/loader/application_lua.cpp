@@ -23,7 +23,7 @@ struct Entry {
 };
 constexpr size_t slot_count = 269;
 std::array<Entry, slot_count> entries;
-int update_scene = -1, begin_rendering = -1;
+int begin_rendering = -1;
 int entry_index(std::string_view name) {
   for (size_t i = 0; i < entries.size(); ++i)
     if (entries[i].name == name)
@@ -49,8 +49,6 @@ int add_callback(lua_State *L) {
     observe(index);
     fn = 2;
   }
-  if (phase == Phase::Frame && begin_rendering >= 0)
-    observe(begin_rendering);
   luaL_checktype(L, fn, LUA_TFUNCTION);
   list(L);
   auto pos = lua_rawlen(L, -1) + 1;
@@ -82,7 +80,7 @@ void fire(lua_State *L, Phase phase, int index) {
     if (match) {
       lua_rawgeti(L, record, 3);
       if (lua_isfunction(L, -1)) {
-        if ((phase == Phase::Ui ? call_ui_callback(L)
+        if ((phase == Phase::Ui || phase == Phase::Frame ? call_ui_callback(L)
                                 : lua_pcall(L, 0, 0, 0)) != LUA_OK) {
           lua_rawgeti(L, record, 4);
           bool repeated = lua_rawequal(L, -1, -2);
@@ -111,10 +109,8 @@ void dispatch_index(size_t index, void *instance) {
   entries[index].original(instance);
   std::lock_guard lock(mutex);
   fire(active.load(), Phase::After, index);
-  if (int(index) == update_scene)
-    service_ui_frame();
   if (int(index) == begin_rendering)
-    fire(active.load(), Phase::Frame, -1);
+    service_ui_frame();
 }
 template <size_t Index> void dispatch(void *instance) {
   dispatch_index(Index, instance);
@@ -192,9 +188,9 @@ void save_config() {
   fire(active.load(), Phase::Config, -1);
 }
 void draw_ui() {
-  std::lock_guard lock(mutex);
   fire(active.load(), Phase::Ui, -1);
 }
+void draw_frame() { fire(active.load(), Phase::Frame, -1); }
 void install_app_entries(const Module &m, rise::Tdb &db) {
   std::lock_guard lock(mutex);
   if (attached)
@@ -224,11 +220,10 @@ void install_app_entries(const Module &m, rise::Tdb &db) {
     found[i] = {expected, slot, *slot};
   }
   entries = found;
-  update_scene = entry_index("UpdateScene");
   begin_rendering = entry_index("BeginRendering");
-  if (update_scene < 0 || begin_rendering < 0)
+  if (begin_rendering < 0)
     throw std::runtime_error("Missing game frame entries");
-  observe(update_scene);
+  observe(begin_rendering);
   attached = true;
   log_message(
       ANDROID_LOG_INFO,

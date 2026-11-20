@@ -12,6 +12,7 @@ std::recursive_mutex &lua_mutex();
 void open_events(lua_State *);
 void install_app_entries(const Module &, rise::Tdb &);
 void draw_ui();
+void draw_frame();
 void reset_callbacks();
 void save_config();
 void fire_reset(lua_State *);

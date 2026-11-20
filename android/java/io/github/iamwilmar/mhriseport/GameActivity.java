@@ -36,6 +36,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     private Controls controls;
     private TouchPad pad;
+    private ModUi modUi;
+    void showModUi() { modUi.setMenu(true); }
     private boolean shown;
     private Vibrator vibrator;
     private CaptureButton capture;  // the floating capture button, while Debug → Capture button is on
@@ -98,6 +100,10 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         try {
             getWindowManager().addView(pad, lp);
             shown = true;
+            if ("io.github.iamwilmar.mhriseport.lab".equals(getPackageName())) {
+                modUi = new ModUi(this);
+                modUi.onResume();
+            }
             showCapture();
         } catch (RuntimeException e) {
             // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
@@ -141,11 +147,13 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     protected void onResume() {
         super.onResume();
+        if (modUi != null) modUi.onResume();
         applyTurbo(true);
     }
 
     @Override
     protected void onPause() {
+        if (modUi != null) modUi.onPause();
         applyTurbo(false);
         if (pad != null) pad.releaseAll();  // (un dedo que se queda en un botón al irse la app no lo deja pulsado)
         if (controls != null) controls.saveNow();  // (the app may not come back: swiped away from recents, killed for memory)
@@ -207,6 +215,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     @Override
     protected void onDestroy() {
+        if (modUi != null) modUi.dispose();
         if (capture != null) {
             try {
                 getWindowManager().removeViewImmediate(capture);

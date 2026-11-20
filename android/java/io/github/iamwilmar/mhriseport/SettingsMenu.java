@@ -683,7 +683,7 @@ final class SettingsMenu {
 
     private void buildDebug() {
         if ("io.github.iamwilmar.mhriseport.lab".equals(activity.getPackageName())) {
-            action("MOD UI", "Open script controls.", () -> ModUi.show(activity));
+            action("MOD UI", "Open script controls.", () -> { dialog.dismiss(); activity.showModUi(); });
             action("Lua / TDB", "View startup script results.", () -> {
                 String text = new String(nativeLuaReport(), java.nio.charset.StandardCharsets.UTF_8);
                 new android.app.AlertDialog.Builder(activity).setTitle("Lua / TDB")
