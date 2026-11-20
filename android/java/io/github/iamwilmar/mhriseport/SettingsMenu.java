@@ -214,6 +214,11 @@ final class SettingsMenu {
                 "Keep the status and navigation bars on screen while playing. Off: they're hidden, and a swipe in from "
                         + "the edge brings them back for a moment. Takes effect the next time you come back to the game.",
                 "system_bars", false);
+        toggle("Draw controls with the GPU",
+                "The touch controls drawn by the GPU, as Android usually does. Off: drawn by the CPU, which keeps them "
+                        + "away from the phone's OpenGL driver; Mali's crashed there while hunting. Off by default on MediaTek "
+                        + "and Exynos. Takes effect the next time you start the game.",
+                () -> GameActivity.touchOnGpu(ini) ? 1 : 0, v -> ini.set("touch_gpu", v != 0 ? "1" : "0"));
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "
