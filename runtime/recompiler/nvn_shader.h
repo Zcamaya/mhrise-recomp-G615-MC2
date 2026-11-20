@@ -110,6 +110,10 @@ struct Options {
     // skinning de la cara del cazador (793657b4) tomaba el caso que pone los pesos a cero (1/0 → NaN, la cabeza no se
     // ve). Se emite OpReturn: nunca se ejecuta y no le da al compilador nada que suponer.
     bool broken_unreachable = false;
+    // packHalf2x16 in a vertex stage: Mali-G68's compiler (driver r32, Vulkan 1.1.177) fails on it in the position shader
+    // with an LLVM "Cannot select" and aborts the whole process. Built from integer operations there instead
+    // (has_broken_pack_half, eden-pack-half-mali.patch).
+    bool broken_pack_half = false;
     // Pixel discards (KIL) gathered into one at the end of the shader (Eden's needs_demote_reorder, which it sets for
     // AMD and Samsung's Xclipse). Their compilers get an early discard wrong: alpha-tested cards (foliage, smoke, the
     // edges of cliffs) came out as whole flat quads in the scene's fog colour, the big brown sheets on an Xclipse 530.

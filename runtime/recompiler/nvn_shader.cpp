@@ -481,6 +481,7 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         profile.max_subgroup_size = options.subgroup_size;
         profile.has_broken_spirv_subgroup_shuffle = options.broken_subgroup_shuffle;
         profile.has_broken_spirv_unreachable = options.broken_unreachable;
+        profile.has_broken_pack_half = options.broken_pack_half;
         profile.support_sampled_image_array_nonuniform_indexing = options.nonuniform_indexing;
         profile.supported_subgroup_stages = 0;
         if (usable) {
