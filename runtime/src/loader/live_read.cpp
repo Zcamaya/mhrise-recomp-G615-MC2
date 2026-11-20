@@ -15,6 +15,7 @@
 namespace rise {
 namespace {
 constexpr char object_mt[] = "rise.sample.object";
+constexpr char ref_mt[] = "rise.managed.reference";
 char frame_key, object_cache_key;
 struct Object {
   uintptr_t address;
@@ -163,9 +164,10 @@ template <class T> void put_value(std::span<uint8_t> data, T value) {
   memcpy(data.data(), &value, sizeof(value));
 }
 template <class T> T integer_arg(lua_State *L, int arg) {
-  if (!lua_isinteger(L, arg))
+  int valid;
+  auto n = lua_tointegerx(L, arg, &valid);
+  if (!valid)
     throw std::runtime_error("Integer argument required");
-  auto n = lua_tointeger(L, arg);
   if constexpr (sizeof(T) < sizeof(n)) {
     if (n < std::numeric_limits<T>::min() ||
         n > int64_t(std::numeric_limits<T>::max()))
@@ -332,15 +334,19 @@ uintptr_t managed_string(lua_State *L, ReadFrame &f, int index) {
   memcpy(reinterpret_cast<void *>(str + 0x14), utf16.data(), utf16.size() * 2);
   return str;
 }
+uintptr_t allocate_box(ReadFrame &f, uint32_t expected, bool persistent) {
+  using Allocate = uintptr_t (*)(uintptr_t, const uint8_t *, int);
+  auto box = reinterpret_cast<Allocate>(f.main.addr(0x6b64068))(
+      engine_context(f), f.db.types.data() + 72ull * expected, persistent ? 1 : 0);
+  if (!box || actual_type(f.db, box) != expected)
+    throw std::runtime_error("Game VM could not box argument");
+  return box;
+}
 uintptr_t box_scalar(lua_State *L, ReadFrame &f, int arg, uint32_t expected) {
   auto kind = value_kind(f.db, expected);
   alignas(16) uint8_t encoded[16 * sizeof(float)]{};
   write_scalar(L, arg, kind, encoded);
-  using Allocate = uintptr_t (*)(uintptr_t, const uint8_t *, int);
-  auto box = reinterpret_cast<Allocate>(f.main.addr(0x6b64068))(
-      engine_context(f), f.db.types.data() + 72ull * expected, 0);
-  if (!box || actual_type(f.db, box) != expected)
-    throw std::runtime_error("Game VM could not box argument");
+  auto box = allocate_box(f, expected, false);
   auto bytes = boxed_payload(f, box, expected);
   auto n = read<uint32_t>(f.db.impl(72ull * expected), 8);
   if (!n || n > sizeof(encoded) || n > bytes.size())
@@ -348,12 +354,54 @@ uintptr_t box_scalar(lua_State *L, ReadFrame &f, int arg, uint32_t expected) {
   memcpy(bytes.data(), encoded, n);
   return box;
 }
+
+// An inline value with managed references needs the VM's assignment barriers.
+// Only copy complete values whose instance fields recursively contain plain data.
+void check_plain_value(Tdb &db, uint32_t id) {
+  auto [first, count] = db.field_range(id);
+  for (size_t i = first; i < first + count; ++i) {
+    auto field = db.field(i, id);
+    if (field.flags & (0x10 | 0x40))
+      continue;
+    auto kind = value_kind(db, field.type);
+    if (kind == ValueKind::Reference || kind == ValueKind::String)
+      throw std::runtime_error("Cannot copy managed references in " + db.full_name(id));
+    if (kind == ValueKind::Struct)
+      check_plain_value(db, field.type);
+  }
+}
+void struct_field(lua_State *L, ReadFrame &f, uint32_t id,
+                  std::span<uint8_t> storage, int write_arg) {
+  check_plain_value(f.db, id);
+  auto size = read<uint32_t>(f.db.impl(72ull * id), 8);
+  if (!size || size > storage.size())
+    throw std::runtime_error("Invalid inline value size");
+  uintptr_t box;
+  if (write_arg) {
+    auto *source = static_cast<Object *>(luaL_testudata(L, write_arg, object_mt));
+    if (!source || source->type != id)
+      throw std::runtime_error("Expected boxed " + f.db.full_name(id));
+    box = source->address;
+  } else {
+    box = allocate_box(f, id, true);
+  }
+  auto bytes = boxed_payload(f, box, id);
+  if (size > bytes.size())
+    throw std::runtime_error("Value exceeds boxed payload");
+  if (write_arg)
+    memcpy(storage.data(), bytes.data(), size);
+  else {
+    memcpy(bytes.data(), storage.data(), size);
+    push_obj(L, f, box, id);
+  }
+}
 size_t callable_signature(Tdb &d, uint32_t method) {
   auto type = owner(d, method);
   auto declared = d.full_name(type);
   bool game = declared.starts_with("snow.") || declared.starts_with("via.");
   bool collection = declared == "System.Array" ||
-                    declared.starts_with("System.Collections.Generic.");
+                    declared.starts_with("System.Collections.Generic.") ||
+                    declared.starts_with("System.Collections.ObjectModel.ReadOnlyCollection`1<");
   bool activator = declared == "System.Activator" &&
                    d.prototype(method, type) == "CreateInstance(System.Type)";
   if (!game && !collection && !activator && declared != "System.Math" &&
@@ -447,6 +495,75 @@ uintptr_t method_argument(lua_State *L, ReadFrame &f, int index,
   write_scalar(L, index, kind, scratch);
   return 0;
 }
+// Keep a real managed Object[1] behind each typed ref. The VM then owns both
+// the old and the replacement reference across calls, including aliased slots.
+Object ref_array(lua_State *L, ReadFrame &f, int index) {
+  lua_getiuservalue(L, index, 1);
+  auto array = object(L, -1);
+  lua_pop(L, 1);
+  if (array.type != f.db.find("System.Object[]") ||
+      *reinterpret_cast<const int32_t *>(array.address + 0x1c) != 1)
+    throw std::runtime_error("Invalid managed reference slot");
+  return array;
+}
+uintptr_t ref_argument(lua_State *L, ReadFrame &f, int index, uint32_t type) {
+  auto *declared = static_cast<uint32_t *>(luaL_testudata(L, index, ref_mt));
+  if (!declared || *declared != type)
+    throw std::runtime_error("Expected a reference slot for " + f.db.full_name(type));
+  auto array = ref_array(L, f, index);
+  // NS TDB71 reference-array Address(Int32) tags heap interiors for the
+  // VM's reference assignment barrier, and leaves temporary interiors untagged.
+  auto address = array.address + 0x20;
+  if (*reinterpret_cast<const int32_t *>(array.address + 8) >= 0)
+    address |= uintptr_t{1} << 63;
+  return address;
+}
+uintptr_t invoke_reference_method(lua_State *L, ReadFrame &f, uint32_t method,
+                                  uintptr_t receiver, int arg, size_t sig,
+                                  uintptr_t ctx, std::span<uintptr_t> args) {
+  auto &db = f.db;
+  auto flags = read<uint16_t>(db.method_impl(method), 4);
+  if ((flags & (0x10 | 0x40)) ||
+      value_kind(db, owner(db, method)) != ValueKind::Reference ||
+      value_kind(db, db.parameter_type(sig, 0)) != ValueKind::Void)
+    throw std::runtime_error("ByRef invocation requires a nonvirtual void instance method on a class");
+  for (size_t i = 0; i < args.size(); ++i) {
+    auto type = db.parameter_type(sig, i + 1);
+    auto modifier = db.parameter_modifier(sig, i + 1);
+    auto kind = value_kind(db, type);
+    if ((kind != ValueKind::Reference && kind != ValueKind::String) ||
+        (modifier != 0 && modifier != 2))
+      throw std::runtime_error("Unsupported ByRef method signature");
+    args[i] = modifier == 2 ? ref_argument(L, f, arg + i, type)
+                            : method_argument(L, f, arg + i, type, true);
+  }
+
+  // NS's boxed Invoke would type-check the slot as an object and unbox it.
+  // Use its generated signature wrapper with the already marshalled inputs.
+  struct InvokeFrame {
+    uintptr_t reserved[2]{};
+    const uint8_t *method{};
+    uintptr_t exception{}, unused[2]{};
+    uintptr_t *arguments{};
+    uintptr_t result{}, receiver{};
+  } call;
+  static_assert(offsetof(InvokeFrame, arguments) == 0x30 &&
+                offsetof(InvokeFrame, receiver) == 0x40);
+  call.method = db.methods.data() + 12ull * method;
+  call.arguments = args.data();
+  call.receiver = receiver;
+  (void)function(f, method);
+  auto table = *reinterpret_cast<const uintptr_t *>(f.main.addr(0x12a7a798));
+  auto entry = table + sizeof(uintptr_t) * read<uint16_t>(db.byte_pool, sig + 2);
+  if (!f.main.contains(entry) || !f.main.contains(entry + sizeof(uintptr_t) - 1))
+    throw std::runtime_error("Managed invocation table unavailable");
+  auto wrapper = *reinterpret_cast<const uintptr_t *>(entry);
+  auto text = f.main.addr(f.main.seg_off[0]);
+  if (wrapper % 4 || wrapper - text >= f.main.seg_size[0])
+    throw std::runtime_error("Invalid managed signature wrapper");
+  reinterpret_cast<void (*)(InvokeFrame *, uintptr_t)>(wrapper)(&call, ctx);
+  return call.exception;
+}
 int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
                  uintptr_t receiver, int arg, bool keep_box = false) {
   auto &d = f.db;
@@ -516,21 +633,26 @@ int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
     lua_pop(L, 1);
   }
   std::vector<uintptr_t> args(count);
+  bool byref = false;
   for (unsigned i = 0; i < count; ++i) {
-    if (!d.plain_parameter(sig, i + 1))
-      throw std::runtime_error("Unmanaged or by-reference parameter");
-    if (!skip)
-      args[i] =
-          method_argument(L, f, arg + i, d.parameter_type(sig, i + 1), true);
+    auto modifier = d.parameter_modifier(sig, i + 1);
+    if (modifier != 0 && modifier != 2)
+      throw std::runtime_error("Unmanaged pointer parameter");
+    byref |= modifier == 2;
   }
-  using Invoke = uintptr_t (*)(uintptr_t, const uint8_t *, uintptr_t,
-                               const uintptr_t *, uint32_t);
-  auto result = skip ? uintptr_t{}
-                     : reinterpret_cast<Invoke>(f.main.addr(0x6b61f2c))(
-                           ctx, d.methods.data() + 12ull * method, receiver,
-                           args.data(), count);
+  uintptr_t result = 0, wrapper_exception = 0;
+  if (!skip && byref)
+    wrapper_exception = invoke_reference_method(L, f, method, receiver, arg, sig, ctx, args);
+  else if (!skip) {
+    for (unsigned i = 0; i < count; ++i)
+      args[i] = method_argument(L, f, arg + i, d.parameter_type(sig, i + 1), true);
+    using Invoke = uintptr_t (*)(uintptr_t, const uint8_t *, uintptr_t,
+                                 const uintptr_t *, uint32_t);
+    result = reinterpret_cast<Invoke>(f.main.addr(0x6b61f2c))(
+        ctx, d.methods.data() + 12ull * method, receiver, args.data(), count);
+  }
   auto &exception = *reinterpret_cast<uintptr_t *>(exception_frame + 0x18);
-  if (exception) {
+  if (exception || wrapper_exception) {
     exception = 0;
     throw std::runtime_error("Managed exception in " + d.full_name(type) + "." +
                              std::string(d.method(method, type)));
@@ -569,9 +691,7 @@ int get_field(lua_State *L, ReadFrame &f, Object obj, std::string_view name,
     auto field = t.field(pos, id);
     if (field.flags & (0x10 | 0x40))
       throw std::runtime_error("Expected an instance field");
-    auto vt = read<uintptr_t>(t.types, size_t(id) * 72 + 64);
-    int64_t offset = int64_t(field.offset) +
-                     (vt ? *reinterpret_cast<const int32_t *>(vt - 8) : 0);
+    int64_t offset = t.field_offset_from_base(field);
     auto size = read<uint32_t>(t.types, size_t(obj.type) * 72 + 20);
     if (offset < 16 || uint64_t(offset) >= size)
       throw std::runtime_error("Invalid instance field offset");
@@ -582,11 +702,16 @@ int get_field(lua_State *L, ReadFrame &f, Object obj, std::string_view name,
       if (!f.persistent)
         throw std::runtime_error("Field update requires the live runtime");
       engine_context(f);
-      write_scalar(L, write_arg, kind, bytes);
+      if (kind == ValueKind::Struct)
+        struct_field(L, f, field.type, bytes, write_arg);
+      else
+        write_scalar(L, write_arg, kind, bytes);
       return 0;
     }
     if (kind == ValueKind::Reference || kind == ValueKind::String)
       read_box(L, f, read<uintptr_t>(bytes, 0), field.type);
+    else if (kind == ValueKind::Struct)
+      struct_field(L, f, field.type, bytes, 0);
     else
       read_scalar(L, kind, bytes);
     return 1;
@@ -658,6 +783,12 @@ int invoke(lua_State *L) {
   try {
     if (name == "get_address") {
       lua_pushinteger(L, obj.address);
+      return 1;
+    }
+    if (name == "get_reference_count") {
+      // Rise NS add_ref and release atomically update the 32-bit word after the class pointer.
+      auto *count = reinterpret_cast<const uint32_t *>(obj.address + sizeof(uintptr_t));
+      lua_pushinteger(L, __atomic_load_n(count, __ATOMIC_RELAXED));
       return 1;
     }
     if (array_method(name) && isa(f.db, obj.type, f.db.find("System.Array")))
@@ -872,6 +1003,72 @@ int create_array(lua_State *L) {
     auto method = f.db.lookup_method(
         f.db.find("System.Array"), "CreateInstance(System.Type,System.Int32)");
     return managed_call(L, f, method, 0, lua_gettop(L) - 1);
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+
+int create_value(lua_State *L) {
+  auto id = mod_lua::type_definition_id(L, 1);
+  try {
+    auto &f = frame(L);
+    if (!isa(f.db, id, f.db.find("System.ValueType")) ||
+        id == f.db.find("System.Void"))
+      throw std::runtime_error("ValueType.new requires a concrete value type");
+    auto size = read<uint32_t>(f.db.impl(72ull * id), 8);
+    if (!size)
+      throw std::runtime_error("Value type has no concrete storage");
+    auto box = allocate_box(f, id, true);
+    auto bytes = boxed_payload(f, box, id);
+    if (size > bytes.size())
+      throw std::runtime_error("Value exceeds boxed payload");
+    memset(bytes.data(), 0, size);
+    push_obj(L, f, box, id);
+    return 1;
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+int create_ref(lua_State *L) {
+  auto id = mod_lua::type_definition_id(L, 1);
+  lua_settop(L, 2);
+  try {
+    auto &f = frame(L);
+    auto kind = value_kind(f.db, id);
+    if (kind != ValueKind::Reference && kind != ValueKind::String)
+      throw std::runtime_error("Expected a managed reference type");
+    if (!lua_isnil(L, 2))
+      live_object_address(L, 2, id);
+    auto *declared = static_cast<uint32_t *>(lua_newuserdatauv(L, sizeof(id), 1));
+    *declared = id;
+    luaL_setmetatable(L, ref_mt);
+    int slot = lua_gettop(L);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushcclosure(L, create_array, 1);
+    lua_pushliteral(L, "System.Object");
+    lua_pushinteger(L, 1);
+    lua_call(L, 2, 1);
+    if (!lua_isnil(L, 2)) {
+      lua_pushvalue(L, 2);
+      lua_seti(L, -2, 0);
+    }
+    lua_setiuservalue(L, slot, 1);
+    return 1;
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+int read_ref(lua_State *L) {
+  auto *declared = static_cast<uint32_t *>(luaL_checkudata(L, 1, ref_mt));
+  try {
+    auto &f = frame(L);
+    auto array = ref_array(L, f, 1);
+    auto value = *reinterpret_cast<const uintptr_t *>(array.address + 0x20);
+    push_obj(L, f, value, *declared);
+    return 1;
   } catch (const std::exception &e) {
     lua_pushstring(L, e.what());
   }
@@ -1120,6 +1317,18 @@ void open_live_read(lua_State *L, ReadFrame &f) {
   });
   lua_setfield(L, -2, "__gc");
   lua_pop(L, 1);
+  luaL_newmetatable(L, ref_mt);
+  lua_newtable(L);
+  lua_pushlightuserdata(L, &f);
+  lua_pushcclosure(L, read_ref, 1);
+  lua_setfield(L, -2, "get");
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
+  lua_newtable(L);
+  lua_pushlightuserdata(L, &f);
+  lua_pushcclosure(L, create_value, 1);
+  lua_setfield(L, -2, "new");
+  lua_setglobal(L, "ValueType");
   lua_getglobal(L, "sdk");
   if (!lua_istable(L, -1)) {
     lua_pop(L, 1);
@@ -1170,7 +1379,7 @@ void open_live_read(lua_State *L, ReadFrame &f) {
        {std::pair<const char *, lua_CFunction>{"typeof", runtime_type},
         {"get_managed_singleton", singleton},
         {"call_native_func", call_native_func},
-        {"create_instance", create_instance},
+        {"create_instance", create_instance}, {"create_ref", create_ref},
         {"get_primary_camera", primary_camera},
         {"create_managed_array", create_array}}) {
     lua_pushlightuserdata(L, &f);

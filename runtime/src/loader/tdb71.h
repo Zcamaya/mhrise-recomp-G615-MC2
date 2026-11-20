@@ -93,6 +93,11 @@ struct Tdb {
             uint32_t(read<uint16_t>(info, 2) >> 1),
             name(read<uint32_t>(info, 8) & 0xfffffff)};
   }
+  int64_t field_offset_from_base(const Field &field) const {
+    auto vt = read<uintptr_t>(types, 72ull * field.owner + 64);
+    return int64_t(field.offset) +
+           (vt ? *reinterpret_cast<const int32_t *>(vt - 8) : 0);
+  }
   int64_t lookup_field(uint32_t type, std::string_view name) const {
     auto key = std::pair{type, std::string(name)};
     if (auto i = resolved_fields.find(key); i != resolved_fields.end())
@@ -219,10 +224,12 @@ struct Tdb {
   uint32_t parameter_row(size_t signature, unsigned slot) const {
     return read<uint32_t>(byte_pool, signature + 4 + 4 * slot);
   }
+  uint32_t parameter_modifier(size_t signature, unsigned slot) const {
+    return read<uint32_t>(parameters,
+                          parameter_row(signature, slot) * 12ull + 4) >> 30;
+  }
   bool plain_parameter(size_t signature, unsigned slot) const {
-    return !(read<uint32_t>(parameters,
-                            parameter_row(signature, slot) * 12ull + 4) >>
-             30);
+    return parameter_modifier(signature, slot) == 0;
   }
   uint32_t parent(uint32_t type) const {
     return (read<uint64_t>(types, size_t(type) * 72) >> 19) & id_mask;

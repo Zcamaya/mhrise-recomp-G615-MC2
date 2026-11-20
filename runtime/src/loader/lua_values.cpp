@@ -150,6 +150,14 @@ bool mod_lua::read_components(lua_State *L, int index, bool quaternion,
 }
 void mod_lua::open_values(lua_State *L) {
   luaL_newmetatable(L, "rise.Matrix4x4f");
+  lua_pushcfunction(L, [](lua_State *s) {
+    auto *matrix = static_cast<const float *>(luaL_checkudata(s, 1, "rise.Matrix4x4f"));
+    auto row = luaL_checkinteger(s, 2);
+    luaL_argcheck(s, row >= 0 && row < 4, 2, "matrix index outside 0..3");
+    push_components(s, false, matrix + 4 * row, 4);
+    return 1;
+  });
+  lua_setfield(L, -2, "__index");
   lua_pop(L, 1);
   for (int k : {0, 1, 2, 3}) {
     luaL_newmetatable(L, names[k]);

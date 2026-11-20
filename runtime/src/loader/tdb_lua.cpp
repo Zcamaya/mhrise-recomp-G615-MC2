@@ -214,6 +214,13 @@ template <bool list> int fields(lua_State *L) {
       getter(L, "get_flags");
       lua_pushinteger(L, f.offset);
       getter(L, "get_offset_from_fieldptr");
+      bind(L, "get_offset_from_base", [](lua_State *s) {
+        auto &t = db(s);
+        auto index = bound_id(s);
+        auto declaring = read<uint32_t>(t.fields, 8ull * index) & id_mask;
+        lua_pushinteger(s, t.field_offset_from_base(t.field(index, declaring)));
+        return 1;
+      }, t, first + i);
       if (!list)
         return 1;
       lua_rawseti(L, -2, i + 1);
