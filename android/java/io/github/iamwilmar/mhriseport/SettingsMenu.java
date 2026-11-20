@@ -1455,7 +1455,7 @@ final class SettingsMenu {
                 + "decrypted with your Steam ID (read from the save itself when it can be, asked for when not), then filled "
                 + "into this save's layout. The game closes right after, so it can't write the old save back.");
         String[] from = {"From a .zip", "From a folder"};
-        action("Import a save", "A zip or a folder with data001Slot.bin and data00-1.bin, from the Switch, Eden, Yuzu, "
+        action("Import a save", "A zip or a folder with data00-1.bin and a data00#Slot.bin, from the Switch, Eden, Yuzu, "
                 + "another copy of the port, or Steam (win64_save).", () -> dropDown("Import a save", from, -1, i -> {
                     dialog.dismiss();
                     activity.pickSave(i == 1, 0);
