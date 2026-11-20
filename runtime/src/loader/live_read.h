@@ -22,7 +22,9 @@ int access_value_field(lua_State *, Tdb &, uint32_t, std::span<uint8_t>,
                        std::string_view, bool write);
 int invoke_descriptor(lua_State *);
 int read_descriptor_field(lua_State *);
+int write_descriptor_field(lua_State *);
 int descriptor_runtime_type(lua_State *);
+int descriptor_create_instance(lua_State *);
 uintptr_t current_vm_context(const Module &);
 void drain_managed_releases();
 } // namespace rise

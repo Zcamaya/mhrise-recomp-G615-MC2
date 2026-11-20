@@ -1,4 +1,6 @@
 #include "loader/live_read.h"
+#include "loader/application_lua.h"
+#include "loader/screen_projection.h"
 #include "loader/lua_mod_hooks.h"
 #include "loader/lua_values.h"
 #include "loader/tls.h"
@@ -15,6 +17,7 @@
 namespace rise {
 namespace {
 constexpr char object_mt[] = "rise.sample.object";
+constexpr char released_mt[] = "rise.released.object";
 constexpr char ref_mt[] = "rise.managed.reference";
 char frame_key, object_cache_key;
 struct Object {
@@ -81,6 +84,12 @@ Object object(lua_State *L, int index) {
   if (lua_rawlen(L, index) != sizeof(Object))
     luaL_error(L, "Invalid sample handle");
   return *p;
+}
+void queue_release(Object &handle) {
+  if (!handle.release) return;
+  std::lock_guard lock(releases_mutex);
+  releases.emplace_back(handle.release, handle.address);
+  handle.release = 0;
 }
 uintptr_t function(ReadFrame &f, uint32_t method) {
   auto offset = read<int32_t>(f.db.methods, size_t(method) * 12 + 8);
@@ -683,9 +692,9 @@ int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
   return 1;
 }
 int get_field(lua_State *L, ReadFrame &f, Object obj, std::string_view name,
-              int write_arg = 0) {
+              int write_arg = 0, int pos = -1) {
   auto &t = f.db;
-  auto pos = t.lookup_field(obj.type, name);
+  if (pos < 0) pos = t.lookup_field(obj.type, name);
   if (pos >= 0) {
     auto id = read<uint32_t>(t.fields, 8ull * pos) & id_mask;
     auto field = t.field(pos, id);
@@ -790,6 +799,21 @@ int invoke(lua_State *L) {
       auto *count = reinterpret_cast<const uint32_t *>(obj.address + sizeof(uintptr_t));
       lua_pushinteger(L, __atomic_load_n(count, __ATOMIC_RELAXED));
       return 1;
+    }
+    if (name == "add_ref" || name == "release" || name == "force_release") {
+      if (!f.persistent || !obj.release)
+        throw std::runtime_error("Expected a retained live managed object");
+      lua_settop(L, 1);
+      // Resident userdata already owns one reference. REFramework's add_ref is idempotent.
+      if (name == "add_ref") return 1;
+      auto &handle = *static_cast<Object *>(lua_touserdata(L, 1));
+      lua_rawgetp(L, LUA_REGISTRYINDEX, &object_cache_key);
+      lua_pushnil(L);
+      lua_rawsetp(L, -2, reinterpret_cast<void *>(handle.address));
+      lua_pop(L, 1);
+      luaL_setmetatable(L, released_mt);
+      queue_release(handle);
+      return 0;
     }
     if (array_method(name) && isa(f.db, obj.type, f.db.find("System.Array")))
       return array_access(L, f, obj, name, arg);
@@ -940,26 +964,23 @@ int runtime_type(lua_State *L) {
   }
   return lua_error(L);
 }
+int instantiate(lua_State *L, ReadFrame &f, uint32_t id) {
+  if (!id) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (lua_isboolean(L, 2) && lua_toboolean(L, 2))
+    throw std::runtime_error("Simplified instance allocation is not implemented on NS");
+  push_runtime_type(L, f, id);
+  if (lua_isnil(L, -1)) return 1;
+  auto factory = f.db.lookup_method(f.db.find("System.Activator"), "CreateInstance(System.Type)");
+  if (!factory) throw std::runtime_error("System.Activator.CreateInstance is unavailable");
+  return managed_call(L, f, factory, 0, lua_gettop(L), true);
+}
 int create_instance(lua_State *L) {
   auto &f = frame(L);
-  const char *name = luaL_checkstring(L, 1);
-  bool simplify = lua_isboolean(L, 2) && lua_toboolean(L, 2);
   try {
-    auto id = f.db.find(name);
-    if (!id) {
-      lua_pushnil(L);
-      return 1;
-    }
-    if (simplify)
-      throw std::runtime_error("Simplified instance allocation is not implemented on NS");
-    push_runtime_type(L, f, id);
-    if (lua_isnil(L, -1))
-      return 1;
-    auto factory = f.db.lookup_method(f.db.find("System.Activator"),
-                                      "CreateInstance(System.Type)");
-    if (!factory)
-      throw std::runtime_error("System.Activator.CreateInstance is unavailable");
-    return managed_call(L, f, factory, 0, lua_gettop(L), true);
+    return instantiate(L, f, f.db.find(luaL_checkstring(L, 1)));
   } catch (const std::exception &e) {
     lua_pushstring(L, e.what());
   }
@@ -1172,12 +1193,14 @@ int invoke_descriptor(lua_State *L) {
   }
   return lua_error(L);
 }
-int read_descriptor_field(lua_State *L) {
+static int descriptor_field(lua_State *L, bool write) {
   try {
     auto &f = live_frame(L);
     uint32_t i = lua_tointeger(L, lua_upvalueindex(2));
     auto declaring = read<uint32_t>(f.db.fields, 8ull * i) & id_mask;
     auto field = f.db.field(i, declaring);
+    if (write && (field.flags & (0x10 | 0x20 | 0x40)))
+      throw std::runtime_error("Expected a writable instance field");
     if ((field.flags & 0x50) == 0x50) {
       auto off = f.db.literal_offset(i);
       if (off < 0) {
@@ -1191,12 +1214,14 @@ int read_descriptor_field(lua_State *L) {
     auto o = object(L, 2);
     if (!isa(f.db, o.type, declaring))
       throw std::runtime_error("Incorrect field receiver");
-    return get_field(L, f, o, f.db.field(i, declaring).name);
+    return get_field(L, f, o, field.name, write ? 3 : 0, i);
   } catch (const std::exception &e) {
     lua_pushstring(L, e.what());
   }
   return lua_error(L);
 }
+int read_descriptor_field(lua_State *L) { return descriptor_field(L, false); }
+int write_descriptor_field(lua_State *L) { return descriptor_field(L, true); }
 int descriptor_runtime_type(lua_State *L) {
   try {
     auto &f = live_frame(L);
@@ -1207,18 +1232,46 @@ int descriptor_runtime_type(lua_State *L) {
   }
   return lua_error(L);
 }
+int descriptor_create_instance(lua_State *L) {
+  try {
+    return instantiate(L, live_frame(L), lua_tointeger(L, lua_upvalueindex(2)));
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+static uintptr_t camera_address(ReadFrame &f) {
+  auto ctx = engine_context(f);
+  auto slot = *reinterpret_cast<const uintptr_t *>(f.main.addr(0x12674898));
+  auto scene = slot ? *reinterpret_cast<const uintptr_t *>(slot) : 0;
+  using Get = uintptr_t (*)(uintptr_t, uintptr_t);
+  auto view = scene ? reinterpret_cast<Get>(function(f, 734924))(ctx, scene) : 0;
+  return view ? reinterpret_cast<Get>(function(f, 734346))(ctx, view) : 0;
+}
+std::optional<CameraMatrices> camera_matrices(lua_State *L) {
+  auto &f = live_frame(L);
+  auto camera = camera_address(f);
+  if (!camera) return std::nullopt;
+  auto type = f.db.find("via.Camera");
+  auto read_matrix = [&](const char *name, std::array<float, 16> &out) {
+    auto method = f.db.lookup_method(type, name, 0);
+    if (!method) throw std::runtime_error(std::string("Missing camera getter: ") + name);
+    managed_call(L, f, method, camera, lua_gettop(L) + 1);
+    auto *matrix = luaL_testudata(L, -1, "rise.Matrix4x4f");
+    if (!matrix || lua_rawlen(L, -1) != sizeof(out))
+      throw std::runtime_error(std::string("Expected camera matrix from ") + name);
+    memcpy(out.data(), matrix, sizeof(out));
+    lua_pop(L, 1);
+  };
+  CameraMatrices matrices;
+  read_matrix("get_ViewMatrix", matrices.view);
+  read_matrix("get_ProjectionMatrix", matrices.projection);
+  return matrices;
+}
 int primary_camera(lua_State *L) {
   try {
     auto &f = frame(L);
-    auto ctx = f.persistent ? current_vm_context(f.main) : f.context;
-    if (!ctx)
-      throw std::runtime_error("Camera lookup requires an engine thread");
-    auto slot = *reinterpret_cast<const uintptr_t *>(f.main.addr(0x12674898));
-    auto scene = slot ? *reinterpret_cast<const uintptr_t *>(slot) : 0;
-    using Get = uintptr_t (*)(uintptr_t, uintptr_t);
-    auto view =
-        scene ? reinterpret_cast<Get>(function(f, 734924))(ctx, scene) : 0;
-    auto cam = view ? reinterpret_cast<Get>(function(f, 734346))(ctx, view) : 0;
+    auto cam = camera_address(f);
     push_obj(L, f, cam, f.db.parameter_type(f.db.signature_offset(734346), 0));
     return 1;
   } catch (const std::exception &e) {
@@ -1241,6 +1294,8 @@ uintptr_t current_vm_context(const Module &m) {
   return table ? table[index] : 0;
 }
 void drain_managed_releases() {
+  std::unique_lock lua_lock(mod_lua::lua_mutex(), std::try_to_lock);
+  if (!lua_lock.owns_lock()) return;
   std::vector<std::pair<uintptr_t, uintptr_t>> batch;
   {
     std::lock_guard lock(releases_mutex);
@@ -1248,6 +1303,20 @@ void drain_managed_releases() {
   }
   for (auto [release, obj] : batch)
     reinterpret_cast<void (*)(uintptr_t)>(release)(obj);
+}
+static int indexed_item(lua_State *L, ReadFrame &f, Object o, bool write) {
+  if (isa(f.db, o.type, f.db.find("System.Array")))
+    return array_access(L, f, o, write ? "set_element" : "get_element", 2);
+  // Closed IList implementations expose get_Item(Int32) and optionally set_Item(Int32,T).
+  auto getter = f.db.lookup_method(o.type, "get_Item(System.Int32)", 1);
+  if (!getter) throw std::runtime_error("Managed object has no integer indexer");
+  auto method = getter;
+  if (write) {
+    auto element = f.db.parameter_type(f.db.signature_offset(getter), 0);
+    method = f.db.lookup_method(o.type, "set_Item(System.Int32," + f.db.full_name(element) + ")", 2);
+    if (!method) throw std::runtime_error("Managed integer indexer is read-only");
+  }
+  return managed_call(L, f, method, o.address, 2);
 }
 void open_live_read(lua_State *L, ReadFrame &f) {
   lua_pushlightuserdata(L, &f);
@@ -1258,6 +1327,10 @@ void open_live_read(lua_State *L, ReadFrame &f) {
   lua_setfield(L, -2, "__mode");
   lua_setmetatable(L, -2);
   lua_rawsetp(L, LUA_REGISTRYINDEX, &object_cache_key);
+  luaL_newmetatable(L, released_mt);
+  lua_pushcfunction(L, [](lua_State *s) { return luaL_error(s, "Managed handle has been released"); });
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
   luaL_newmetatable(L, object_mt);
   lua_pushlightuserdata(L, &f);
   lua_pushcclosure(
@@ -1266,9 +1339,8 @@ void open_live_read(lua_State *L, ReadFrame &f) {
         auto &f = frame(s);
         auto o = object(s, 1);
         try {
-          if (lua_isinteger(s, 2) &&
-              isa(f.db, o.type, f.db.find("System.Array")))
-            return array_access(s, f, o, "get_element", 2);
+          if (lua_isinteger(s, 2))
+            return indexed_item(s, f, o, false);
           if (lua_type(s, 2) == LUA_TSTRING &&
               f.db.lookup_field(o.type, lua_tostring(s, 2)) >= 0)
             return get_field(s, f, o, lua_tostring(s, 2));
@@ -1290,9 +1362,8 @@ void open_live_read(lua_State *L, ReadFrame &f) {
         try {
           auto &f = frame(s);
           auto o = object(s, 1);
-          if (lua_isinteger(s, 2) &&
-              isa(f.db, o.type, f.db.find("System.Array")))
-            return array_access(s, f, o, "set_element", 2);
+          if (lua_isinteger(s, 2))
+            return indexed_item(s, f, o, true);
           return get_field(s, f, o, luaL_checkstring(s, 2), 3);
         } catch (const std::exception &e) {
           lua_pushstring(s, e.what());
@@ -1302,17 +1373,15 @@ void open_live_read(lua_State *L, ReadFrame &f) {
       1);
   lua_setfield(L, -2, "__newindex");
   lua_pushcfunction(L, [](lua_State *s) {
-    lua_pushboolean(s, object(s, 1).address == object(s, 2).address);
+    auto *left = static_cast<Object *>(luaL_testudata(s, 1, object_mt));
+    auto *right = static_cast<Object *>(luaL_testudata(s, 2, object_mt));
+    lua_pushboolean(s, left && right && left->address == right->address);
     return 1;
   });
   lua_setfield(L, -2, "__eq");
   lua_pushcfunction(L, [](lua_State *s) {
     auto *p = static_cast<Object *>(luaL_checkudata(s, 1, object_mt));
-    if (p->release) {
-      std::lock_guard lock(releases_mutex);
-      releases.emplace_back(p->release, p->address);
-      p->release = 0;
-    }
+    queue_release(*p);
     return 0;
   });
   lua_setfield(L, -2, "__gc");

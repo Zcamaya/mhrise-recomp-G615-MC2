@@ -204,6 +204,7 @@ template <bool list> int fields(lua_State *L) {
         continue;
       named_object(L, f.name, "get_name");
       bind(L, "get_data", rise::read_descriptor_field, t, first + i);
+      bind(L, "set_data", rise::write_descriptor_field, t, first + i);
       bind(L, "get_type", type_result, t, f.type);
       bind(L, "get_declaring_type", type_result, t, owner);
       lua_pushboolean(L, f.flags & 0x10);
@@ -265,6 +266,7 @@ void push_type(lua_State *L, Tdb &t, uint32_t id) {
   bind(L, "get_parent_type", type_result, t, t.parent(id));
   bind(L, "get_methods", get_methods, t, id);
   bind(L, "get_runtime_type", rise::descriptor_runtime_type, t, id);
+  bind(L, "create_instance", rise::descriptor_create_instance, t, id);
   lua_pushinteger(L, read<uint32_t>(t.types, id * 72ull + 20));
   getter(L, "get_size");
   lua_pushinteger(L, read<uint32_t>(info, 8));

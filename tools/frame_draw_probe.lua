@@ -11,6 +11,15 @@ re.on_frame(function()
     if imgui.begin_window("Lua frame probe", nil, 64) then
         imgui.push_id(1)
         imgui.text("on_frame")
+        assert(imgui.get_window_size().x > 0 and imgui.calc_text_size("probe").x > 0)
+        imgui.begin_rect()
+        imgui.push_item_width(90)
+        assert(imgui.calc_item_width() > 0)
+        imgui.begin_disabled()
+        assert(not imgui.button("Disabled"))
+        imgui.end_disabled()
+        imgui.pop_item_width()
+        imgui.end_rect(2, 0)
         if imgui.button("Test touch") then log.info("Lua frame probe: button clicked") end
         if not imgui.is_mouse_down(0) then
             local pos = imgui.get_window_pos()

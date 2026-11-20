@@ -1,6 +1,7 @@
 #include "loader/mod_ui.h"
 #include "loader/mod_font.h"
 #include "loader/lua_values.h"
+#include "loader/screen_projection.h"
 #include "loader/application_lua.h"
 #include <algorithm>
 #include <GLES3/gl3.h>
@@ -18,7 +19,7 @@
 
 namespace {
 thread_local bool drawing = false;
-enum class Scope { Tree, Tooltip, Window, Id, Style };
+enum class Scope { Tree, Tooltip, Window, Id, Style, Group, Rect, Disabled, Popup, ItemWidth };
 thread_local std::vector<Scope> scopes;
 void close_scope() {
   switch (scopes.back()) {
@@ -27,6 +28,11 @@ void close_scope() {
   case Scope::Window: ImGui::End(); break;
   case Scope::Id: ImGui::PopID(); break;
   case Scope::Style: ImGui::PopStyleVar(); break;
+  case Scope::Group:
+  case Scope::Rect: ImGui::EndGroup(); break;
+  case Scope::Disabled: ImGui::EndDisabled(); break;
+  case Scope::Popup: ImGui::EndPopup(); break;
+  case Scope::ItemWidth: ImGui::PopItemWidth(); break;
   }
   scopes.pop_back();
 }
@@ -71,7 +77,11 @@ enum Widget {
   PopStyle,
   Indent,
   Unindent,
-  Combo
+  Combo, CalcTextSize, WindowSize, CursorScreenPos, CursorPos, SetCursorPos,
+  SetCursorScreenPos, ItemActive, ItemFocused, SetNextItemWidth, CalcItemWidth,
+  PushItemWidth, PopItemWidth, BeginGroup, EndGroup, BeginRect, EndRect,
+  BeginDisabled, EndDisabled, OpenPopup, BeginPopup, BeginPopupContextItem,
+  EndPopup, CloseCurrentPopup, IsPopupOpen, InputMultiline, ColorPickerArgb
 };
 ImVec2 vec2(lua_State *L, int index) {
   float v[2];
@@ -93,7 +103,64 @@ int widget(lua_State *L) {
   if (!drawing)
     return luaL_error(L, "imgui requires an active on_frame or on_draw_ui callback");
   auto kind = static_cast<Widget>(lua_tointeger(L, lua_upvalueindex(1)));
+  auto end = [&](Scope scope) {
+    if (scopes.empty() || scopes.back() != scope)
+      return luaL_error(L, "ImGui scope closed out of order");
+    close_scope();
+    return 0;
+  };
   switch (kind) {
+  case BeginGroup:
+  case BeginRect:
+    ImGui::BeginGroup();
+    scopes.push_back(kind == BeginRect ? Scope::Rect : Scope::Group);
+    return 0;
+  case EndGroup: return end(Scope::Group);
+  case EndRect: {
+    float pad = luaL_optnumber(L, 1, 0);
+    float radius = luaL_optnumber(L, 2, ImGui::GetStyle().FrameRounding);
+    end(Scope::Rect);
+    auto lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+    ImGui::GetWindowDrawList()->AddRect({lo.x-pad, lo.y-pad}, {hi.x+pad, hi.y+pad},
+                                       ImGui::GetColorU32(ImGuiCol_Border), radius);
+    return 0;
+  }
+  case BeginDisabled:
+    ImGui::BeginDisabled(lua_isnoneornil(L, 1) || lua_toboolean(L, 1));
+    scopes.push_back(Scope::Disabled);
+    return 0;
+  case EndDisabled: return end(Scope::Disabled);
+  case BeginPopupContextItem:
+  case BeginPopup: {
+    bool open = kind == BeginPopup
+        ? ImGui::BeginPopup(visible_text(luaL_checkstring(L, 1)), luaL_optinteger(L, 2, 0))
+        : ImGui::BeginPopupContextItem(luaL_optstring(L, 1, nullptr),
+                                      luaL_optinteger(L, 2, ImGuiPopupFlags_MouseButtonRight));
+    if (open) scopes.push_back(Scope::Popup);
+    lua_pushboolean(L, open);
+    return 1;
+  }
+  case EndPopup: return end(Scope::Popup);
+  case OpenPopup:
+    ImGui::OpenPopup(luaL_checkstring(L, 1), luaL_optinteger(L, 2, 0));
+    return 0;
+  case IsPopupOpen:
+    lua_pushboolean(L, ImGui::IsPopupOpen(luaL_checkstring(L, 1)));
+    return 1;
+  case CloseCurrentPopup:
+    ImGui::CloseCurrentPopup();
+    return 0;
+  case SetCursorScreenPos: ImGui::SetCursorScreenPos(vec2(L, 1)); return 0;
+  case SetCursorPos: ImGui::SetCursorPos(vec2(L, 1)); return 0;
+  case SetNextItemWidth: ImGui::SetNextItemWidth(luaL_checknumber(L, 1)); return 0;
+  case CalcItemWidth: lua_pushnumber(L, ImGui::CalcItemWidth()); return 1;
+  case PushItemWidth:
+    ImGui::PushItemWidth(luaL_checknumber(L, 1));
+    scopes.push_back(Scope::ItemWidth);
+    return 0;
+  case PopItemWidth: return end(Scope::ItemWidth);
+  case ItemActive: lua_pushboolean(L, ImGui::IsItemActive()); return 1;
+  case ItemFocused: lua_pushboolean(L, ImGui::IsItemFocused()); return 1;
   case Indent:
     ImGui::Indent(luaL_optnumber(L, 1, 0));
     return 0;
@@ -137,9 +204,21 @@ int widget(lua_State *L) {
     lua_pushboolean(L, ImGui::IsMouseDown(button));
     return 1;
   }
+  case CursorPos:
+  case CursorScreenPos:
+  case CalcTextSize:
+  case WindowSize:
   case WindowPos:
   case DisplaySize: {
-    auto v = kind == DisplaySize ? ImGui::GetIO().DisplaySize : ImGui::GetWindowPos();
+    ImVec2 v;
+    switch (kind) {
+    case CalcTextSize: v = ImGui::CalcTextSize(visible_text(luaL_checkstring(L, 1))); break;
+    case CursorPos: v = ImGui::GetCursorPos(); break;
+    case CursorScreenPos: v = ImGui::GetCursorScreenPos(); break;
+    case WindowSize: v = ImGui::GetWindowSize(); break;
+    case WindowPos: v = ImGui::GetWindowPos(); break;
+    default: v = ImGui::GetIO().DisplaySize; break;
+    }
     float xy[] = {v.x, v.y};
     mod_lua::push_components(L, false, xy, 2);
     return 1;
@@ -297,9 +376,24 @@ int widget(lua_State *L) {
     lua_pushnumber(L, v);
     return 2;
   }
+  case ColorPickerArgb: {
+    uint32_t argb = luaL_checkinteger(L, 2);
+    float rgba[] = {float((argb >> 16) & 255) / 255, float((argb >> 8) & 255) / 255,
+                    float(argb & 255) / 255, float(argb >> 24) / 255};
+    bool changed = ImGui::ColorPicker4(label, rgba, luaL_optinteger(L, 3, 0));
+    auto channel = [&](int i) { return uint32_t(std::clamp(rgba[i], 0.f, 1.f) * 255.f); };
+    lua_pushboolean(L, changed);
+    lua_pushinteger(L, (channel(3)<<24) | (channel(0)<<16) | (channel(1)<<8) | channel(2));
+    return 2;
+  }
+  case InputMultiline:
   case Input: {
     size_t n;
     const char *value = visible_text(luaL_optlstring(L, 2, "", &n));
+    const bool multi = kind == InputMultiline;
+    ImVec2 size = multi && !lua_isnoneornil(L, 3) ? vec2(L, 3) : ImVec2{};
+    int flags = luaL_optinteger(L, multi ? 4 : 3, 0) | ImGuiInputTextFlags_CallbackResize |
+                ImGuiInputTextFlags_CallbackAlways;
     struct Edit {
       std::vector<char> bytes;
       int from{}, to{};
@@ -316,10 +410,9 @@ int widget(lua_State *L) {
       edit.to = data->SelectionEnd;
       return 0;
     };
-    int flags = luaL_optinteger(L, 3, 0) | ImGuiInputTextFlags_CallbackResize |
-                ImGuiInputTextFlags_CallbackAlways;
-    bool changed = ImGui::InputText(label, edit.bytes.data(), edit.bytes.size(),
-                                    flags, callback, &edit);
+    bool changed = multi
+        ? ImGui::InputTextMultiline(label, edit.bytes.data(), edit.bytes.size(), size, flags, callback, &edit)
+        : ImGui::InputText(label, edit.bytes.data(), edit.bytes.size(), flags, callback, &edit);
     lua_pushboolean(L, changed);
     lua_pushstring(L, edit.bytes.data());
     lua_pushinteger(L, edit.from);
@@ -334,10 +427,44 @@ std::unique_ptr<ModFontGlyphs> glyphs;
 GLint max_texture_size = 0;
 std::chrono::steady_clock::time_point last;
 
-enum class Primitive { Text, Line, FilledRect, OutlineRect, FilledCircle, OutlineCircle, FilledQuad, OutlineQuad };
+enum class Primitive { Text, Line, FilledRect, OutlineRect, FilledCircle, OutlineCircle, FilledQuad, OutlineQuad,
+                       WorldToScreen, WorldText };
+std::optional<rise::CameraMatrices> frame_camera;
 int primitive(lua_State *L) {
-  if (!drawing) return luaL_error(L, "draw requires an active frame");
   auto kind = static_cast<Primitive>(lua_tointeger(L, lua_upvalueindex(1)));
+  if (!drawing && kind != Primitive::WorldToScreen)
+    return luaL_error(L, "draw requires an active frame");
+  if (kind == Primitive::WorldToScreen || kind == Primitive::WorldText) {
+    bool text = kind == Primitive::WorldText;
+    float xyz[3]{};
+    if (ui && (mod_lua::read_components(L, text ? 2 : 1, false, xyz, 3) ||
+               mod_lua::read_components(L, text ? 2 : 1, false, xyz, 2))) {
+      try {
+        auto size = ImGui::GetIO().DisplaySize;
+        if (size.x > 0 && size.y > 0) {
+          if (!drawing || !frame_camera) frame_camera = rise::camera_matrices(L);
+          if (frame_camera) {
+            auto xy = frame_camera->screen(xyz, size.x, size.y);
+            if (xy) {
+              if (!text) {
+                mod_lua::push_components(L, false, xy->data(), 2);
+                return 1;
+              }
+              ImGui::GetBackgroundDrawList()->AddText({(*xy)[0], (*xy)[1]},
+                  luaL_optinteger(L, 3, IM_COL32_WHITE), visible_text(luaL_checkstring(L, 1)));
+              return 0;
+            }
+          }
+        }
+      } catch (const std::exception &e) {
+        lua_pushstring(L, e.what());
+        return lua_error(L);
+      }
+    }
+    if (text) return 0;
+    lua_pushnil(L);
+    return 1;
+  }
   auto *list = ImGui::GetBackgroundDrawList();
   auto point = [&](int i) {
     return ImVec2{float(luaL_checknumber(L, i)), float(luaL_checknumber(L, i + 1))};
@@ -379,6 +506,7 @@ int mod_lua::call_ui_callback(lua_State *L) {
 }
 bool mod_lua::ui_visible() { return visible.load(); }
 void mod_lua::service_ui_frame() {
+  frame_camera.reset();
   // BeginRendering owns script execution. The GLES thread consumes only completed
   // draw data, under the same mutex, and may skip superseded game frames.
   if (ui) ImGui::SetCurrentContext(ui);
@@ -442,7 +570,18 @@ void mod_lua::open_imgui(lua_State *L) {
                             {"pop_style_var", PopStyle},
                             {"indent", Indent},
                             {"unindent", Unindent},
-                            {"combo", Combo}}) {
+                            {"combo", Combo}, {"calc_text_size", CalcTextSize},
+                            {"get_window_size", WindowSize}, {"get_cursor_pos", CursorPos},
+                            {"get_cursor_screen_pos", CursorScreenPos}, {"set_cursor_pos", SetCursorPos},
+                            {"set_cursor_screen_pos", SetCursorScreenPos}, {"is_item_active", ItemActive},
+                            {"is_item_focused", ItemFocused}, {"set_next_item_width", SetNextItemWidth},
+                            {"calc_item_width", CalcItemWidth}, {"push_item_width", PushItemWidth},
+                            {"pop_item_width", PopItemWidth}, {"begin_group", BeginGroup}, {"end_group", EndGroup},
+                            {"begin_rect", BeginRect}, {"end_rect", EndRect}, {"begin_disabled", BeginDisabled},
+                            {"end_disabled", EndDisabled}, {"open_popup", OpenPopup}, {"begin_popup", BeginPopup},
+                            {"begin_popup_context_item", BeginPopupContextItem}, {"end_popup", EndPopup},
+                            {"close_current_popup", CloseCurrentPopup}, {"is_popup_open", IsPopupOpen},
+                            {"input_text_multiline", InputMultiline}, {"color_picker_argb", ColorPickerArgb}}) {
     lua_pushinteger(L, kind);
     lua_pushcclosure(L, widget, 1);
     lua_setfield(L, -2, name);
@@ -452,7 +591,8 @@ void mod_lua::open_imgui(lua_State *L) {
   for (auto [name, kind] : {std::pair{"text", Primitive::Text}, {"line", Primitive::Line},
                             {"filled_rect", Primitive::FilledRect}, {"outline_rect", Primitive::OutlineRect},
                             {"filled_circle", Primitive::FilledCircle}, {"outline_circle", Primitive::OutlineCircle},
-                            {"filled_quad", Primitive::FilledQuad}, {"outline_quad", Primitive::OutlineQuad}}) {
+                            {"filled_quad", Primitive::FilledQuad}, {"outline_quad", Primitive::OutlineQuad},
+                            {"world_to_screen", Primitive::WorldToScreen}, {"world_text", Primitive::WorldText}}) {
     lua_pushinteger(L, static_cast<int>(kind));
     lua_pushcclosure(L, primitive, 1);
     lua_setfield(L, -2, name);
