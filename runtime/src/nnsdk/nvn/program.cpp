@@ -278,6 +278,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.subgroup_operations);
     h.u32(o.broken_subgroup_shuffle);
     h.u32(o.broken_unreachable);
+    if (o.broken_pack_half) h.u32(0x48414C46);  // (only where it's on: other GPUs keep their keys)
     if (o.demote_reorder) h.u32(0x44454D4F);  // (only where it's on: other GPUs keep their keys)
     if (o.warp_barriers) h.u32(0x57415250);  // (only where it's on: other GPUs keep their keys)
     if (!o.multi_viewport) h.u32(0x4D56);  // (solo sin multiViewport: las claves de siempre no cambian)
@@ -418,6 +419,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // <datos>/no_return_mali: el OpUnreachable de siempre en ellas.
         options.broken_unreachable = (c->props.vendorID == 0x5143 && !NVN_FLAG("no_return_qualcomm")) ||
                                      (c->props.vendorID == 0x13B5 && !NVN_FLAG("no_return_mali"));
+        // ARM's older drivers (no draw-indirect-count, as for short subgroups): packHalf2x16 in vertex stages from integer
+        // operations. A Mali-G68's (Vulkan 1.1.177) aborted the game compiling it; the G615's newer driver compiles it fine
+        // and keeps its single instruction. <data>/pack_half_fix forces it on any Mali, <data>/no_pack_half_fix turns it off.
+        options.broken_pack_half = c->props.vendorID == 0x13B5 && !NVN_FLAG("no_pack_half_fix") &&
+                                   (NVN_FLAG("pack_half_fix") || !c->draw_indexed_indirect_count);
         // Samsung's Xclipse (vendor 0x144D, AMD RDNA inside) and AMD (0x1002): discards moved to the end, as Eden does
         // for them. <data>/no_demote_reorder at translation: as before; <data>/demote_reorder forces it on any GPU.
         options.demote_reorder = NVN_FLAG("demote_reorder") ||
@@ -635,6 +641,10 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         return false;
     }
     out.spirv_id = nvn::spirv_identity(out.shader);
+    // <datos>/log_pipelines (DEBUG): which shader hash (the one in the logs) has which SPIR-V id (the one pipelines use)
+    if (NVN_FLAG("log_pipelines"))
+        NVN_LOG("spirv %016llx = shader %016llx (stage %d)\n", static_cast<unsigned long long>(out.spirv_id),
+                static_cast<unsigned long long>(print), static_cast<int>(out.shader.stage));
     if (have_stripped) {  // la sin las barreras de sus bucles, para el interruptor en vivo
         if (nvn::create_shader_module(c->device, stripped.spirv, &out.stripped_module) != VK_SUCCESS)
             out.stripped_module = VK_NULL_HANDLE;

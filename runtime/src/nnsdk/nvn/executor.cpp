@@ -6867,6 +6867,17 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     pi.renderPass = rp;
     // VK_INCOMPLETE con la pipeline hecha: fuera de la especificación, pero así contestan los drivers de las Adreno 5xx y
     // algunas Mali (lo mismo hace Eden): vale.
+    // <datos>/log_pipelines (DEBUG): the SPIR-V ids going into the driver, logged and flushed BEFORE the call: if the
+    // driver aborts compiling them (LLVM ERROR ... __start__position_shader), this is the last line in the log.
+    if (NVN_FLAG("log_pipelines")) {
+        char line[256];
+        int n = snprintf(line, sizeof line, "[nvn] creating pipeline:");
+        for (int s = 0; s < kStages; s++)
+            if (modules[s] && s != static_cast<int>(Stage::Compute) && n < 200)
+                n += snprintf(line + n, sizeof line - n, " stage%d=spirv %016llx", s, static_cast<unsigned long long>(key.stages[s]));
+        printf("%s\n", line);
+        fflush(stdout);
+    }
     const VkResult r = vkCreateGraphicsPipelines(vk()->device, cache, 1, &pi, nullptr, &p);
     return r == VK_INCOMPLETE && p ? VK_SUCCESS : r;
 }
