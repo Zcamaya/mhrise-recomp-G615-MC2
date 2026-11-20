@@ -27,6 +27,8 @@ ReadFrame &frame(lua_State *L) {
   return *static_cast<ReadFrame *>(lua_touserdata(L, lua_upvalueindex(1)));
 }
 bool isa(Tdb &t, uint32_t id, uint32_t expected) {
+  if (!expected)
+    return true;
   for (; id; id = t.parent(id))
     if (id == expected)
       return true;
@@ -113,6 +115,7 @@ enum class ValueKind {
   Vec3,
   Vec4,
   Quat,
+  Mat4,
   Struct
 };
 ValueKind value_kind(Tdb &db, uint32_t id) {
@@ -139,7 +142,8 @@ ValueKind value_kind(Tdb &db, uint32_t id) {
       {"System.Int64", ValueKind::I64},    {"System.UInt64", ValueKind::U64},
       {"System.Single", ValueKind::F32},   {"System.Double", ValueKind::F64},
       {"via.vec2", ValueKind::Vec2},       {"via.vec3", ValueKind::Vec3},
-      {"via.vec4", ValueKind::Vec4},       {"via.Quaternion", ValueKind::Quat}};
+      {"via.vec4", ValueKind::Vec4},       {"via.Quaternion", ValueKind::Quat},
+      {"via.mat4", ValueKind::Mat4}};
   for (auto [type, kind] : values)
     if (name == type)
       return kind;
@@ -172,6 +176,14 @@ template <class T> T integer_arg(lua_State *L, int arg) {
 void write_scalar(lua_State *L, int arg, ValueKind kind,
                   std::span<uint8_t> bytes) {
   switch (kind) {
+  case ValueKind::Mat4: {
+    auto *matrix = luaL_testudata(L, arg, "rise.Matrix4x4f");
+    if (!matrix || lua_rawlen(L, arg) != 16 * sizeof(float))
+      throw std::runtime_error("Expected a Matrix4x4f value");
+    slice(bytes, 0, 16 * sizeof(float));
+    memcpy(bytes.data(), matrix, 16 * sizeof(float));
+    return;
+  }
   case ValueKind::Bool:
     if (!lua_isboolean(L, arg))
       throw std::runtime_error("Boolean argument required");
@@ -220,6 +232,13 @@ void write_scalar(lua_State *L, int arg, ValueKind kind,
 }
 void read_scalar(lua_State *L, ValueKind kind, Bytes bytes) {
   switch (kind) {
+  case ValueKind::Mat4: {
+    auto data = slice(bytes, 0, 16 * sizeof(float));
+    auto *matrix = lua_newuserdatauv(L, data.size(), 0);
+    memcpy(matrix, data.data(), data.size());
+    luaL_setmetatable(L, "rise.Matrix4x4f");
+    return;
+  }
   case ValueKind::Bool:
     lua_pushboolean(L, read<uint8_t>(bytes, 0));
     return;
@@ -315,7 +334,7 @@ uintptr_t managed_string(lua_State *L, ReadFrame &f, int index) {
 }
 uintptr_t box_scalar(lua_State *L, ReadFrame &f, int arg, uint32_t expected) {
   auto kind = value_kind(f.db, expected);
-  alignas(16) uint8_t encoded[16]{};
+  alignas(16) uint8_t encoded[16 * sizeof(float)]{};
   write_scalar(L, arg, kind, encoded);
   using Allocate = uintptr_t (*)(uintptr_t, const uint8_t *, int);
   auto box = reinterpret_cast<Allocate>(f.main.addr(0x6b64068))(
@@ -329,7 +348,7 @@ uintptr_t box_scalar(lua_State *L, ReadFrame &f, int arg, uint32_t expected) {
   memcpy(bytes.data(), encoded, n);
   return box;
 }
-size_t callable_signature(Tdb &d,uint32_t method) {
+size_t callable_signature(Tdb &d, uint32_t method) {
   auto type = owner(d, method);
   auto declared = d.full_name(type);
   bool game = declared.starts_with("snow.") || declared.starts_with("via.");
@@ -343,34 +362,102 @@ size_t callable_signature(Tdb &d,uint32_t method) {
     throw std::runtime_error("Missing managed invoker");
   return sig;
 }
-void normalize_hook_result(lua_State* L, ReadFrame& f, uint32_t ret,ValueKind kind){
-  if(auto* object=static_cast<Object*>(luaL_testudata(L,-1,object_mt))){
-    read_box(L,f,object->address,ret);lua_remove(L,-2);return;
+void normalize_hook_result(lua_State *L, ReadFrame &f, uint32_t ret,
+                           ValueKind kind) {
+  if (lua_islightuserdata(L, -1)) {
+    uint64_t value = reinterpret_cast<uintptr_t>(lua_touserdata(L, -1));
+    if (kind == ValueKind::Reference || kind == ValueKind::String) {
+      if (!value) {
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        return;
+      }
+      if (!push_cached_live_object(L, value, ret))
+        throw std::runtime_error("Unknown managed hook result");
+      lua_remove(L, -2);
+    } else {
+      lua_pop(L, 1);
+      read_scalar(L, kind,
+                  {reinterpret_cast<const uint8_t *>(&value), sizeof(value)});
+      return;
+    }
   }
-  if(kind==ValueKind::String && lua_type(L,-1)==LUA_TSTRING)return;
-  if(kind==ValueKind::Reference || kind==ValueKind::String || kind==ValueKind::Void)
-    throw std::runtime_error("Incorrect hook return type for "+f.db.full_name(ret));
-  if(kind==ValueKind::Bool && lua_isinteger(L,-1)){
-    auto value=lua_tointeger(L,-1);
-    if(value!=0 && value!=1)throw std::runtime_error("Boolean hook result outside 0..1");
-    lua_pop(L,1);lua_pushboolean(L,value);
+  if ((kind == ValueKind::Reference || kind == ValueKind::String) &&
+      lua_isinteger(L, -1) && lua_tointeger(L, -1) == 0) {
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    return;
   }
-  alignas(16) uint8_t bytes[16]{};
-  write_scalar(L,-1,kind,bytes);lua_pop(L,1);read_scalar(L,kind,bytes);
+  if (auto *object = static_cast<Object *>(luaL_testudata(L, -1, object_mt))) {
+    read_box(L, f, object->address, ret);
+    lua_remove(L, -2);
+    return;
+  }
+  if (kind == ValueKind::String && lua_type(L, -1) == LUA_TSTRING)
+    return;
+  if (kind == ValueKind::Reference || kind == ValueKind::String ||
+      kind == ValueKind::Void)
+    throw std::runtime_error("Incorrect hook return type for " +
+                             f.db.full_name(ret));
+  if (kind == ValueKind::Bool && lua_isinteger(L, -1)) {
+    auto value = lua_tointeger(L, -1);
+    if (value != 0 && value != 1)
+      throw std::runtime_error("Boolean hook result outside 0..1");
+    lua_pop(L, 1);
+    lua_pushboolean(L, value);
+  }
+  alignas(16) uint8_t bytes[16 * sizeof(float)]{};
+  write_scalar(L, -1, kind, bytes);
+  lua_pop(L, 1);
+  read_scalar(L, kind, bytes);
+}
+uintptr_t method_argument(lua_State *L, ReadFrame &f, int index,
+                          uint32_t expected, bool materialize) {
+  auto kind = value_kind(f.db, expected);
+  if (lua_islightuserdata(L, index)) {
+    uint64_t raw = reinterpret_cast<uintptr_t>(lua_touserdata(L, index));
+    if (kind == ValueKind::Reference || kind == ValueKind::String) {
+      if (!raw)
+        return 0;
+      if (!push_cached_live_object(L, raw, expected))
+        throw std::runtime_error("Unknown managed hook argument");
+    } else
+      read_scalar(L, kind,
+                  {reinterpret_cast<const uint8_t *>(&raw), sizeof(raw)});
+    auto result = method_argument(L, f, lua_gettop(L), expected, materialize);
+    lua_pop(L, 1);
+    return result;
+  }
+  if (lua_isnil(L, index))
+    return 0;
+  if (auto *o = static_cast<Object *>(luaL_testudata(L, index, object_mt))) {
+    if (!isa(f.db, o->type, expected))
+      throw std::runtime_error("Incompatible managed argument");
+    return o->address;
+  }
+  if (kind == ValueKind::String && lua_type(L, index) == LUA_TSTRING)
+    return materialize ? managed_string(L, f, index) : 0;
+  if (kind == ValueKind::Reference || kind == ValueKind::String)
+    throw std::runtime_error("Expected a managed object or nil");
+  if (materialize)
+    return box_scalar(L, f, index, expected);
+  alignas(16) uint8_t scratch[16 * sizeof(float)]{};
+  write_scalar(L, index, kind, scratch);
+  return 0;
 }
 int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
                  uintptr_t receiver, int arg) {
   auto &d = f.db;
-  auto type=owner(d,method);
-  auto sig=callable_signature(d,method);
+  auto type = owner(d, method);
+  auto sig = callable_signature(d, method);
   auto count = read<uint16_t>(d.byte_pool, sig);
   if (lua_gettop(L) - arg + 1 != count)
     throw std::runtime_error("Incorrect method argument count");
   bool is_static = read<uint16_t>(d.method_impl(method), 4) & 0x10;
   if (!is_static && (!receiver || !isa(d, actual_type(d, receiver), type)))
     throw std::runtime_error("Incorrect method receiver");
-  if (is_static && receiver)
-    throw std::runtime_error("Static method requires nil receiver");
+  if (is_static)
+    receiver = 0;
   auto ctx = engine_context(f);
   auto *exception_frame = *reinterpret_cast<uint8_t **>(ctx + 0x50);
   if (!exception_frame ||
@@ -381,53 +468,65 @@ int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
   auto ret = d.parameter_type(sig, 0);
   auto result_kind = value_kind(d, ret);
   std::optional<mod_lua::ReflectionHookCall> hooks;
-  bool skip=false;
-  if(f.persistent && mod_lua::has_reflection_hooks(method)){
-    hooks.emplace(L,method);
-    lua_createtable(L,count+2,0);
-    int table=lua_gettop(L);
-    lua_pushlightuserdata(L,reinterpret_cast<void*>(ctx));lua_rawseti(L,table,1);
-    int first=is_static?2:3;
-    if(!is_static){push_obj(L,f,receiver,type);lua_rawseti(L,table,2);}
-    for(unsigned i=0;i<count;++i){lua_pushvalue(L,arg+i);lua_rawseti(L,table,first+i);}
-    skip=hooks->before(table)==mod_lua::PreHookResult::SkipOriginal;
-    lua_rawgeti(L,table,1);
-    if(!lua_islightuserdata(L,-1) || lua_touserdata(L,-1)!=reinterpret_cast<void*>(ctx))
-      throw std::runtime_error("Hook changed the VM context");
-    lua_pop(L,1);
-    if(!is_static){
-      lua_rawgeti(L,table,2);
-      auto* obj=static_cast<Object*>(luaL_testudata(L,-1,object_mt));
-      if(!obj || obj->address!=receiver)throw std::runtime_error("Hook changed the method receiver");
-      lua_pop(L,1);
+  bool skip = false;
+  if (f.persistent && mod_lua::has_reflection_hooks(method)) {
+    hooks.emplace(L, method);
+    lua_createtable(L, count + 2, 0);
+    int table = lua_gettop(L);
+    lua_pushlightuserdata(L, reinterpret_cast<void *>(ctx));
+    lua_rawseti(L, table, 1);
+    int first = is_static ? 2 : 3;
+    if (!is_static) {
+      push_obj(L, f, receiver, type);
+      lua_rawseti(L, table, 2);
     }
-    for(unsigned i=0;i<count;++i){lua_rawgeti(L,table,first+i);lua_replace(L,arg+i);}
-    lua_pop(L,1);
+    for (unsigned i = 0; i < count; ++i) {
+      lua_pushvalue(L, arg + i);
+      lua_rawseti(L, table, first + i);
+    }
+    auto validate = [&](int candidate) {
+      lua_rawgeti(L, candidate, 1);
+      if (!lua_islightuserdata(L, -1) ||
+          lua_touserdata(L, -1) != reinterpret_cast<void *>(ctx))
+        throw std::runtime_error("Hook changed the VM context");
+      lua_pop(L, 1);
+      if (!is_static) {
+        lua_rawgeti(L, candidate, 2);
+        auto *obj = static_cast<Object *>(luaL_testudata(L, -1, object_mt));
+        if (!obj || obj->address != receiver)
+          throw std::runtime_error("Hook changed the method receiver");
+        lua_pop(L, 1);
+      }
+      for (unsigned i = 0; i < count; ++i) {
+        lua_rawgeti(L, candidate, first + i);
+        method_argument(L, f, lua_gettop(L), d.parameter_type(sig, i + 1),
+                        false);
+        lua_pop(L, 1);
+      }
+    };
+    validate(table);
+    skip = hooks->before(table, first + count - 1, validate) ==
+           mod_lua::PreHookResult::SkipOriginal;
+    for (unsigned i = 0; i < count; ++i) {
+      lua_rawgeti(L, table, first + i);
+      lua_replace(L, arg + i);
+    }
+    lua_pop(L, 1);
   }
   std::vector<uintptr_t> args(count);
   for (unsigned i = 0; i < count; ++i) {
     if (!d.plain_parameter(sig, i + 1))
       throw std::runtime_error("Unmanaged or by-reference parameter");
-    auto expected = d.parameter_type(sig, i + 1);
-    auto kind = value_kind(d, expected);
-    int at = arg + i;
-    // Both PC build_args and RuntimeMethodInfo.Invoke pass an empty argument slot for nil.
-    if (lua_isnil(L, at)) continue;
-    if (auto *o = static_cast<Object *>(luaL_testudata(L, at, object_mt))) {
-      if (!isa(d, o->type, expected))
-        throw std::runtime_error("Incompatible managed argument");
-      args[i] = o->address;
-    } else if (kind == ValueKind::String && lua_type(L, at) == LUA_TSTRING) {
-      args[i] = managed_string(L, f, at);
-    } else if (kind == ValueKind::Reference || kind == ValueKind::String) {
-      throw std::runtime_error("Expected a managed object or nil");
-    } else
-      args[i] = box_scalar(L, f, at, expected);
+    if (!skip)
+      args[i] =
+          method_argument(L, f, arg + i, d.parameter_type(sig, i + 1), true);
   }
   using Invoke = uintptr_t (*)(uintptr_t, const uint8_t *, uintptr_t,
                                const uintptr_t *, uint32_t);
-  auto result = skip ? uintptr_t{} : reinterpret_cast<Invoke>(f.main.addr(0x6b61f2c))(
-      ctx, d.methods.data() + 12ull * method, receiver, args.data(), count);
+  auto result = skip ? uintptr_t{}
+                     : reinterpret_cast<Invoke>(f.main.addr(0x6b61f2c))(
+                           ctx, d.methods.data() + 12ull * method, receiver,
+                           args.data(), count);
   auto &exception = *reinterpret_cast<uintptr_t *>(exception_frame + 0x18);
   if (exception) {
     exception = 0;
@@ -437,16 +536,23 @@ int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
   if (result_kind == ValueKind::Void && !hooks)
     return 0;
   if (!skip && !result && result_kind != ValueKind::Reference &&
-      result_kind != ValueKind::String && result_kind!=ValueKind::Void)
+      result_kind != ValueKind::String && result_kind != ValueKind::Void)
     throw std::runtime_error("Missing boxed return value");
-  if(result_kind==ValueKind::Void || skip)lua_pushnil(L);
-  else read_box(L, f, result, ret);
-  if(hooks){
-    if(hooks->after(lua_gettop(L)))normalize_hook_result(L,f,ret,result_kind);
-    if(skip && lua_isnil(L,-1) && result_kind!=ValueKind::Void &&
-       result_kind!=ValueKind::Reference && result_kind!=ValueKind::String)
-      throw std::runtime_error("Skipped value-returning method needs a post-hook result");
-    if(result_kind==ValueKind::Void){lua_pop(L,1);return 0;}
+  if (result_kind == ValueKind::Void || skip)
+    lua_pushnil(L);
+  else
+    read_box(L, f, result, ret);
+  if (hooks) {
+    hooks->after(lua_gettop(L),
+                 [&] { normalize_hook_result(L, f, ret, result_kind); });
+    if (skip && lua_isnil(L, -1) && result_kind != ValueKind::Void &&
+        result_kind != ValueKind::Reference && result_kind != ValueKind::String)
+      throw std::runtime_error(
+          "Skipped value-returning method needs a post-hook result");
+    if (result_kind == ValueKind::Void) {
+      lua_pop(L, 1);
+      return 0;
+    }
   }
   return 1;
 }
@@ -665,13 +771,76 @@ ReadFrame &live_frame(lua_State *L) {
 bool is_live_object(lua_State *L, int index) {
   return luaL_testudata(L, index, object_mt) != nullptr;
 }
-void validate_reflection_hook(lua_State* L,uint32_t method){
-  auto& f=live_frame(L);
-  auto sig=callable_signature(f.db,method);
-  auto n=read<uint16_t>(f.db.byte_pool,sig);
-  for(unsigned i=0;i<=n;++i){
-    if(!f.db.plain_parameter(sig,i))throw std::runtime_error("Hook signature contains a pointer or by-reference value");
-    (void)value_kind(f.db,f.db.parameter_type(sig,i));
+uintptr_t native_method_address(lua_State *L, uint32_t method) {
+  return function(live_frame(L), method);
+}
+int descriptor_function(lua_State *L) {
+  lua_rawgetp(L, LUA_REGISTRYINDEX, &frame_key);
+  auto *frame = static_cast<ReadFrame *>(lua_touserdata(L, -1));
+  lua_pop(L, 1);
+  auto method = static_cast<uint32_t>(lua_tointeger(L, lua_upvalueindex(2)));
+  try {
+    if (frame && read<int32_t>(frame->db.methods, 12ull * method + 8))
+      lua_pushlightuserdata(L, reinterpret_cast<void *>(function(*frame, method)));
+    else
+      lua_pushnil(L);
+    return 1;
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+int access_value_field(lua_State *L, Tdb &t, uint32_t id, std::span<uint8_t> bytes,
+                       std::string_view name, bool write) {
+  auto pos = t.lookup_field(id, name);
+  if (pos < 0)
+    throw std::runtime_error("Unknown value field: " + std::string(name));
+  auto owner = read<uint32_t>(t.fields, 8ull * pos) & id_mask;
+  auto field = t.field(pos, owner);
+  if (field.flags & (0x10 | 0x40) || field.offset >= bytes.size())
+    throw std::runtime_error("Expected a field inside the value buffer");
+  auto data = bytes.subspan(field.offset);
+  auto kind = value_kind(t, field.type);
+  if (write) {
+    write_scalar(L, 4, kind, data);
+    return 0;
+  }
+  read_scalar(L, kind, data);
+  return 1;
+}
+uintptr_t live_object_address(lua_State *L, int index, uint32_t expected) {
+  auto *obj = static_cast<Object *>(luaL_testudata(L, index, object_mt));
+  if (!obj)
+    throw std::runtime_error("Expected a live managed object");
+  if (expected && !isa(live_frame(L).db, obj->type, expected))
+    throw std::runtime_error("Incompatible managed hook argument");
+  return obj->address;
+}
+bool push_cached_live_object(lua_State *L, uintptr_t address,
+                             uint32_t expected) {
+  lua_rawgetp(L, LUA_REGISTRYINDEX, &object_cache_key);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return false;
+  }
+  lua_rawgetp(L, -1, reinterpret_cast<void *>(address));
+  auto *obj = static_cast<Object *>(luaL_testudata(L, -1, object_mt));
+  if (obj && isa(live_frame(L).db, obj->type, expected)) {
+    lua_remove(L, -2);
+    return true;
+  }
+  lua_pop(L, 2);
+  return false;
+}
+void validate_reflection_hook(lua_State *L, uint32_t method) {
+  auto &f = live_frame(L);
+  auto sig = callable_signature(f.db, method);
+  auto n = read<uint16_t>(f.db.byte_pool, sig);
+  for (unsigned i = 0; i <= n; ++i) {
+    if (!f.db.plain_parameter(sig, i))
+      throw std::runtime_error(
+          "Hook signature contains a pointer or by-reference value");
+    (void)value_kind(f.db, f.db.parameter_type(sig, i));
   }
 }
 void push_live_object(lua_State *L, uintptr_t address, uint32_t expected) {
@@ -850,13 +1019,18 @@ void open_live_read(lua_State *L, ReadFrame &f) {
   });
   lua_setfield(L, -2, "is_managed_object");
   lua_pushlightuserdata(L, &f);
-  lua_pushcclosure(L, [](lua_State *s) {
-    auto &f = frame(s);
-    auto ctx = f.persistent ? current_vm_context(f.main) : f.context;
-    if (ctx) lua_pushlightuserdata(s, reinterpret_cast<void *>(ctx));
-    else lua_pushnil(s);
-    return 1;
-  }, 1);
+  lua_pushcclosure(
+      L,
+      [](lua_State *s) {
+        auto &f = frame(s);
+        auto ctx = f.persistent ? current_vm_context(f.main) : f.context;
+        if (ctx)
+          lua_pushlightuserdata(s, reinterpret_cast<void *>(ctx));
+        else
+          lua_pushnil(s);
+        return 1;
+      },
+      1);
   lua_setfield(L, -2, "get_thread_context");
   lua_pushlightuserdata(L, &f);
   lua_pushcclosure(

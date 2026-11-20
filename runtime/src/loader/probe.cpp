@@ -23,7 +23,6 @@ struct Probe {
     uint32_t limit;
     std::atomic<uint32_t> hits{0};
     bool player_update = false;
-    bool lua_lifecycle = false;
 };
 
 Probe g_probes[64];
@@ -53,10 +52,6 @@ extern "C" void nier_on_probe(uint64_t id, uint64_t* regs, const uint64_t* stub)
     if (id >= g_count) return;
     Probe& p = g_probes[id];
 #ifdef MHRISE_LUA_DEBUG
-    if (p.lua_lifecycle) {
-        on_lua_lifecycle(p.offset, regs, stub);
-        return;
-    }
     if (p.player_update) {
         on_player_update(regs[0], regs[1]);
         return;
@@ -80,11 +75,7 @@ extern "C" void nier_on_probe(uint64_t id, uint64_t* regs, const uint64_t* stub)
 bool install(Module& mod, std::string& err, size_t player_update) {
     const char* data = getenv("NIER_DATA");
     std::ifstream in(std::string(data ? data : ".") + "/sondas");
-    std::vector<size_t> lifecycle;
-#ifdef MHRISE_LUA_DEBUG
-    lifecycle = lua_lifecycle_sites(mod);
-#endif
-    if (!in && !player_update && lifecycle.empty()) return true;
+    if (!in && !player_update) return true;
     // Al final del área de parches; los stubs de TLS van desde el principio (tls.cpp comprueba que no lleguen).
     uint8_t* area = mod.patch_area + Module::kPatchAreaSize - Module::kProbeAreaSize;
     auto* veneer = reinterpret_cast<uint32_t*>(area);
@@ -98,13 +89,9 @@ bool install(Module& mod, std::string& err, size_t player_update) {
         uint64_t offset = 0;
         unsigned limit = 40;
         const bool player = player_update != 0;
-        const bool lua_site = !player && !lifecycle.empty();
         if (player) {
             offset = player_update;
             player_update = 0;
-        } else if (lua_site) {
-            offset = lifecycle.back();
-            lifecycle.pop_back();
         } else {
             if (!std::getline(in, line)) break;
             if (sscanf(line.c_str(), "main+%lx %u", &offset, &limit) < 1) continue;
@@ -134,7 +121,6 @@ bool install(Module& mod, std::string& err, size_t player_update) {
         g_probes[id].offset = offset;
         g_probes[id].limit = limit;
         g_probes[id].player_update = player;
-        g_probes[id].lua_lifecycle = lua_site;
         *site = branch(site, stub, 0x14000000);
         printf("[sonda] puesta en main+%#lx (%u veces)\n", offset, limit);
         g_count++;

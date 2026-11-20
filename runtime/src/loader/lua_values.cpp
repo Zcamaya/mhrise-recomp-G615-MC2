@@ -140,12 +140,17 @@ bool mod_lua::read_components(lua_State *L, int index, bool quaternion,
                               float *out, int dimension) {
   int k = quaternion ? 1 : dimension == 2 ? 2 : dimension == 4 ? 3 : 0;
   auto *v = static_cast<Value *>(luaL_testudata(L, index, names[k]));
+  // PC mods also pass a four-component position to RE's aligned via.vec3.
+  if (!v && !quaternion && dimension == 3)
+    v = static_cast<Value *>(luaL_testudata(L, index, names[3]));
   if (!v)
     return false;
   memcpy(out, v->v, dimensions[k] * sizeof(float));
   return true;
 }
 void mod_lua::open_values(lua_State *L) {
+  luaL_newmetatable(L, "rise.Matrix4x4f");
+  lua_pop(L, 1);
   for (int k : {0, 1, 2, 3}) {
     luaL_newmetatable(L, names[k]);
     set(L, "__index", index, k);

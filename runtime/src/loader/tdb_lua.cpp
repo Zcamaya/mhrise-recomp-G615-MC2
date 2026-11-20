@@ -4,6 +4,7 @@
 #include "loader/live_read.h"
 #include "loader/lua_data.h"
 #include "loader/lua_mod_hooks.h"
+#include "loader/lua_native_hooks.h"
 #include "loader/lua_values.h"
 #include "loader/mod_ui.h"
 #include "loader/nso.h"
@@ -126,6 +127,7 @@ void push_method(lua_State *L, Tdb &t, uint32_t id) {
   auto declaring = read<uint32_t>(t.methods, id * 12ull) & id_mask;
   named_object(L, t.method(id, declaring), "get_name");
   mod_lua::tag_method(L, id);
+  bind(L, "get_function", rise::descriptor_function, t, id);
   bind(L, "call", rise::invoke_descriptor, t, id);
   lua_newtable(L);
   lua_getfield(L, -2, "call");
@@ -595,7 +597,8 @@ void on_player_update(uintptr_t context, uintptr_t manager) {
       // A reflected method can re-enter PlayerManager.update from a Lua hook.
       // Leave the request pending until the previous VM is off the call stack.
       lua_Debug activation{};
-      if (resident_vm && lua_getstack(resident_vm.get(), 0, &activation)) {
+      if (mod_lua::native_hooks_in_flight() ||
+          (resident_vm && lua_getstack(resident_vm.get(), 0, &activation))) {
         p.pending.fetch_or(pending);
         return;
       }

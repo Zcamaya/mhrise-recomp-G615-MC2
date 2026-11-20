@@ -122,8 +122,18 @@ struct Tdb {
       resolved_names.emplace(std::move(key), id);
       return id;
     }
-    size_t dot = full.rfind('.');
-    auto short_name = full.substr(dot == full.npos ? 0 : dot + 1);
+    size_t start = 0, end = full.size(), depth = 0;
+    for (size_t i = 0; i < full.size(); ++i) {
+      if (full[i] == '<' && depth++ == 0)
+        end = i;
+      else if (full[i] == '>' && depth)
+        --depth;
+      else if (full[i] == '.' && !depth) {
+        start = i + 1;
+        end = full.size();
+      }
+    }
+    auto short_name = full.substr(start, end - start);
     for (size_t row = 72; row < types.size(); row += 72) {
       const auto ids = read<uint64_t>(types, row);
       auto info = impl(row);
@@ -179,6 +189,25 @@ struct Tdb {
           if (p != name)
             continue;
         }
+        if (arity < 0) {
+          // RETypeDefinition::get_method picks the first concrete overload in
+          // declaration order. Object:call still resolves by name and arity.
+          auto sig = signature_offset(k);
+          auto count = read<uint16_t>(byte_pool, sig);
+          bool generic_definition = false;
+          for (unsigned slot = 0; slot <= count; ++slot) {
+            auto arg = parameter_type(sig, slot);
+            if (this->name(read<uint32_t>(impl(72ull * arg), 0)).find('!') !=
+                std::string_view::npos) {
+              generic_definition = true;
+              break;
+            }
+          }
+          if (generic_definition)
+            continue;
+          found = k;
+          break;
+        }
         if (found)
           throw std::runtime_error("Ambiguous overload: " + name);
         found = k;
@@ -211,7 +240,24 @@ struct Tdb {
         owner ? full_name(owner) : std::string(name(read<uint32_t>(info, 4)));
     if (!ns.empty())
       ns += '.';
-    return ns + std::string(name(read<uint32_t>(info, 0)));
+    ns += name(read<uint32_t>(info, 0));
+    auto generics = (read<uint64_t>(types, size_t(type) * 72 + 48) >> 26) & 0x3ffffff;
+    if (generics) {
+      auto header = read<uint32_t>(byte_pool, generics);
+      auto count = header >> 19;
+      if (count && (header & id_mask) != type) {
+        ns += '<';
+        for (uint32_t i = 0; i < count; ++i) {
+          if (i)
+            ns += ',';
+          auto arg = read<uint32_t>(byte_pool, generics + 4 + 4 * i);
+          if (arg && arg < types.size() / 72)
+            ns += full_name(arg);
+        }
+        ns += '>';
+      }
+    }
+    return ns;
   }
   size_t signature_offset(size_t id) const {
     auto row = slice(methods, id * 12, 12);

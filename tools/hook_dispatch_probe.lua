@@ -65,6 +65,20 @@ array[1] = 31
 assert(calls == 1 and array[0] == 13 and array[1] == 31)
 log.info("hook dispatch passed: reflection CALL/SKIP, nested storage, ABba, skipped setter kept 13, ordinary setter wrote 31")
 
+-- An invalid edit in one pre-hook is discarded before the next subscriber.
+local absolute = assert(sdk.find_type_definition("System.Math"):get_method("Abs(System.Int32)"))
+local check_fault, bad_calls, good_calls = true, 0, 0
+sdk.hook(absolute,function(args)
+    if check_fault then bad_calls=bad_calls+1; args[2]="invalid Int32" end
+end,nil,scope)
+sdk.hook(absolute,function(args)
+    if check_fault then assert(args[2]==-6); good_calls=good_calls+1 end
+end,nil,scope)
+assert(absolute:call(nil,-6)==6 and absolute:call(nil,-6)==6)
+assert(bad_calls==1 and good_calls==2 and thread.get_hook_storage()==nil)
+check_fault=false
+log.info("hook dispatch passed: bad subscriber isolated, original argument and other subscriber preserved")
+
 -- Independently observe a game-originated call without invoking it from Lua.
 local loading = assert(sdk.find_type_definition("snow.NowLoading"):get_method("update"))
 local pending, done = {}, false

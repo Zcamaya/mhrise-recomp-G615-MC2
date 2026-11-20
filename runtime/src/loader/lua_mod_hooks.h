@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 struct lua_State;
 struct Module;
@@ -9,18 +10,25 @@ struct Tdb;
 }
 namespace mod_lua {
 enum class PreHookResult : int { CallOriginal = 0, SkipOriginal = 1 };
+int *swap_hook_storage(int *);
 
 bool has_reflection_hooks(uint32_t method);
-// Scope and registry references live for one invocation, including nested calls.
+// Scope and registry references live for one invocation, including nested
+// calls.
 class ReflectionHookCall {
 public:
   ReflectionHookCall(lua_State *L, uint32_t method);
   ReflectionHookCall(const ReflectionHookCall &) = delete;
   ~ReflectionHookCall();
-  PreHookResult before(int arguments);
-  bool after(int result);
+  PreHookResult before(int arguments, int slots,
+                       const std::function<void(int)> &validate);
+  void after(int result, const std::function<void()> &normalize);
+
 private:
-  struct Callback { int pre, post, storage; };
+  struct Callback {
+    size_t index;
+    int storage;
+  };
   lua_State *L;
   std::vector<Callback> callbacks;
 };
