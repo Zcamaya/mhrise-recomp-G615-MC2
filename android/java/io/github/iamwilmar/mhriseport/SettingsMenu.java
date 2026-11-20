@@ -214,6 +214,11 @@ final class SettingsMenu {
                 "Keep the status and navigation bars on screen while playing. Off: they're hidden, and a swipe in from "
                         + "the edge brings them back for a moment. Takes effect the next time you come back to the game.",
                 "system_bars", false);
+        toggle("Draw controls with the GPU",
+                "The touch controls drawn by the GPU, as Android usually does. Off: drawn by the CPU, which keeps them "
+                        + "away from the phone's OpenGL driver; Mali's crashed there while hunting. Off by default on MediaTek "
+                        + "and Exynos. Takes effect the next time you start the game.",
+                () -> GameActivity.touchOnGpu(ini) ? 1 : 0, v -> ini.set("touch_gpu", v != 0 ? "1" : "0"));
         flag("Docked mode",
                 "The game thinks it's on the dock: its TV picture (1080p output, about twice the pixels of handheld) and "
                         + "your controls as player 1's Pro Controller. Much more work for the GPU: for strong phones. Takes "
@@ -1466,7 +1471,7 @@ final class SettingsMenu {
                 + "decrypted with your Steam ID (read from the save itself when it can be, asked for when not), then filled "
                 + "into this save's layout. The game closes right after, so it can't write the old save back.");
         String[] from = {"From a .zip", "From a folder"};
-        action("Import a save", "A zip or a folder with data001Slot.bin and data00-1.bin, from the Switch, Eden, Yuzu, "
+        action("Import a save", "A zip or a folder with data00-1.bin and a data00#Slot.bin, from the Switch, Eden, Yuzu, "
                 + "another copy of the port, or Steam (win64_save).", () -> dropDown("Import a save", from, -1, i -> {
                     dialog.dismiss();
                     activity.pickSave(i == 1, 0);

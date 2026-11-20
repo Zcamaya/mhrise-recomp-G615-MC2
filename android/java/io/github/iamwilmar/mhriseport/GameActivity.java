@@ -90,7 +90,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS | overlayAcceleration(),
                 PixelFormat.TRANSLUCENT);
         lp.token = decor.getWindowToken();
         lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
@@ -103,6 +103,29 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
             System.err.println("[controles] no se pudo poner la ventana de los controles: " + e);
         }
+    }
+
+    // Settings → Display → Draw controls with the GPU (touch_gpu): the touch controls' windows drawn by Android's
+    // RenderThread through the GLES driver, or by the CPU. Mali's GLES driver crashed on that thread mid-hunt (a
+    // Mali-G615 on a MediaTek, the game itself fine on Vulkan), so it's off by default on MediaTek and Exynos chips. The
+    // controls only change when touched, so the CPU has little to do. Read when the windows are made.
+    static boolean touchOnGpu(Ini ini) {
+        String v = ini.get("touch_gpu");
+        if (v != null) return ini.on("touch_gpu");
+        return !maliSoc();
+    }
+
+    // A MediaTek or Exynos chip, from the SoC names Android gives
+    static boolean maliSoc() {
+        String soc = android.os.Build.VERSION.SDK_INT >= 31 ? android.os.Build.SOC_MANUFACTURER + " " + android.os.Build.SOC_MODEL : "";
+        String all = (soc + " " + android.os.Build.HARDWARE + " " + android.os.Build.BOARD).toLowerCase(java.util.Locale.ROOT);
+        return all.contains("mediatek") || all.matches(".*\\bmt\\d{4}.*") || all.contains("exynos") || all.matches(".*\\bs5e\\d.*");
+    }
+
+    private int overlayAcceleration() {
+        File folder = SettingsMenu.gameFolder(this);
+        boolean gpu = folder != null ? touchOnGpu(new Ini(folder)) : !maliSoc();
+        return gpu ? WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED : 0;
     }
 
     // GPU boost (Performance): on while the game is in front, if the switch is on and the GPU is an Adreno
@@ -153,7 +176,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                        | overlayAcceleration(),
                 PixelFormat.TRANSLUCENT);
         lp.token = getWindow().getDecorView().getWindowToken();
         lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;

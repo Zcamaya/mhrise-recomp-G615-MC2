@@ -42,6 +42,14 @@ final class SaveData {
     private SaveData() {}
 
     static final String SLOT = "data001Slot.bin", SYSTEM = "data00-1.bin";
+    // The three character slots each have their own file (a save with its hunter in slot 2 has only data002Slot.bin)
+    static final String[] SLOTS = {SLOT, "data002Slot.bin", "data003Slot.bin"};
+
+    static boolean slot(String name) {
+        for (String s : SLOTS)
+            if (s.equals(name)) return true;
+        return false;
+    }
     static final int FLAG_HAS_ID = 0x2, FLAG_CITRUS = 0x4, FLAG_DEFLATE = 0x8;
     static final int SWITCH_BASE = 12, STEAM_BASE = 16;
 
@@ -540,7 +548,7 @@ final class SaveData {
                 if (base != SWITCH_BASE || containsRoot(o.roots, STEAM_ONLY_SLOT[1])) o.steam = true;
                 // The Switch deflates its main files: a plain one is from another release (the Netflix one, say) or a
                 // save editor, and gets filled into the Switch's layout like Steam's
-                o.foreign = !o.steam && o.flags == 0 && (name.equals(SLOT) || name.equals(SYSTEM));
+                o.foreign = !o.steam && o.flags == 0 && (slot(name) || name.equals(SYSTEM));
                 return o;
             } catch (Problem p) {
                 last = p;

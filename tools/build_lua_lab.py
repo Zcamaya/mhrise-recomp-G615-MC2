@@ -1,4 +1,4 @@
-"""Build the side-by-side Windows research APK with the v1.0.82 release renderer."""
+"""Build the side-by-side Windows research APK with the v1.0.85 release renderer."""
 import argparse
 import hashlib
 import os
@@ -18,8 +18,8 @@ def main():
         p.add_argument("--" + opt, type=Path, required=True)
     p.add_argument("--keystore", type=Path, default=Path.home()/".android/debug.keystore")
     args = p.parse_args()
-    if hashlib.sha256(args.release_apk.read_bytes()).hexdigest() != "32affcfb0b53e24a457ecbbd1cc135f56f9dc1fe27a9b7ae3903991ece54e6be":
-        p.error("Expected the original mhriseport-v1.0.82.apk")
+    if hashlib.sha256(args.release_apk.read_bytes()).hexdigest() != "7cd885bf01c1d2be814ec59b88020c947f959dd7087dbe1911bd32dba149956c":
+        p.error("Expected the original mhriseport-v1.0.85.apk")
     root = Path(__file__).resolve().parents[1]
     build = root / "build/tdb-android"
     cmake = args.sdk / "cmake/3.22.1/bin"
