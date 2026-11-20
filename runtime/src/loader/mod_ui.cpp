@@ -63,6 +63,8 @@ enum Widget {
   NextPos,
   NextSize,
   DisplaySize,
+  WindowPos,
+  MouseDown,
   PushId,
   PopId,
   PushStyle,
@@ -128,9 +130,17 @@ int widget(lua_State *L) {
     }
     return 0;
   }
+  case MouseDown: {
+    int button = luaL_checkinteger(L, 1);
+    if (button < 0 || button >= ImGuiMouseButton_COUNT)
+      return luaL_argerror(L, 1, "invalid mouse button");
+    lua_pushboolean(L, ImGui::IsMouseDown(button));
+    return 1;
+  }
+  case WindowPos:
   case DisplaySize: {
-    auto size = ImGui::GetIO().DisplaySize;
-    float xy[] = {size.x, size.y};
+    auto v = kind == DisplaySize ? ImGui::GetIO().DisplaySize : ImGui::GetWindowPos();
+    float xy[] = {v.x, v.y};
     mod_lua::push_components(L, false, xy, 2);
     return 1;
   }
@@ -424,6 +434,8 @@ void mod_lua::open_imgui(lua_State *L) {
                             {"set_next_window_pos", NextPos},
                             {"set_next_window_size", NextSize},
                             {"get_display_size", DisplaySize},
+                            {"get_window_pos", WindowPos},
+                            {"is_mouse_down", MouseDown},
                             {"push_id", PushId},
                             {"pop_id", PopId},
                             {"push_style_var", PushStyle},
@@ -534,6 +546,16 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeFrame(JNIEnv *, jclass, jint w,
   }
   return (visible ? 1 : 0) | (io.WantTextInput ? 2 : 0);
 }
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_github_iamwilmar_mhriseport_ModUi_nativeWindowAt(JNIEnv *, jclass, jfloat x, jfloat y) {
+  std::lock_guard lock(mod_lua::lua_mutex());
+  if (!ui || ui->FrameCount == 0) return false;
+  ImGui::SetCurrentContext(ui);
+  ImGuiWindow *window = nullptr;
+  // Hit-test the new contact, independently of any window another finger is moving.
+  ImGui::FindHoveredWindowEx({x, y}, true, &window, nullptr);
+  return window && window->Active && !window->IsFallbackWindow;
+}
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_iamwilmar_mhriseport_ModUi_nativeTouch(JNIEnv *, jclass,
                                                       jfloat x, jfloat y,
@@ -543,6 +565,7 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeTouch(JNIEnv *, jclass,
     return;
   ImGui::SetCurrentContext(ui);
   auto &io = ImGui::GetIO();
+  io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
   io.AddMousePosEvent(x, y);
   io.AddMouseButtonEvent(0, down);
 }

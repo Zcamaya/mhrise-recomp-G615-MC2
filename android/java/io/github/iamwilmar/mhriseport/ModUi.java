@@ -20,11 +20,14 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
     private static native boolean nativePending();
     private static native void nativeMenu(boolean open);
     private static native void nativeTouch(float x,float y,boolean down);
+    private static native boolean nativeWindowAt(float x, float y);
     private static native void nativeChar(int codepoint);
     private static native void nativeClose();
     private int width,height;
     private volatile boolean menu, keyboard;
     private boolean created;
+    private final int[] screenOrigin = new int[2];
+    private int pointer = MotionEvent.INVALID_POINTER_ID;
     private final GameActivity activity;
     private final WindowManager.LayoutParams panel;
     private final Runnable poll = new Runnable() {
@@ -55,6 +58,7 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
     }
     void setMenu(boolean open) {
         if (menu == open) return;
+        cancelPointer();
         menu = open;
         nativeMenu(open);
         int pass = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
@@ -81,6 +85,7 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
         postOnAnimation(poll);
     }
     @Override public void onPause() {
+        cancelPointer();
         removeCallbacks(poll);
         queueEvent(this::closeRenderer);
         super.onPause();
@@ -120,10 +125,42 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
         if(wants)im.showSoftInput(this,InputMethodManager.SHOW_IMPLICIT);
         else im.hideSoftInputFromWindow(getWindowToken(),0);
     }
-    @Override public boolean onTouchEvent(MotionEvent ev){
-        int action=ev.getActionMasked();float x=ev.getX(),y=ev.getY();
-        boolean down=action!=MotionEvent.ACTION_UP && action!=MotionEvent.ACTION_CANCEL;
-        queueEvent(()->nativeTouch(x,y,down));return true;
+    private void cancelPointer() {
+        if (pointer != MotionEvent.INVALID_POINTER_ID) {
+            nativeTouch(-Float.MAX_VALUE, -Float.MAX_VALUE, false);
+            pointer = MotionEvent.INVALID_POINTER_ID;
+        }
+    }
+    boolean routeTouch(int action, int id, float screenX, float screenY) {
+        getLocationOnScreen(screenOrigin);
+        float x = screenX - screenOrigin[0], y = screenY - screenOrigin[1];
+        if (action == MotionEvent.ACTION_DOWN) {
+            if (!menu && !nativeWindowAt(x, y)) return false;
+            // ImGui has one mouse. Extra fingers on a window stay off the gamepad.
+            if (pointer != MotionEvent.INVALID_POINTER_ID) return true;
+            pointer = id;
+        }
+        if (pointer == id) {
+            if (action == MotionEvent.ACTION_CANCEL) cancelPointer();
+            else {
+                boolean down = action != MotionEvent.ACTION_UP;
+                nativeTouch(x, y, down);
+                if (!down) pointer = MotionEvent.INVALID_POINTER_ID;
+            }
+        }
+        return true;
+    }
+    @Override public boolean onTouchEvent(MotionEvent ev) {
+        int action = ev.getActionMasked();
+        if (action == MotionEvent.ACTION_CANCEL) {
+            cancelPointer();
+            return true;
+        }
+        int index = action == MotionEvent.ACTION_MOVE ? ev.findPointerIndex(pointer) : ev.getActionIndex();
+        if (action == MotionEvent.ACTION_POINTER_DOWN) action = MotionEvent.ACTION_DOWN;
+        if (action == MotionEvent.ACTION_POINTER_UP) action = MotionEvent.ACTION_UP;
+        if (index >= 0) routeTouch(action, ev.getPointerId(index), ev.getRawX(index), ev.getRawY(index));
+        return true;
     }
     @Override public boolean onCheckIsTextEditor(){return true;}
     @Override public InputConnection onCreateInputConnection(EditorInfo info){

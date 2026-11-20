@@ -23,6 +23,7 @@ final class TouchPad extends View {
     interface Host {
         void send(long buttons, int sticksOn, float lx, float ly, float rx, float ry);
         void touchPoint(int action, float x, float y, long timeNs, int width, int height);
+        boolean modTouch(int action, int id, float screenX, float screenY);
         void tick();       // la vibración de un botón pulsado
         void openMenu();
         void editDone();
@@ -117,7 +118,7 @@ final class TouchPad extends View {
     private static final class Finger {
         int id = -1;
         Ctl ctl;          // null: no es de ningún control (va al HUD, si es el primero)
-        boolean hud;
+        boolean hud, modWindow;
         float x0, y0, x, y;
         long down;
         boolean moved;
@@ -248,6 +249,12 @@ final class TouchPad extends View {
                 f.mask = 0;
                 f.dirs = 0;
                 f.hud = false;
+                f.modWindow = !editing && host.modTouch(MotionEvent.ACTION_DOWN, f.id,
+                        e.getRawX(index), e.getRawY(index));
+                if (f.modWindow) {
+                    f.ctl = null;
+                    break;
+                }
                 if (editing && toolbar(f.x, f.y)) {
                     f.ctl = null;
                     break;
@@ -273,6 +280,10 @@ final class TouchPad extends View {
                 for (int i = 0; i < e.getPointerCount(); i++) {
                     Finger f = finger(e.getPointerId(i));
                     if (f == null) continue;
+                    if (f.modWindow) {
+                        host.modTouch(MotionEvent.ACTION_MOVE, f.id, e.getRawX(i), e.getRawY(i));
+                        continue;
+                    }
                     f.x = e.getX(i);
                     f.y = e.getY(i);
                     if (Math.hypot(f.x - f.x0, f.y - f.y0) > getHeight() * 0.025f) f.moved = true;
@@ -314,7 +325,11 @@ final class TouchPad extends View {
                     if (!all && i != index) continue;
                     Finger f = finger(e.getPointerId(i));
                     if (f == null) continue;
-                    if (f.hud) {
+                    if (f.modWindow) {
+                        host.modTouch(all ? MotionEvent.ACTION_CANCEL : MotionEvent.ACTION_UP, f.id,
+                                e.getRawX(i), e.getRawY(i));
+                        f.modWindow = false;
+                    } else if (f.hud) {
                         host.touchPoint(all ? MotionEvent.ACTION_CANCEL : MotionEvent.ACTION_UP, e.getX(i), e.getY(i), timeNs,
                                 getWidth(), getHeight());
                     } else if (!editing && f.ctl != null) {
@@ -506,6 +521,10 @@ final class TouchPad extends View {
     // Suelta todo (al abrir el menú o al irse la app a segundo plano)
     void releaseAll() {
         for (Finger f : fingers) {
+            if (f.modWindow) {
+                host.modTouch(MotionEvent.ACTION_CANCEL, f.id, 0, 0);
+                f.modWindow = false;
+            }
             if (f.hud) host.touchPoint(MotionEvent.ACTION_CANCEL, f.x, f.y, SystemClock.uptimeMillis() * 1_000_000L, getWidth(),
                     getHeight());
             f.id = -1;

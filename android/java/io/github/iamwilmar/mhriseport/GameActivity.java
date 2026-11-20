@@ -268,6 +268,11 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     }
 
     @Override
+    public boolean modTouch(int action, int id, float screenX, float screenY) {
+        return modUi != null && modUi.routeTouch(action, id, screenX, screenY);
+    }
+
+    @Override
     public void touchPoint(int action, float x, float y, long timeNs, int width, int height) {
         try {
             nativeTouchPoint(action, x, y, timeNs, width, height);
