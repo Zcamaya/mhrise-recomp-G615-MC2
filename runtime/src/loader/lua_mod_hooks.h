@@ -10,6 +10,7 @@ struct Tdb;
 }
 namespace mod_lua {
 enum class PreHookResult : int { CallOriginal = 0, SkipOriginal = 1 };
+PreHookResult pre_action(lua_State *);
 int *swap_hook_storage(int *);
 
 bool has_reflection_hooks(uint32_t method);
@@ -35,6 +36,7 @@ private:
 void install_api(lua_State *, rise::Tdb &, const Module &);
 void tag_method(lua_State *, uint32_t id);
 void push_type_definition(lua_State *, rise::Tdb &, uint32_t id);
+uint32_t type_definition_id(lua_State *, int index);
 void log_message(int priority, const char *message);
 size_t checkpoint();
 void rollback(lua_State *, size_t checkpoint);

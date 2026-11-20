@@ -79,6 +79,7 @@ void named_object(lua_State *L, std::string_view name, const char *getter) {
   lua_pushcclosure(L, get_name, 1);
   lua_setfield(L, -2, getter);
 }
+char type_id_key;
 void push_type(lua_State *L, Tdb &t, uint32_t id);
 void bind(lua_State *L, const char *name, lua_CFunction func, Tdb &t,
           uint32_t id) {
@@ -245,6 +246,8 @@ void push_type(lua_State *L, Tdb &t, uint32_t id) {
   }
   lua_pop(L, 1);
   named_object(L, t.full_name(id), "get_full_name");
+  lua_pushinteger(L, id);
+  lua_rawsetp(L, -2, &type_id_key);
   auto info = t.impl(size_t(id) * 72);
   for (auto [label, offset] :
        {std::pair{"get_name", 0}, std::pair{"get_namespace", 4}}) {
@@ -495,6 +498,14 @@ bool initialize_resident(const Module &main, const fs::path &directory,
     return 1;
   });
   lua_setfield(L, -2, "get_tdb_version");
+  lua_pushcfunction(L, [](lua_State *s) {
+    luaL_checktype(s, 1, LUA_TSTRING);
+    lua_pushliteral(s, "snow.");
+    lua_pushvalue(s, 1);
+    lua_concat(s, 2);
+    return 1;
+  });
+  lua_setfield(L, -2, "game_namespace");
   mod_lua::install_api(L, tdb, main);
   lua_setglobal(L, "sdk");
   push_log_api(L);
@@ -508,6 +519,15 @@ bool initialize_resident(const Module &main, const fs::path &directory,
 
 void mod_lua::push_type_definition(lua_State *L, rise::Tdb &t, uint32_t id) {
   push_type(L, t, id);
+}
+uint32_t mod_lua::type_definition_id(lua_State *L, int index) {
+  luaL_checktype(L, index, LUA_TTABLE);
+  lua_rawgetp(L, index, &type_id_key);
+  if (!lua_isinteger(L, -1))
+    luaL_argerror(L, index, "expected an RETypeDefinition");
+  auto id = static_cast<uint32_t>(lua_tointeger(L, -1));
+  lua_pop(L, 1);
+  return id;
 }
 void mod_lua::log_message(int priority, const char *message) {
   write_log(priority, message);

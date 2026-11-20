@@ -18,7 +18,10 @@ sdk.hook(max,function(args)
         depth=0
         assert(thread.get_hook_storage()==storage)
     end
-    if mode=="modify" then args[2]=sdk.to_ptr(19) end
+    if mode=="modify" then
+        args[2]=sdk.to_ptr(19)
+        return args
+    end
     if mode=="skip" then return SKIP end
 end,function(ret)
     if mode=="idle" then return ret end

@@ -86,17 +86,6 @@ int register_hook(lua_State *L) {
   }
   return lua_error(L);
 }
-mod_lua::PreHookResult pre_action(lua_State *L) {
-  using Action = mod_lua::PreHookResult;
-  if (lua_isnil(L, -1))
-    return Action::CallOriginal;
-  if (lua_isinteger(L, -1)) {
-    auto n = lua_tointeger(L, -1);
-    if (n == 0 || n == 1)
-      return static_cast<Action>(n);
-  }
-  throw std::runtime_error("Expected nil or an sdk.PreHookResult value");
-}
 void call_hook(lua_State *L, int ref, int arg, int &storage) {
   lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
   lua_pushvalue(L, arg);
@@ -119,6 +108,14 @@ void disable_hook(lua_State *L, Hook &h, const char *error) {
   h.pre = h.post = LUA_NOREF;
 }
 } // namespace
+mod_lua::PreHookResult mod_lua::pre_action(lua_State *L) {
+  // REFramework copies back the argument table passed to the callback.
+  // A returned table (including that same table) carries no control result.
+  return lua_type(L, -1) == LUA_TNUMBER &&
+                 lua_tonumber(L, -1) == static_cast<int>(PreHookResult::SkipOriginal)
+             ? PreHookResult::SkipOriginal
+             : PreHookResult::CallOriginal;
+}
 int *mod_lua::swap_hook_storage(int *ref) {
   auto old = active_storage;
   active_storage = ref;

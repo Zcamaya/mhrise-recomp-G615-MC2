@@ -346,13 +346,7 @@ bool before(Invocation &inv, NativeFrame &frame) {
         lua_rawseti(vm, draft, i);
       }
       execute(inv, n, s.pre, draft);
-      auto action = PreHookResult::CallOriginal;
-      if (!lua_isnil(vm, -1)) {
-        if (!lua_isinteger(vm, -1) || lua_tointeger(vm, -1) < 0 ||
-            lua_tointeger(vm, -1) > 1)
-          throw std::runtime_error("Expected sdk.PreHookResult");
-        action = static_cast<PreHookResult>(lua_tointeger(vm, -1));
-      }
+      auto action = pre_action(vm);
       if (hidden) {
         lua_rawgeti(vm, draft, 1);
         if (bits(vm, -1) != frame.x[8])

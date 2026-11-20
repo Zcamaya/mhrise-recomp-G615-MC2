@@ -354,7 +354,9 @@ size_t callable_signature(Tdb &d, uint32_t method) {
   bool game = declared.starts_with("snow.") || declared.starts_with("via.");
   bool collection = declared == "System.Array" ||
                     declared.starts_with("System.Collections.Generic.");
-  if (!game && !collection && declared != "System.Math" &&
+  bool activator = declared == "System.Activator" &&
+                   d.prototype(method, type) == "CreateInstance(System.Type)";
+  if (!game && !collection && !activator && declared != "System.Math" &&
       declared != "System.String" && declared != "System.Enum")
     throw std::runtime_error("Not a game reflection interface: " + declared);
   auto sig = d.signature_offset(method);
@@ -446,7 +448,7 @@ uintptr_t method_argument(lua_State *L, ReadFrame &f, int index,
   return 0;
 }
 int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
-                 uintptr_t receiver, int arg) {
+                 uintptr_t receiver, int arg, bool keep_box = false) {
   auto &d = f.db;
   auto type = owner(d, method);
   auto sig = callable_signature(d, method);
@@ -540,6 +542,8 @@ int managed_call(lua_State *L, ReadFrame &f, uint32_t method,
     throw std::runtime_error("Missing boxed return value");
   if (result_kind == ValueKind::Void || skip)
     lua_pushnil(L);
+  else if (keep_box)
+    push_obj(L, f, result, ret);
   else
     read_box(L, f, result, ret);
   if (hooks) {
@@ -701,29 +705,143 @@ int singleton(lua_State *L) {
   }
   return lua_error(L);
 }
+// Rise 16.0.1 registers native DTI descriptors in a vector (items, size,
+// capacity). On Switch the two destructor entries precede the instance getter.
+// SceneManager, Application and LightRenderer use this same registration ABI.
+struct NativeType {
+  const uintptr_t *vtable;
+  uint32_t hash;
+  uint16_t flags;
+  uint8_t padding[18];
+  const char *name;
+};
+static_assert(offsetof(NativeType, name) == 0x20);
+struct NativeTypes {
+  NativeType *const *items;
+  uint32_t size, capacity;
+};
+int native_singleton(lua_State *L) {
+  auto &f = frame(L);
+  const char *name = luaL_checkstring(L, 1);
+  const auto &registry = *reinterpret_cast<const NativeTypes *>(f.main.addr(0x12a8c030));
+  if (registry.size > registry.capacity || (registry.size && !registry.items))
+    return luaL_error(L, "Invalid native type registry");
+  // Cache the index, not the instance. Revalidate it if the registry changes.
+  lua_getfield(L, lua_upvalueindex(2), name);
+  auto index = static_cast<uint32_t>(luaL_optinteger(L, -1, UINT32_MAX));
+  lua_pop(L, 1);
+  auto matches = [&](uint32_t i) {
+    auto *t = registry.items[i];
+    return t && (t->flags & 0x80) && t->name && !strcmp(t->name, name);
+  };
+  if (index >= registry.size || !matches(index)) {
+    index = 0;
+    while (index < registry.size && !matches(index))
+      ++index;
+    if (index == registry.size) {
+      lua_pushnil(L);
+      return 1;
+    }
+    lua_pushinteger(L, index);
+    lua_setfield(L, lua_upvalueindex(2), name);
+  }
+  auto *t = registry.items[index];
+  if (!t->vtable || !f.main.contains(reinterpret_cast<uintptr_t>(t->vtable + 2)))
+    return luaL_error(L, "Invalid native singleton descriptor");
+  auto getter = t->vtable[2];
+  if (getter % 4 || getter - f.main.addr(f.main.seg_off[0]) >= f.main.seg_size[0])
+    return luaL_error(L, "Invalid native singleton getter");
+  auto *instance = reinterpret_cast<void *(*)(NativeType *)>(getter)(t);
+  if (instance)
+    lua_pushlightuserdata(L, instance);
+  else
+    lua_pushnil(L);
+  return 1;
+}
+
+uintptr_t method_receiver(lua_State *L, ReadFrame &f, uint32_t method, int index) {
+  if ((read<uint16_t>(f.db.method_impl(method), 4) & 0x10) || lua_isnil(L, index))
+    return 0;
+  return object(L, index).address;
+}
+int call_native_func(lua_State *L) {
+  auto &f = frame(L);
+  auto type = mod_lua::type_definition_id(L, 2);
+  const char *name = luaL_checkstring(L, 3);
+  try {
+    auto method = f.db.lookup_method(type, name);
+    if (!method) {
+      lua_pushnil(L);
+      return 1;
+    }
+    return managed_call(L, f, method, method_receiver(L, f, method, 1), 4);
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+int push_runtime_type(lua_State *L, ReadFrame &f, uint32_t id) {
+  if (!id) {
+    lua_pushnil(L);
+    return 1;
+  }
+  // System.Object.GetType indexes the managed System.Type table by TDB ID.
+  auto slot = *reinterpret_cast<uintptr_t *>(f.main.addr(0x12674830));
+  auto table = slot ? *reinterpret_cast<const uintptr_t *const *>(slot) : nullptr;
+  if (!table)
+    throw std::runtime_error("Runtime type table unavailable");
+  if (!f.persistent) {
+    auto get = reinterpret_cast<uintptr_t (*)(uintptr_t, uintptr_t)>(
+        function(f, 704591));
+    if (get(f.context, f.manager) != table[actual_type(f.db, f.manager)])
+      throw std::runtime_error("Runtime type table mismatch");
+  }
+  push_obj(L, f, table[id], f.db.find("System.Type"));
+  return 1;
+}
 int runtime_type(lua_State *L) {
   auto &f = frame(L);
   const char *name = luaL_checkstring(L, 1);
+  try {
+    return push_runtime_type(L, f, f.db.find(name));
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+int create_instance(lua_State *L) {
+  auto &f = frame(L);
+  const char *name = luaL_checkstring(L, 1);
+  bool simplify = lua_isboolean(L, 2) && lua_toboolean(L, 2);
   try {
     auto id = f.db.find(name);
     if (!id) {
       lua_pushnil(L);
       return 1;
     }
-    // System.Object.GetType in this build indexes the managed System.Type table
-    // with the actual type ID. Cross-check the table against the running
-    // method.
-    auto slot = *reinterpret_cast<uintptr_t *>(f.main.addr(0x12674830));
-    auto table =
-        slot ? *reinterpret_cast<const uintptr_t *const *>(slot) : nullptr;
-    if (!table)
-      throw std::runtime_error("Runtime type table unavailable");
-    auto get = reinterpret_cast<uintptr_t (*)(uintptr_t, uintptr_t)>(
-        function(f, 704591));
-    if (!f.persistent &&
-        get(f.context, f.manager) != table[actual_type(f.db, f.manager)])
-      throw std::runtime_error("Runtime type table mismatch");
-    push_obj(L, f, table[id], f.db.find("System.Type"));
+    if (simplify)
+      throw std::runtime_error("Simplified instance allocation is not implemented on NS");
+    push_runtime_type(L, f, id);
+    if (lua_isnil(L, -1))
+      return 1;
+    auto factory = f.db.lookup_method(f.db.find("System.Activator"),
+                                      "CreateInstance(System.Type)");
+    if (!factory)
+      throw std::runtime_error("System.Activator.CreateInstance is unavailable");
+    return managed_call(L, f, factory, 0, lua_gettop(L), true);
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+
+int create_number(lua_State *L) {
+  auto &f = frame(L);
+  try {
+    auto type = f.db.find(lua_tostring(L, lua_upvalueindex(2)));
+    if (!type)
+      throw std::runtime_error("Missing primitive type in TDB");
+    push_obj(L, f, box_scalar(L, f, 1, type), type);
     return 1;
   } catch (const std::exception &e) {
     lua_pushstring(L, e.what());
@@ -850,7 +968,7 @@ int invoke_descriptor(lua_State *L) {
   try {
     auto &f = live_frame(L);
     auto id = uint32_t(lua_tointeger(L, lua_upvalueindex(2)));
-    auto receiver = lua_isnil(L, 2) ? uintptr_t(0) : object(L, 2).address;
+    auto receiver = method_receiver(L, f, id, 2);
     return managed_call(L, f, id, receiver, 3);
   } catch (const std::exception &e) {
     lua_pushstring(L, e.what());
@@ -886,13 +1004,7 @@ int descriptor_runtime_type(lua_State *L) {
   try {
     auto &f = live_frame(L);
     auto id = uint32_t(lua_tointeger(L, lua_upvalueindex(2)));
-    auto slot = *reinterpret_cast<uintptr_t *>(f.main.addr(0x12674830));
-    auto table =
-        slot ? *reinterpret_cast<const uintptr_t *const *>(slot) : nullptr;
-    if (!table)
-      throw std::runtime_error("Runtime type table unavailable");
-    push_obj(L, f, table[id], f.db.find("System.Type"));
-    return 1;
+    return push_runtime_type(L, f, id);
   } catch (const std::exception &e) {
     lua_pushstring(L, e.what());
   }
@@ -1013,11 +1125,17 @@ void open_live_read(lua_State *L, ReadFrame &f) {
     lua_pop(L, 1);
     lua_newtable(L);
   }
-  lua_pushcfunction(L, [](lua_State *s) {
-    lua_pushboolean(s, is_live_object(s, 1));
-    return 1;
-  });
-  lua_setfield(L, -2, "is_managed_object");
+  if (!f.persistent) {
+    lua_pushcfunction(L, [](lua_State *s) {
+      lua_pushboolean(s, is_live_object(s, 1));
+      return 1;
+    });
+    lua_setfield(L, -2, "is_managed_object");
+  }
+  lua_pushlightuserdata(L, &f);
+  lua_newtable(L);
+  lua_pushcclosure(L, native_singleton, 2);
+  lua_setfield(L, -2, "get_native_singleton");
   lua_pushlightuserdata(L, &f);
   lua_pushcclosure(
       L,
@@ -1051,6 +1169,8 @@ void open_live_read(lua_State *L, ReadFrame &f) {
   for (auto [key, func] :
        {std::pair<const char *, lua_CFunction>{"typeof", runtime_type},
         {"get_managed_singleton", singleton},
+        {"call_native_func", call_native_func},
+        {"create_instance", create_instance},
         {"get_primary_camera", primary_camera},
         {"create_managed_array", create_array}}) {
     lua_pushlightuserdata(L, &f);
@@ -1073,6 +1193,17 @@ void open_live_read(lua_State *L, ReadFrame &f) {
       },
       1);
   lua_setfield(L, -2, "find_type_definition");
+  for (auto [name, type] : {
+           std::pair{"create_sbyte", "System.SByte"}, {"create_byte", "System.Byte"},
+           {"create_int16", "System.Int16"}, {"create_uint16", "System.UInt16"},
+           {"create_int32", "System.Int32"}, {"create_uint32", "System.UInt32"},
+           {"create_int64", "System.Int64"}, {"create_uint64", "System.UInt64"},
+           {"create_single", "System.Single"}, {"create_double", "System.Double"}}) {
+    lua_pushlightuserdata(L, &f);
+    lua_pushstring(L, type);
+    lua_pushcclosure(L, create_number, 2);
+    lua_setfield(L, -2, name);
+  }
   lua_pushlightuserdata(L, &f);
   lua_pushliteral(L, "call");
   lua_pushcclosure(L, invoke, 2);
