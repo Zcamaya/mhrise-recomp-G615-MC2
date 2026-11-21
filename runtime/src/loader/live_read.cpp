@@ -343,19 +343,19 @@ uintptr_t managed_string(lua_State *L, ReadFrame &f, int index) {
   memcpy(reinterpret_cast<void *>(str + 0x14), utf16.data(), utf16.size() * 2);
   return str;
 }
-uintptr_t allocate_box(ReadFrame &f, uint32_t expected, bool persistent) {
+uintptr_t allocate_managed(ReadFrame &f, uint32_t expected, bool persistent) {
   using Allocate = uintptr_t (*)(uintptr_t, const uint8_t *, int);
-  auto box = reinterpret_cast<Allocate>(f.main.addr(0x6b64068))(
+  auto instance = reinterpret_cast<Allocate>(f.main.addr(0x6b64068))(
       engine_context(f), f.db.types.data() + 72ull * expected, persistent ? 1 : 0);
-  if (!box || actual_type(f.db, box) != expected)
-    throw std::runtime_error("Game VM could not box argument");
-  return box;
+  if (!instance || actual_type(f.db, instance) != expected)
+    throw std::runtime_error("Game VM could not allocate " + f.db.full_name(expected));
+  return instance;
 }
 uintptr_t box_scalar(lua_State *L, ReadFrame &f, int arg, uint32_t expected) {
   auto kind = value_kind(f.db, expected);
   alignas(16) uint8_t encoded[16 * sizeof(float)]{};
   write_scalar(L, arg, kind, encoded);
-  auto box = allocate_box(f, expected, false);
+  auto box = allocate_managed(f, expected, false);
   auto bytes = boxed_payload(f, box, expected);
   auto n = read<uint32_t>(f.db.impl(72ull * expected), 8);
   if (!n || n > sizeof(encoded) || n > bytes.size())
@@ -392,7 +392,7 @@ void struct_field(lua_State *L, ReadFrame &f, uint32_t id,
       throw std::runtime_error("Expected boxed " + f.db.full_name(id));
     box = source->address;
   } else {
-    box = allocate_box(f, id, true);
+    box = allocate_managed(f, id, true);
   }
   auto bytes = boxed_payload(f, box, id);
   if (size > bytes.size())
@@ -969,10 +969,26 @@ int instantiate(lua_State *L, ReadFrame &f, uint32_t id) {
     lua_pushnil(L);
     return 1;
   }
-  if (lua_isboolean(L, 2) && lua_toboolean(L, 2))
-    throw std::runtime_error("Simplified instance allocation is not implemented on NS");
+  const bool simplify = lua_isboolean(L, 2) && lua_toboolean(L, 2);
   push_runtime_type(L, f, id);
   if (lua_isnil(L, -1)) return 1;
+  if (simplify) {
+    lua_pop(L, 1);
+    // NS 16.0.1 Activator.createInstance's ValType arm calls this allocator
+    // directly. Select that arm without changing the shared type descriptor.
+    const size_t row = 72ull * id;
+    const auto kind = (read<uint32_t>(f.db.types, row + 44) >> 26) & 7;
+    const auto generic = (read<uint64_t>(f.db.types, row + 48) >> 26) & 0x3ffffff;
+    const bool open = generic && (read<uint32_t>(f.db.byte_pool, generic) & id_mask) == id;
+    if ((kind != 1 && kind != 5) || (read<uint32_t>(f.db.types, row + 16) & 0xa0) ||
+        open || id == f.db.find("System.Void") ||
+        read<uint32_t>(f.db.types, row + 20) < 16 || !read<uintptr_t>(f.db.types, row + 64))
+      throw std::runtime_error("Simplified allocation requires a concrete fixed-size managed type: " +
+                               f.db.full_name(id));
+    // The result escapes the call into Lua; request heap storage before retaining it.
+    push_obj(L, f, allocate_managed(f, id, true), id);
+    return 1;
+  }
   auto factory = f.db.lookup_method(f.db.find("System.Activator"), "CreateInstance(System.Type)");
   if (!factory) throw std::runtime_error("System.Activator.CreateInstance is unavailable");
   return managed_call(L, f, factory, 0, lua_gettop(L), true);
@@ -1040,7 +1056,7 @@ int create_value(lua_State *L) {
     auto size = read<uint32_t>(f.db.impl(72ull * id), 8);
     if (!size)
       throw std::runtime_error("Value type has no concrete storage");
-    auto box = allocate_box(f, id, true);
+    auto box = allocate_managed(f, id, true);
     auto bytes = boxed_payload(f, box, id);
     if (size > bytes.size())
       throw std::runtime_error("Value exceeds boxed payload");
