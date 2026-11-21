@@ -40,6 +40,8 @@ add_library(nnsdk SHARED
   src/nnsdk/nvn/count_check.cpp
   src/nnsdk/nvn/formats.cpp
   src/nnsdk/nvn/executor.cpp
+  src/nnsdk/nvn/pipeline_compiler.cpp
+  src/nnsdk/nvn/driver_pipeline_cache.cpp
   src/nnsdk/nvn/gpu_memory.cpp
   src/nnsdk/nvn/memory.cpp
   src/nnsdk/nvn/layout.cpp
@@ -53,6 +55,11 @@ add_library(nnsdk SHARED
   src/nnsdk/nvn/spirv_cache.cpp
   src/nnsdk/nvn/queue.cpp
   src/nnsdk/nvn/texture.cpp
+  src/nnsdk/nvn/texture_view.cpp
+  src/nnsdk/nvn/texture_region.cpp
+  src/nnsdk/nvn/vertex_fetch.cpp
+  src/nnsdk/nvn/present_image.cpp
+  src/nnsdk/nvn/present_probe.cpp
   src/nnsdk/nvn/vk.cpp
   src/nnsdk/nvn/window.cpp
   src/nnsdk/nvn/hud.cpp
@@ -92,8 +99,9 @@ add_library(nnsdk SHARED
 target_include_directories(nnsdk PRIVATE src)
 # Recompilador de shaders de Eden (GPL-3): libnnsdk.so queda bajo GPL-3.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-add_subdirectory(recompiler)
-target_link_libraries(nnsdk PRIVATE eden_shader)
+include(shader_translator.cmake)
+target_include_directories(nnsdk PRIVATE recompiler)
+target_link_libraries(nnsdk PRIVATE rise_shader_translator)
 # Vulkan por punteros (volk, desde nvn/vk.h): sin enlazar libvulkan.so, para que el driver pueda ser el
 # del sistema o uno del usuario cargado con libadrenotools (nvn/driver.cpp). Las librerías de hooks de libadrenotools
 # (libhook_impl.so, libmain_hook.so, libfile_redirect_hook.so, libgsl_alloc_hook.so) van en la APK junto a libnnsdk.so.

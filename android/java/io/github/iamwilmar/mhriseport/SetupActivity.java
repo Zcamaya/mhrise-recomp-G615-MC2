@@ -1,6 +1,7 @@
 package io.github.iamwilmar.mhriseport;
 
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.Typeface;
@@ -422,6 +423,19 @@ public final class SetupActivity extends Activity {
     }
 
     private void startGame() {
+        File data = saved(DATA_FILE);
+        if (data != null) {
+            String migration = "scissoredClears:" + data.getAbsolutePath();
+            SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+            if (!prefs.getBoolean(migration, false)) {
+                if (!new Ini(data).removeSystemMemoryOverride()) {
+                    showResult();
+                    say("Could not update TU_DEBUG in " + new File(data, Ini.NAME), ALERT);
+                    return;
+                }
+                prefs.edit().putBoolean(migration, true).apply();
+            }
+        }
         startActivity(new Intent(this, GameActivity.class));
         overridePendingTransition(0, 0);
         finish();

@@ -501,9 +501,8 @@ final class SettingsMenu {
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.",
                 "tight_barriers", false);
         exclusive("Pipeline worker threads",
-                "Background threads that build the GPU pipelines for new effects and areas (like Eden's setting). More "
-                        + "build them sooner, so fewer objects pop in late, on a phone with cores to spare; 1 keeps the heat "
-                        + "and battery down. Takes effect on the next start.",
+                "Threads available to build GPU pipelines. More can finish shader warm-up sooner. "
+                        + "A draw waits if its pipeline is still being built. Takes effect on the next start.",
                 new String[] {"2 (default)", "1", "3", "4"},
                 new String[] {null, "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4"});
         flag("Asynchronous presentation",

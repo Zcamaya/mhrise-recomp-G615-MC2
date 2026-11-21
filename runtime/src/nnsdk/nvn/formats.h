@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "nnsdk/nvn/vk.h"
+#include "nnsdk/nvn/vertex_fetch.h"
 
 namespace nvn {
 
@@ -15,10 +16,12 @@ struct FormatInfo {
     uint8_t block;   // ancho del bloque comprimido (1 = sin comprimir)
     const char* name;
     uint8_t block_h = 0;  // alto del bloque si no es cuadrado (ASTC 5x4, 8x6…); 0 = igual al ancho
+    VertexFetch fetch = VertexFetch::Float;
     uint32_t block_height() const { return block_h ? block_h : block; }
 };
 
 // nullptr si no lo conocemos todavía (se registra en el log).
 const FormatInfo* format_info(int nvn_format);
+VkFormat vertex_format(uint8_t nvn_format);
 
 }  // namespace nvn
