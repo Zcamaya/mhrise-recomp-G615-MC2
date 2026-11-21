@@ -39,6 +39,7 @@
              directly with am start. -->
         <activity
             android:name=".GameActivity"
+            android:hardwareAccelerated="false"
             android:exported="true"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"

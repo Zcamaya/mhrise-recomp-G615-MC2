@@ -4,8 +4,11 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.RenderNode;
 import android.os.SystemClock;
+import android.view.Choreographer;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -38,6 +41,37 @@ final class TouchPad extends View {
 
     private final Controls cfg;
     private final Host host;
+    private static final Ctl[] CONTROLS = Ctl.values();
+    private final boolean animateControls;
+    private final Appearance[] artwork = new Appearance[CONTROLS.length];
+    private long dirtyGlyphs = -1L;
+    private final Rect damage = new Rect();
+    // The game presents at up to 60 Hz. Sample continuous stick artwork at that cadence,
+    // even when the Android window receives input and vsync at 120 Hz or higher.
+    private static final long SOFTWARE_FRAME_NS = 1_000_000_000L / 60;
+    private final Choreographer.FrameCallback softwareFrame = this::drawSoftwareControls;
+    private boolean softwareFramePending;
+    private long nextSoftwareFrame;
+
+    // Per-control visual state. Layout and style changes invalidate all display lists.
+    private static final class Appearance {
+        boolean down, held, click;
+        int dirs;
+        float x, y;
+        RenderNode node;
+
+        boolean set(boolean down, boolean held, boolean click, int dirs, float x, float y) {
+            if (this.down == down && this.held == held && this.click == click && this.dirs == dirs
+                    && this.x == x && this.y == y) return false;
+            this.down = down;
+            this.held = held;
+            this.click = click;
+            this.dirs = dirs;
+            this.x = x;
+            this.y = y;
+            return true;
+        }
+    }
     private final Glyphs glyphs = new Glyphs();
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG), barText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
@@ -148,9 +182,16 @@ final class TouchPad extends View {
     private Ctl selected;
 
     TouchPad(Context context, Controls cfg, Host host) {
+        this(context, cfg, host, !(context instanceof GameActivity &&
+                new Ini(SettingsMenu.gameFolder((GameActivity) context)).on("static_touch_panel")));
+    }
+
+    TouchPad(Context context, Controls cfg, Host host, boolean animateControls) {
         super(context);
         this.cfg = cfg;
         this.host = host;
+        this.animateControls = animateControls;
+        for (int k = 0; k < artwork.length; ++k) artwork[k] = new Appearance();
         for (int i = 0; i < MAX_FINGERS; i++) fingers[i] = new Finger();
         barText.setTextAlign(Paint.Align.CENTER);
         barText.setColor(Glyphs.CREAM);
@@ -349,7 +390,7 @@ final class TouchPad extends View {
             default:
                 break;
         }
-        update();
+        update(action == MotionEvent.ACTION_MOVE);
         return true;
     }
 
@@ -495,6 +536,10 @@ final class TouchPad extends View {
 
     // Lo que tocan los dedos, al loader (solo si cambió)
     private void update() {
+        update(false);
+    }
+
+    private void update(boolean moving) {
         long buttons = pulse;
         if (!editing)
             for (Ctl c : Ctl.values())
@@ -515,7 +560,79 @@ final class TouchPad extends View {
             lastButtons = buttons;
             lastSticks = on;
         }
-        invalidate();
+        if (editing) invalidate();
+        else if (moving && animateControls && !isHardwareAccelerated()) {
+            if (!softwareFramePending) {
+                softwareFramePending = true;
+                Choreographer.getInstance().postFrameCallback(softwareFrame);
+            }
+        } else if (animateControls && syncAppearance(isHardwareAccelerated() ? null : damage)) {
+            if (isHardwareAccelerated()) super.invalidate();
+            else super.invalidate(damage);
+        }
+    }
+
+    private void drawSoftwareControls(long frameTime) {
+        if (frameTime + 500_000L < nextSoftwareFrame) {
+            Choreographer.getInstance().postFrameCallback(softwareFrame);
+            return;
+        }
+        softwareFramePending = false;
+        nextSoftwareFrame = frameTime >= nextSoftwareFrame + SOFTWARE_FRAME_NS
+                ? frameTime + SOFTWARE_FRAME_NS : nextSoftwareFrame + SOFTWARE_FRAME_NS;
+        if (!editing && syncAppearance(damage)) super.invalidate(damage);
+    }
+
+    private boolean syncAppearance(Rect changedArea) {
+        boolean changed = false;
+        if (changedArea != null) changedArea.setEmpty();
+        boolean live = animateControls && !editing;
+        for (Ctl ctl : CONTROLS) {
+            if (!active(ctl)) continue;
+            int k = ctl.ordinal();
+            boolean left = ctl == Ctl.LSTICK, right = ctl == Ctl.RSTICK;
+            long clickBit = left || ctl == Ctl.L3 ? Controls.LSTICK : right || ctl == Ctl.R3 ? Controls.RSTICK : 0;
+            boolean down = live && !left && !right && ctl != Ctl.DPAD &&
+                    (pressed(ctl) || (latched[k] && cfg.hold[k]));
+            boolean held = live && ((left && (sticksOn & 1) != 0) || (right && (sticksOn & 2) != 0));
+            int dirs = live && ctl == Ctl.DPAD ? dpadHeld() : 0;
+            float x = live && left ? lx : live && right ? rx : 0;
+            float y = live && left ? ly : live && right ? ry : 0;
+            if (artwork[k].set(down, held, live && (pulse & clickBit) != 0, dirs, x, y)) {
+                dirtyGlyphs |= 1L << k;
+                changed = true;
+                if (changedArea != null) {
+                    // Custom text and combo names can extend past the button plate.
+                    if (cfg.label[k] != null || ctl.combo()) changedArea.set(0, 0, getWidth(), getHeight());
+                    else {
+                        // Includes the stick knob at full travel, its widest outline and antialiasing.
+                        float extent = 1.25f * radius(ctl) + 2;
+                        changedArea.union((int) Math.floor(cx(ctl) - extent), (int) Math.floor(cy(ctl) - extent),
+                                (int) Math.ceil(cx(ctl) + extent), (int) Math.ceil(cy(ctl) + extent));
+                    }
+                }
+            }
+        }
+        return changed;
+    }
+
+    @Override public void invalidate() {
+        dirtyGlyphs = -1L;
+        super.invalidate();
+    }
+
+    @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
+        super.onSizeChanged(w, h, oldW, oldH);
+        dirtyGlyphs = -1L;
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        Choreographer.getInstance().removeFrameCallback(softwareFrame);
+        softwareFramePending = false;
+        nextSoftwareFrame = 0;
+        for (Appearance a : artwork) if (a.node != null) a.node.discardDisplayList();
+        dirtyGlyphs = -1L;
+        super.onDetachedFromWindow();
     }
 
     // Suelta todo (al abrir el menú o al irse la app a segundo plano)
@@ -627,6 +744,7 @@ final class TouchPad extends View {
 
     @Override
     protected void onDraw(Canvas c) {
+        if (dirtyGlyphs == -1L) syncAppearance(null);
         int alpha = Math.round(255 * cfg.opacity / 100f);
         if (editing && cfg.grid) {  // (faint lines, a stronger one every fifth)
             float g = gridStep();
@@ -641,12 +759,13 @@ final class TouchPad extends View {
                 c.drawRect(0, gy, getWidth(), gy + 1, barPaint);
             }
         }
-        for (Ctl ctl : Ctl.values()) {
+        for (Ctl ctl : CONTROLS) {
             if (!active(ctl)) continue;
             int a = alpha * cfg.alpha[ctl.ordinal()] / 100;
             if (editing && !cfg.shown[ctl.ordinal()]) a = a / 3;  // (escondido: se ve tenue, para poder enseñarlo)
             if (editing && ctl == selected) a = 255;
-            draw(c, ctl, a);
+            if (editing || !c.isHardwareAccelerated()) draw(c, ctl, a);
+            else drawRetained(c, ctl, a);
             if (editing && ctl == selected) {  // (el elegido: un marco dorado de puntos)
                 barPaint.setStyle(Paint.Style.STROKE);
                 barPaint.setStrokeWidth(getHeight() * 0.004f);
@@ -658,12 +777,31 @@ final class TouchPad extends View {
             }
         }
         if (editing) drawBar(c);
+        if (!editing && c.isHardwareAccelerated()) dirtyGlyphs = 0;
+    }
+
+    private void drawRetained(Canvas canvas, Ctl ctl, int alpha) {
+        int k = ctl.ordinal();
+        Appearance appearance = artwork[k];
+        if (appearance.node == null) appearance.node = new RenderNode(ctl.name());
+        RenderNode node = appearance.node;
+        if ((dirtyGlyphs & (1L << k)) != 0 || !node.hasDisplayList()) {
+            node.setPosition(0, 0, getWidth(), getHeight());
+            Canvas recording = node.beginRecording();
+            try {
+                draw(recording, ctl, alpha);
+            } finally {
+                node.endRecording();
+            }
+        }
+        canvas.drawRenderNode(node);
     }
 
     private void draw(Canvas c, Ctl ctl, int a) {
         float x = cx(ctl), y = cy(ctl), r = radius(ctl);
-        boolean down = pressed(ctl) || (latched[ctl.ordinal()] && cfg.hold[ctl.ordinal()] && !editing);
         final int k = ctl.ordinal();
+        Appearance state = artwork[k];
+        boolean down = state.down;
         android.graphics.Bitmap picture = cfg.image[k] ? bitmap(ctl) : null;
         if (ctl == Ctl.MENU && cfg.styled(ctl)) {  // (its gear, unless it has an icon or a label)
             glyphs.custom(c, x, y, r, cfg.shape[k] == 0 ? 1 : cfg.shape[k], cfg.icon[k], cfg.label[k], false, down, a,
@@ -682,15 +820,15 @@ final class TouchPad extends View {
         }
         switch (ctl) {
             case LSTICK:
-                glyphs.stick(c, x, y, r, lx, ly, (sticksOn & 1) != 0, (pulse & Controls.LSTICK) != 0, a, cfg.shape[k],
+                glyphs.stick(c, x, y, r, state.x, state.y, state.held, state.click, a, cfg.shape[k],
                         Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture, cfg.fit[k]);
                 break;
             case RSTICK:
-                glyphs.stick(c, x, y, r, rx, ry, (sticksOn & 2) != 0, (pulse & Controls.RSTICK) != 0, a, cfg.shape[k],
+                glyphs.stick(c, x, y, r, state.x, state.y, state.held, state.click, a, cfg.shape[k],
                         Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture, cfg.fit[k]);
                 break;
             case DPAD:
-                glyphs.dpad(c, x, y, r, dpadHeld(), a, Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture,
+                glyphs.dpad(c, x, y, r, state.dirs, a, Controls.COLOR_FILLS[cfg.color[k]], cfg.outline[k] / 100f, picture,
                         cfg.fit[k]);
                 break;
             case A: case B: case X: case Y:
@@ -712,10 +850,10 @@ final class TouchPad extends View {
                 glyphs.small(c, x, y, r, Glyphs.Small.MENU, down, a);
                 break;
             case L3:
-                glyphs.small(c, x, y, r, Glyphs.Small.L3, down || (pulse & Controls.LSTICK) != 0, a);
+                glyphs.small(c, x, y, r, Glyphs.Small.L3, down || state.click, a);
                 break;
             case R3:
-                glyphs.small(c, x, y, r, Glyphs.Small.R3, down || (pulse & Controls.RSTICK) != 0, a);
+                glyphs.small(c, x, y, r, Glyphs.Small.R3, down || state.click, a);
                 break;
             default:
                 glyphs.combo(c, x, y, r, Controls.names(cfg.combo[ctl.comboIndex()]), down, a);

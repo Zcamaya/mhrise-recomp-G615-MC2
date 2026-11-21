@@ -33,6 +33,12 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos, long[] mapping);
     static native void nativeTextAnswer(int serial, String text);
     static native void nativeTurbo(boolean on);
+    // Load after the NativeActivity has configured the game paths and driver environment.
+    private static final class RuntimeLifecycle {
+        static { System.loadLibrary("nnsdk"); }
+        static native void update(boolean resumed, boolean releasingSurface);
+    }
+    private boolean resumed;
 
     private Controls controls;
     private TouchPad pad;
@@ -102,7 +108,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             shown = true;
             if ("io.github.iamwilmar.mhriseport.lab".equals(getPackageName())) {
                 modUi = new ModUi(this);
-                modUi.onResume();
+                if (resumed) modUi.onResume();
             }
             showCapture();
         } catch (RuntimeException e) {
@@ -147,6 +153,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        RuntimeLifecycle.update(true, false);
         if (modUi != null) modUi.onResume();
         applyTurbo(true);
     }
@@ -157,7 +165,20 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         applyTurbo(false);
         if (pad != null) pad.releaseAll();  // (un dedo que se queda en un botón al irse la app no lo deja pulsado)
         if (controls != null) controls.saveNow();  // (the app may not come back: swiped away from recents, killed for memory)
+        resumed = false;
+        RuntimeLifecycle.update(false, false);
         super.onPause();
+    }
+
+    @Override
+    public void surfaceDestroyed(android.view.SurfaceHolder holder) {
+        // NativeActivity waits for the frame consumer to release its old swapchain.
+        RuntimeLifecycle.update(resumed, true);
+        try {
+            super.surfaceDestroyed(holder);
+        } finally {
+            RuntimeLifecycle.update(resumed, false);
+        }
     }
 
     // The capture button goes in its own small window above the controls' one, only as big as the button, so touches
@@ -215,6 +236,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     @Override
     protected void onDestroy() {
+        // NativeActivity will tear down the runtime. Let parked threads finish cleanup with audio paused.
+        RuntimeLifecycle.update(false, true);
         if (modUi != null) modUi.dispose();
         if (capture != null) {
             try {
