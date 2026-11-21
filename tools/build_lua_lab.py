@@ -151,12 +151,9 @@ def main():
     with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
         staging = Path(tmp)
         build_dex(root, staging, platform, tools, jdk)
-        manifest = (root/"android/AndroidManifest.xml").read_text(encoding="utf-8")
-        (staging/"AndroidManifest.xml").write_text(manifest.replace('android:label="MH Rise port"',
-            'android:label="MH Rise Lua Lab"'), encoding="utf-8")
         base = staging/"base.apk"
         run(tools/"aapt2.exe", "compile", "--dir", root/"android/res", "-o", staging/"res.zip")
-        run(tools/"aapt2.exe", "link", "--manifest", staging/"AndroidManifest.xml", "-I", platform,
+        run(tools/"aapt2.exe", "link", "--manifest", root/"android/AndroidManifest.xml", "-I", platform,
             "-R", staging/"res.zip", "--auto-add-overlay", "--debug-mode", "--rename-manifest-package",
             "io.github.iamwilmar.mhriseport.lab", "-o", base)
         loader = "lib/arm64-v8a/libnier.so"
