@@ -1518,16 +1518,18 @@ final class SettingsMenu {
         note("Each mod is a folder in " + ModFiles.modsDir(folder) + ", laid out as for Eden: romfs/ with the game files it "
                 + "replaces, cheats/ with its cheat files. Adding a mod or turning one on or off applies the next time the "
                 + "game starts.");
-        action("Add a mod (.zip)",
-                "Pick a mod's zip, as made for Eden or Yuzu. Its romfs (or its game folders, natives/...) and cheats go into "
-                        + "a folder of their own under mods. Patches for exefs aren't used by this port.",
+        action("Add a mod archive",
+                "ZIP, 7z, RAR or TAR. Import game resources, REFramework scripts and their data. Restart to apply.",
                 () -> {
                     dialog.dismiss();
                     activity.importMod();
                 });
         for (ModFiles.Mod m : mods) {
-            String what = m.romfs && m.cheats ? "Game files and cheats" : m.romfs ? "Game files (romfs)"
-                    : m.cheats ? "Cheats only" : "Nothing the port uses (no romfs or cheats folder)";
+            java.util.List<String> contents = new java.util.ArrayList<>();
+            if (m.romfs) contents.add("Game files");
+            if (m.cheats) contents.add("Cheats");
+            if (new File(m.dir, "reframework").isDirectory()) contents.add("REFramework scripts/data");
+            String what = contents.isEmpty() ? "No supported files" : android.text.TextUtils.join(", ", contents);
             toggle(m.name, what + ". In " + m.dir.getName() + ".", () -> m.on ? 1 : 0, v -> {
                 if (!ModFiles.setOn(m, v != 0)) android.widget.Toast.makeText(activity, "Couldn't rename " + m.dir.getName(),
                         android.widget.Toast.LENGTH_LONG).show();

@@ -3,6 +3,7 @@
 #include "loader/imports.h"
 #include "loader/live_read.h"
 #include "loader/lua_data.h"
+#include "loader/lua_frame_gc.h"
 #include "loader/lua_mod_hooks.h"
 #include "loader/lua_native_hooks.h"
 #include "loader/lua_values.h"
@@ -11,6 +12,7 @@
 #include "loader/tdb71.h"
 #include "loader/tls.h"
 #include <algorithm>
+#include <set>
 #include <android/log.h>
 #include <atomic>
 #include <cstdio>
@@ -393,6 +395,7 @@ struct PlayerProbe {
 };
 std::unique_ptr<PlayerProbe> player_probe;
 std::unique_ptr<Tdb> resident_metadata;
+mod_lua::FrameGc resident_gc;
 std::unique_ptr<lua_State, decltype(&lua_close)> resident_vm(nullptr,
                                                              lua_close);
 std::unique_ptr<rise::ReadFrame> resident_frame;
@@ -454,10 +457,24 @@ int pc_module_searcher(lua_State *L) {
 
 bool load_scripts(lua_State *L, const fs::path &directory) {
   std::vector<fs::path> scripts;
-  for (const auto &entry : fs::directory_iterator(directory))
-    if (entry.is_regular_file() && entry.path().extension() == ".lua")
-      scripts.push_back(entry.path());
-  std::sort(scripts.begin(), scripts.end());
+  auto roots = directory.filename() == "autorun"
+                   ? mod_lua::framework_roots(directory.parent_path())
+                   : std::vector<fs::path>{directory.parent_path()};
+  std::set<std::string> seen;
+  for (auto &root : roots) {
+    auto dir = root / directory.filename();
+    if (!fs::is_directory(dir))
+      continue;
+    for (const auto &entry : fs::directory_iterator(dir)) {
+      auto path = entry.path();
+      if (entry.is_regular_file() && path.extension() == ".lua" &&
+          seen.insert(path.filename().string()).second)
+        scripts.push_back(path);
+    }
+  }
+  std::sort(scripts.begin(), scripts.end(), [](const auto &a, const auto &b) {
+    return a.filename() < b.filename();
+  });
   bool ok = true;
   for (const auto &path : scripts) {
     auto previous = mod_lua::checkpoint();
@@ -489,14 +506,22 @@ bool initialize_resident(const Module &main, const fs::path &directory,
   mod_lua::open_values(L);
   mod_lua::open_data(L, directory.parent_path());
   lua_getglobal(L, "package");
-  lua_pushstring(
-      L, (directory.string() + "/?.lua;" + directory.string() + "/?/init.lua")
-             .c_str());
+  const auto roots = mod_lua::framework_roots(directory.parent_path());
+  std::string search;
+  for (const auto &root : roots) {
+    auto dir = (root / "autorun").string();
+    if (!search.empty())
+      search += ";";
+    search += dir + "/?.lua;" + dir + "/?/init.lua";
+  }
+  lua_pushstring(L, search.c_str());
   lua_setfield(L, -2, "path");
   lua_getfield(L, -1, "searchers");
-  lua_pushstring(L, directory.c_str());
-  lua_pushcclosure(L, pc_module_searcher, 1);
-  lua_rawseti(L, -2, lua_rawlen(L, -2) + 1);
+  for (const auto &root : roots) {
+    lua_pushstring(L, (root / "autorun").c_str());
+    lua_pushcclosure(L, pc_module_searcher, 1);
+    lua_rawseti(L, -2, lua_rawlen(L, -2) + 1);
+  }
   lua_pop(L, 2);
   lua_newtable(L);
   lua_pushlightuserdata(L, &tdb);
@@ -520,7 +545,7 @@ bool initialize_resident(const Module &main, const fs::path &directory,
   push_log_api(L);
   if (resident_frame)
     open_live_read(L, *resident_frame);
-  mod_lua::select_event_state(L);
+  mod_lua::select_event_state(L, &resident_gc);
   return !run || load_scripts(L, directory);
 }
 
@@ -547,7 +572,7 @@ size_t prepare_player_probe(const Module &main, const fs::path &directory) {
                                     0x5b, 0xba, 0x50, 0x8d, 0x60, 0x1a, 0xdd,
                                     0x85, 0x2f, 0x25, 0x5a, 0x32, 0xba};
   try {
-    if (!fs::is_directory(directory / "autorun"))
+    if (!resident_vm)
       return 0;
     if (memcmp(main.build_id, build_id, sizeof(build_id)) != 0)
       throw std::runtime_error("Unsupported main build ID for player probe");
@@ -632,7 +657,7 @@ void on_player_update(uintptr_t context, uintptr_t manager) {
         return;
       }
       mod_lua::reset_callbacks();
-      mod_lua::select_event_state(nullptr);
+      mod_lua::select_event_state(nullptr, nullptr);
       mod_lua::rollback(resident_vm.get(), 0);
       resident_vm.reset();
       auto dir = p.script.parent_path();
@@ -691,17 +716,37 @@ void on_player_update(uintptr_t context, uintptr_t manager) {
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_io_github_iamwilmar_mhriseport_SettingsMenu_nativeLuaReport(JNIEnv *env,
                                                                  jclass) {
-  std::lock_guard lock(report_mutex);
-  jbyteArray result = env->NewByteArray(static_cast<jsize>(panel_text.size()));
+  std::string text;
+  {
+    std::unique_lock lua_lock(mod_lua::lua_mutex(), std::try_to_lock);
+    if (lua_lock.owns_lock()) {
+      const auto &s = resident_gc.stats();
+      if (s.heap_bytes) {
+        char line[200];
+        snprintf(line, sizeof(line), "Lua GC: %.1f MiB, last active slice %lld/%d us, peak step %lld us, %llu cycles\n",
+                 double(s.heap_bytes) / 1048576, (long long)s.slice_us, s.budget_us,
+                 (long long)s.peak_step_us, (unsigned long long)s.cycles);
+        text = line;
+      }
+    }
+  }
+  {
+    std::lock_guard lock(report_mutex);
+    text += panel_text;
+  }
+  jbyteArray result = env->NewByteArray(static_cast<jsize>(text.size()));
   if (result)
-    env->SetByteArrayRegion(result, 0, static_cast<jsize>(panel_text.size()),
-                            reinterpret_cast<const jbyte *>(panel_text.data()));
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(text.size()),
+                            reinterpret_cast<const jbyte *>(text.data()));
   return result;
 }
 
 bool run_tdb_autorun(const Module &main, const fs::path &directory) {
   try {
-    if (!fs::exists(directory)) {
+    auto roots = mod_lua::framework_roots(directory.parent_path());
+    if (std::none_of(roots.begin(), roots.end(), [](const auto &r) {
+          return fs::is_directory(r / "autorun");
+        })) {
       report("No autorun directory");
       return false;
     }

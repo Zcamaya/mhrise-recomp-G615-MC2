@@ -355,9 +355,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     // Settings → Mods & cheats: a mod's zip or a cheat file, copied into the mods folder (ModFiles), then the menu again
     void importMod() {
-        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
-                        "application/octet-stream"}), IMPORT_MOD);
+        // SAF providers disagree on MIME types for RAR and 7z. Detect the format from the contents.
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), IMPORT_MOD);
     }
 
     void importCheats() {
@@ -386,7 +385,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         new Thread(() -> {
             String done;
             try {
-                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importZip(getContentResolver(), uri, data);
+                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importArchive(getContentResolver(), uri, data);
                 else if (request == IMPORT_CHEATS) done = "Cheats added: " + ModFiles.importCheats(getContentResolver(), uri, data);
                 else if (request == IMPORT_DRIVER) done = "Driver added: " + Drivers.unpack(this, uri) + ". Choose it in the list to use it.";
                 else done = "Lossless.dll imported (" + Drivers.importDll(this, uri, data) + "). It's used from the next start.";

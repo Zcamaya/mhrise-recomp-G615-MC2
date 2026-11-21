@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 from zipfile import ZipFile, ZIP_DEFLATED
+from mod_archive_dependency import prepare as prepare_mod_archives
 
 
 def run(*args):
@@ -38,12 +39,14 @@ def main():
         staging = Path(tmp)
         classes = staging / "classes"
         classes.mkdir()
-        run(jdk/"javac.exe", "--release", "11", "-encoding", "UTF-8", "-cp", platform, "-d", classes,
+        prepare_mod_archives(staging)
+        archive_jar = staging / "mod-archive.jar"
+        run(jdk/"javac.exe", "--release", "11", "-encoding", "UTF-8", "-cp", os.pathsep.join(map(str,(platform,archive_jar))), "-d", classes,
             *sorted((root/"android/java").rglob("*.java")))
         jar = staging/"classes.jar"
         run(jdk/"jar.exe", "cf", jar, "-C", classes, ".")
         run(jdk/"java.exe", "-cp", tools/"lib/d8.jar", "com.android.tools.r8.D8", "--min-api", "30",
-            "--lib", platform, "--output", staging, jar)
+            "--lib", platform, "--output", staging, jar, archive_jar)
         manifest = (root/"android/AndroidManifest.xml").read_text(encoding="utf-8")
         (staging/"AndroidManifest.xml").write_text(manifest.replace('android:label="MH Rise port"',
             'android:label="MH Rise Lua Lab"'), encoding="utf-8")
@@ -58,6 +61,8 @@ def main():
                 if name.startswith(("assets/", "lib/")) and name != loader:
                     apk.writestr(name, original.read(name))
             apk.write(build/"libnier.so", loader)
+            apk.write(staging/"lib/arm64-v8a/libarchive-jni.so", "lib/arm64-v8a/libarchive-jni.so")
+            apk.write(root/"android/assets/licenses/mod-archives.txt", "assets/licenses/mod-archives.txt")
             apk.write(staging/"classes.dex", "classes.dex")
             apk.write(build/"_deps/rise_imgui-src/LICENSE.txt","assets/licenses/imgui.txt")
             apk.write(build/"_deps/freetype-src/docs/FTL.TXT","assets/licenses/freetype.txt")

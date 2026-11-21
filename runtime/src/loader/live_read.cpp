@@ -780,6 +780,46 @@ bool array_method(std::string_view name) {
          name == "get_elements" || name == "get_element" ||
          name == "get_Item" || name == "set_element" || name == "set_Item";
 }
+// Rise 16.0.1 MotionFsm2Layer::setCurrentNode passes its embedded core (+0x18)
+// to the engine; the core's tree pointer is at +8. Resolve node IDs anew on
+// each status read so a retained Lua handle never dereferences a retired node.
+uintptr_t layer_tree(lua_State *L, int layer) {
+  auto o = object(L, layer);
+  return *reinterpret_cast<const uintptr_t *>(o.address + 0x20);
+}
+uintptr_t motion_node(ReadFrame &f, uintptr_t tree, uint64_t id) {
+  if (!tree)
+    return 0;
+  using Lookup = uintptr_t (*)(uintptr_t, uint64_t);
+  return reinterpret_cast<Lookup>(f.main.addr(0x7d2513c))(tree, id);
+}
+int node_status(lua_State *L) {
+  auto tree = layer_tree(L, lua_upvalueindex(2));
+  auto node =
+      motion_node(frame(L), tree, lua_tointeger(L, lua_upvalueindex(3)));
+  if (!node)
+    return luaL_error(L, "Motion node no longer exists");
+  lua_pushinteger(L, *reinterpret_cast<const int32_t *>(
+                         node + lua_tointeger(L, lua_upvalueindex(4))));
+  return 1;
+}
+int node_by_id(lua_State *L) {
+  auto id = luaL_checkinteger(L, 2);
+  if (!motion_node(frame(L), layer_tree(L, lua_upvalueindex(2)), id)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_newtable(L);
+  for (int status = 0; status < 2; ++status) {
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushvalue(L, lua_upvalueindex(2));
+    lua_pushinteger(L, id);
+    lua_pushinteger(L, 0x64 + 4 * status);
+    lua_pushcclosure(L, node_status, 4);
+    lua_setfield(L, -2, status ? "get_status2" : "get_status1");
+  }
+  return 1;
+}
 int invoke(lua_State *L) {
   auto &f = frame(L);
   auto obj = object(L, 1);
@@ -790,6 +830,19 @@ int invoke(lua_State *L) {
     arg = 3;
   }
   try {
+    if (name == "get_tree_object" &&
+        f.db.full_name(obj.type) == "via.motion.MotionFsm2Layer") {
+      if (!layer_tree(L, 1)) {
+        lua_pushnil(L);
+        return 1;
+      }
+      lua_newtable(L);
+      lua_pushvalue(L,lua_upvalueindex(1));
+      lua_pushvalue(L,1);
+      lua_pushcclosure(L,node_by_id,2);
+      lua_setfield(L,-2,"get_node_by_id");
+      return 1;
+    }
     if (name == "get_address") {
       lua_pushinteger(L, obj.address);
       return 1;
@@ -1334,6 +1387,55 @@ static int indexed_item(lua_State *L, ReadFrame &f, Object o, bool write) {
   }
   return managed_call(L, f, method, o.address, 2);
 }
+int next_managed_item(lua_State *L) {
+  try {
+    auto index = luaL_checkinteger(L, 2) + 1;
+    if (index >= lua_tointeger(L, lua_upvalueindex(2)))
+      return 0;
+    lua_settop(L, 1);
+    lua_pushinteger(L, index);
+    indexed_item(L, frame(L), object(L, 1), false);
+    lua_pushinteger(L, index);
+    lua_insert(L, -2);
+    return 2;
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
+int managed_pairs(lua_State *L) {
+  try {
+    auto &f = frame(L);
+    auto o = object(L, 1);
+    auto array = f.db.find("System.Array");
+    if (!isa(f.db, o.type, array) &&
+        !f.db.lookup_method(o.type, "get_Item(System.Int32)", 1)) {
+      auto convert = f.db.lookup_method(o.type, "ToArray()", 0);
+      if (!convert)
+        throw std::runtime_error(
+            "Collection has no indexed items or ToArray()");
+      managed_call(L, f, convert, o.address, 2);
+      lua_replace(L, 1);
+      o = object(L, 1);
+    }
+    lua_pushvalue(L, lua_upvalueindex(1));
+    if (isa(f.db, o.type, array))
+      array_access(L, f, o, "get_size", 2);
+    else {
+      auto count = f.db.lookup_method(o.type, "get_Count()", 0);
+      if (!count)
+        throw std::runtime_error("Collection has no count");
+      managed_call(L, f, count, o.address, lua_gettop(L) + 1);
+    }
+    lua_pushcclosure(L, next_managed_item, 2);
+    lua_pushvalue(L, 1);
+    lua_pushinteger(L, -1);
+    return 3;
+  } catch (const std::exception &e) {
+    lua_pushstring(L, e.what());
+  }
+  return lua_error(L);
+}
 void open_live_read(lua_State *L, ReadFrame &f) {
   lua_pushlightuserdata(L, &f);
   lua_rawsetp(L, LUA_REGISTRYINDEX, &frame_key);
@@ -1348,6 +1450,9 @@ void open_live_read(lua_State *L, ReadFrame &f) {
   lua_setfield(L, -2, "__index");
   lua_pop(L, 1);
   luaL_newmetatable(L, object_mt);
+  lua_pushlightuserdata(L,&f);
+  lua_pushcclosure(L,managed_pairs,1);
+  lua_setfield(L,-2,"__pairs");
   lua_pushlightuserdata(L, &f);
   lua_pushcclosure(
       L,

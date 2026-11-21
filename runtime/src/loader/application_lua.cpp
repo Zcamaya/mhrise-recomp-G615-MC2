@@ -1,5 +1,6 @@
 #include "loader/application_lua.h"
 #include "loader/lua_mod_hooks.h"
+#include "loader/lua_frame_gc.h"
 #include "loader/mod_ui.h"
 #include "loader/nso.h"
 #include "loader/tdb71.h"
@@ -20,10 +21,12 @@ struct Entry {
   Fn *slot{};
   Fn original{};
   bool observed = false;
+  bool before = false, after = false;
 };
 constexpr size_t slot_count = 269;
 std::array<Entry, slot_count> entries;
-int begin_rendering = -1;
+int begin_rendering = -1, end_rendering = -1;
+FrameGc *frame_gc{};
 int entry_index(std::string_view name) {
   for (size_t i = 0; i < entries.size(); ++i)
     if (entries[i].name == name)
@@ -46,10 +49,13 @@ int add_callback(lua_State *L) {
     index = entry_index(name);
     if (index < 0)
       return luaL_error(L, "Unknown application entry: %s", name);
-    observe(index);
     fn = 2;
   }
   luaL_checktype(L, fn, LUA_TFUNCTION);
+  if (index >= 0) {
+    observe(index);
+    (phase == Phase::Before ? entries[index].before : entries[index].after) = true;
+  }
   list(L);
   auto pos = lua_rawlen(L, -1) + 1;
   lua_createtable(L, 3, 0);
@@ -104,11 +110,13 @@ void fire(lua_State *L, Phase phase, int index) {
 void dispatch_index(size_t index, void *instance) {
   {
     std::lock_guard lock(mutex);
-    fire(active.load(), Phase::Before, index);
+    if (entries[index].before) fire(active.load(), Phase::Before, index);
   }
   entries[index].original(instance);
   std::lock_guard lock(mutex);
-  fire(active.load(), Phase::After, index);
+  auto *L = active.load();
+  if (entries[index].after) fire(L, Phase::After, index);
+  if (int(index) == end_rendering && L && frame_gc) frame_gc->end_frame(L);
   if (int(index) == begin_rendering)
     service_ui_frame();
 }
@@ -128,7 +136,13 @@ void observe(int index) {
 }
 } // namespace
 std::recursive_mutex &lua_mutex() { return mutex; }
-void select_event_state(lua_State *L) { active.store(L); }
+void select_event_state(lua_State *L, FrameGc *gc) {
+  std::lock_guard lock(mutex);
+  for (auto &entry : entries) entry.before = entry.after = false;
+  frame_gc = gc;
+  if (L && gc && attached && end_rendering >= 0) gc->start(L);
+  active.store(L);
+}
 void open_events(lua_State *L) {
   list(L);
   bool first = lua_isnil(L, -1);
@@ -224,6 +238,13 @@ void install_app_entries(const Module &m, rise::Tdb &db) {
   if (begin_rendering < 0)
     throw std::runtime_error("Missing game frame entries");
   observe(begin_rendering);
+  end_rendering = entry_index("EndRendering");
+  if (end_rendering >= 0) {
+    observe(end_rendering);
+    if (auto *L = active.load(); L && frame_gc) frame_gc->start(L);
+  } else {
+    log_message(ANDROID_LOG_WARN, "EndRendering missing; using Lua automatic GC");
+  }
   attached = true;
   log_message(
       ANDROID_LOG_INFO,

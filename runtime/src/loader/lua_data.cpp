@@ -1,5 +1,7 @@
 #include "loader/lua_data.h"
 #include <fstream>
+#include <algorithm>
+#include <cstdlib>
 #include <lua.hpp>
 #include <nlohmann/json.hpp>
 #include <regex>
@@ -148,21 +150,27 @@ int process(lua_State *L) {
       std::string modifier = luaL_optstring(L, 2, "");
       if (!modifier.empty() && modifier != "$autorun")
         throw std::runtime_error("Unknown mod search root");
-      auto dir = root / (modifier == "$autorun" ? "autorun" : "data");
-      fs::create_directories(dir);
       std::regex pattern(string_at(L, 1));
-      std::vector<std::string> found;
-      for (auto &entry : fs::recursive_directory_iterator(dir))
-        if (entry.is_regular_file()) {
-          auto name = entry.path().lexically_relative(dir).generic_string();
-          if (std::regex_match(name, pattern))
-            found.push_back(std::move(name));
-        }
-      std::sort(found.begin(), found.end());
+      std::set<std::string> found;
+      for (size_t i = 1; i <= lua_rawlen(L, lua_upvalueindex(3)); ++i) {
+        lua_rawgeti(L, lua_upvalueindex(3), i);
+        auto dir = fs::path(lua_tostring(L, -1)) /
+                   (modifier == "$autorun" ? "autorun" : "data");
+        lua_pop(L, 1);
+        if (!fs::is_directory(dir))
+          continue;
+        for (auto &entry : fs::recursive_directory_iterator(dir))
+          if (entry.is_regular_file()) {
+            auto name = entry.path().lexically_relative(dir).generic_string();
+            if (std::regex_match(name, pattern))
+              found.insert(std::move(name));
+          }
+      }
       lua_createtable(L, found.size(), 0);
-      for (size_t i = 0; i < found.size(); ++i) {
-        lua_pushlstring(L, found[i].data(), found[i].size());
-        lua_rawseti(L, -2, i + 1);
+      int index = 0;
+      for (const auto &name : found) {
+        lua_pushlstring(L, name.data(), name.size());
+        lua_rawseti(L, -2, ++index);
       }
       return 1;
     }
@@ -170,6 +178,13 @@ int process(lua_State *L) {
     if (op == Op::Write) {
       write_file(path, string_at(L, 2));
       return 0;
+    }
+    for (size_t i = 2;
+         !fs::exists(path) && i <= lua_rawlen(L, lua_upvalueindex(3)); ++i) {
+      lua_rawgeti(L, lua_upvalueindex(3), i);
+      path =
+          path_under(fs::path(lua_tostring(L, -1)) / "data", string_at(L, 1));
+      lua_pop(L, 1);
     }
     std::ifstream in(path, std::ios::binary);
     if (op == Op::LoadFile) {
@@ -203,11 +218,51 @@ int process(lua_State *L) {
   return lua_error(L);
 }
 } // namespace
+std::vector<fs::path> mod_lua::framework_roots(const fs::path &private_root) {
+  std::vector<fs::path> roots{private_root};
+  if (const char *data = std::getenv("NIER_DATA")) {
+    auto mods = fs::path(data) / "mods";
+    if (fs::is_directory(mods)) {
+      std::vector<std::pair<int64_t, fs::path>> enabled;
+      for (const auto &entry : fs::directory_iterator(mods)) {
+        auto name = entry.path().filename().string();
+        auto root = entry.path() / "reframework";
+        if (name.front() == '#' || name.front() == '.' ||
+            !fs::is_directory(root))
+          continue;
+        int64_t order = 0;
+        for (const char *marker : {".rise-pc-loose", ".rise-lua-order"}) {
+          auto file = entry.path() / marker;
+          if (!fs::exists(file))
+            continue;
+          std::ifstream in(file);
+          if (!(in >> order) || order < 1)
+            throw std::runtime_error("Invalid mod order: " + name);
+          break;
+        }
+        enabled.emplace_back(-order, root);
+      }
+      // A newer model's custom bone data must take precedence along with its
+      // PAK.
+      std::sort(enabled.begin(), enabled.end());
+      for (const auto &item : enabled)
+        roots.push_back(item.second);
+    }
+  }
+  return roots;
+}
+
 void mod_lua::open_data(lua_State *L, const std::filesystem::path &root) {
+  const auto roots = framework_roots(root);
   auto add = [&](const char *name, Op op) {
     lua_pushinteger(L, static_cast<int>(op));
     lua_pushstring(L, root.c_str());
-    lua_pushcclosure(L, process, 2);
+    lua_createtable(L, roots.size(), 0);
+    for (size_t i = 0; i < roots.size(); ++i) {
+      lua_pushstring(L, roots[i].c_str());
+      lua_rawseti(L, -2, i + 1);
+    }
+    lua_pushcclosure(L, process, 3);
     lua_setfield(L, -2, name);
   };
   lua_newtable(L);

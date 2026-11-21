@@ -18,5 +18,6 @@ void save_config();
 void fire_reset(lua_State *);
 size_t event_checkpoint(lua_State *);
 void rollback_events(lua_State *, size_t);
-void select_event_state(lua_State *);
+class FrameGc;
+void select_event_state(lua_State *, FrameGc *);
 } // namespace mod_lua
