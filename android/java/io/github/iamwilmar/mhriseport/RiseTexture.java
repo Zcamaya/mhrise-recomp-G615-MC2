@@ -8,6 +8,7 @@ import java.util.Arrays;
 // Rise stores one mip table per image. Retile the original pixels, including cubemap faces and LUT depth slices.
 final class RiseTexture {
     private static final int HEADER = 40, MAGIC = 0x00584554;
+    private static final int CUSTOM_TEXTURE_THRESHOLD = 4096, CUSTOM_TEXTURE_LIMIT = 512;
     private static int u16(ByteBuffer b, int p) {
         return Short.toUnsignedInt(b.getShort(p));
     }
@@ -16,6 +17,15 @@ final class RiseTexture {
     }
     private static int logHeight(int rows) {
         return Math.min(4, 32 - Integer.numberOfLeadingZeros(div(rows, 8) - 1));
+    }
+    private static int firstFittingMip(int width, int height, int levels, int maxWidth, int maxHeight)
+            throws IOException {
+        for (int mip = 0; mip < levels; mip++) {
+            if (Math.max(1, width >> mip) <= maxWidth && Math.max(1, height >> mip) <= maxHeight)
+                return mip;
+        }
+        throw new IOException("No mip fits " + maxWidth + "x" + maxHeight + " in " + width + "x" + height
+                + " PC texture; export the texture with a full mip chain");
     }
     private static int mips(ByteBuffer b) throws IOException {
         int n = Byte.toUnsignedInt(b.get(15));
@@ -62,7 +72,7 @@ final class RiseTexture {
                 throw new IOException("Expected a linear PC texture");
             int images = Byte.toUnsignedInt(h[14]), depth = u16(src, 12);
             int block = fmt == 28 || fmt == 29 || fmt == 10 ? 1 : 4;
-            int first = 0, count = levels;
+            int first = 0, count;
             byte[] header = h.clone();
             ByteBuffer result = RisePak.le(header);
             int baseHeight = logHeight(div(y, block)), depthLog = 0, tileLog = 0;
@@ -85,13 +95,20 @@ final class RiseTexture {
                         first++;
                     if (first + targetMips > levels)
                         throw new IOException("PC mip chain does not cover the NS texture tier");
-                    count = targetMips;
+                } else if (depth == 1) {
+                    first = firstFittingMip(w, y, levels, u16(ns, 8), u16(ns, 10));
                 }
+                count = matchTier ? targetMips : levels - first;
                 System.arraycopy(target, 24, header, 24, 16);
                 baseHeight = target[32] & 15;
                 depthLog = (target[32] & 255) >> 4;
                 tileLog = target[33];
             } else {
+                if (depth == 1 && Math.max(w, y) > CUSTOM_TEXTURE_THRESHOLD) {
+                    first = firstFittingMip(w, y, levels, CUSTOM_TEXTURE_LIMIT, CUSTOM_TEXTURE_LIMIT);
+                    baseHeight = logHeight(div(Math.max(1, y >> first), block));
+                }
+                count = levels - first;
                 result.putShort(36, (short) 7);
                 result.putShort(38, (short) 1);
             }
