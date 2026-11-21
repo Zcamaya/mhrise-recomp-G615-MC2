@@ -471,13 +471,14 @@ final class SaveFiles {
     }
 
     // What the menu says about the save that's here
-    static String describe(File data) {
+    static String describe(File data, boolean chinese) {
         File[] files = saveDir(data).listFiles(File::isFile);
-        if (files == null || files.length == 0) return "No save here yet.";
+        if (files == null || files.length == 0) return chinese ? "还没有存档。" : "No save here yet.";
         long newest = 0;
         for (File f : files) newest = Math.max(newest, f.lastModified());
-        return "Save: " + files.length + " file(s), last written "
-                + new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(new Date(newest)) + ".";
+        String date = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(new Date(newest));
+        return chinese ? "共有 " + files.length + " 个存档文件，上次写入于 " + date + "。"
+                : "Save: " + files.length + " file(s), last written " + date + ".";
     }
 
     // What an import or restore said, for the next start (the game closes right after it, see GameActivity.saveOver)

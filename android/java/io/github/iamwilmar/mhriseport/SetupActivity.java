@@ -435,6 +435,14 @@ public final class SetupActivity extends Activity {
                 }
                 prefs.edit().putBoolean(migration, true).apply();
             }
+            try {
+                ModFiles.prepareForLaunch(data);
+            } catch (IOException e) {
+                showResult();
+                android.widget.Toast.makeText(this, "Could not prepare PC mod patches: " + e.getMessage(),
+                        android.widget.Toast.LENGTH_LONG).show();
+                return;
+            }
         }
         startActivity(new Intent(this, GameActivity.class));
         overridePendingTransition(0, 0);

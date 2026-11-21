@@ -49,13 +49,15 @@ fi
 rm -rf "$STAGE"
 mkdir -p "$STAGE/lib/arm64-v8a" "$STAGE/classes"
 # Start screen (SetupActivity: find the user's game files, then start): javac + d8 into classes.dex.
-javac -Xlint:-options --release 11 -classpath "$JAR" -d "$STAGE/classes" $(find "$ROOT/android/java" -name '*.java')
-"$BT/d8" --release --min-api 30 --lib "$JAR" --output "$STAGE" $(find "$STAGE/classes" -name '*.class')
+python3 "$ROOT/tools/mod_archive_dependency.py" "$STAGE"
+javac -Xlint:-options --release 11 -classpath "$JAR:$STAGE/mod-archive.jar" -d "$STAGE/classes" $(find "$ROOT/android/java" -name '*.java')
+"$BT/d8" --release --min-api 30 --lib "$JAR" --output "$STAGE" "$STAGE/mod-archive.jar" $(find "$STAGE/classes" -name '*.class')
 cp "$BUILD/libnier.so" "$BUILD/libnnsdk.so" "$STAGE/lib/arm64-v8a/"
 # libadrenotools' hooks (a driver of the user's own, runtime/src/nnsdk/nvn/driver.h): they must be in nativeLibraryDir.
 cp $(find "$BUILD/adrenotools" -name 'lib*hook*.so') "$STAGE/lib/arm64-v8a/"
 # The third-party notices and licenses that go with the binaries (BSD-2 libadrenotools, MIT volk).
 mkdir -p "$STAGE/assets/licenses"
+cp "$ROOT/android/assets/licenses/mod-archives.txt" "$STAGE/assets/licenses/"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/assets/licenses/"
 cp "$ROOT/runtime/external/libadrenotools/LICENSE" "$STAGE/assets/licenses/libadrenotools.txt"
 cp "$ROOT/runtime/external/libadrenotools/lib/linkernsbypass/LICENSE" "$STAGE/assets/licenses/linkernsbypass.txt"
@@ -66,7 +68,7 @@ cp "$ROOT/android/assets/citrus_curves.bin" "$STAGE/assets/"
 MANIFEST="$ROOT/android/AndroidManifest.xml" RENAME=()
 if [ -n "$PACKAGE" ]; then
   MANIFEST="$STAGE/AndroidManifest.xml"
-  sed "s|android:label=\"MH Rise port\"|android:label=\"${LABEL:-MH Rise port ($PACKAGE)}\"|" \
+  sed "s|android:label=\"MHRise\"|android:label=\"${LABEL:-MHRise ($PACKAGE)}\"|" \
     "$ROOT/android/AndroidManifest.xml" > "$MANIFEST"
   RENAME=(--rename-manifest-package "$PACKAGE")
 fi

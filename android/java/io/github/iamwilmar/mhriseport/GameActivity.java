@@ -33,9 +33,17 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos, long[] mapping);
     static native void nativeTextAnswer(int serial, String text);
     static native void nativeTurbo(boolean on);
+    // Load after the NativeActivity has configured the game paths and driver environment.
+    private static final class RuntimeLifecycle {
+        static { System.loadLibrary("nnsdk"); }
+        static native void update(boolean resumed, boolean releasingSurface);
+    }
+    private boolean resumed;
 
     private Controls controls;
     private TouchPad pad;
+    private ModUi modUi;
+    void showModUi() { modUi.setMenu(true); }
     private boolean shown;
     private Vibrator vibrator;
     private CaptureButton capture;  // the floating capture button, while Debug → Capture button is on
@@ -98,6 +106,10 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         try {
             getWindowManager().addView(pad, lp);
             shown = true;
+            if ("io.github.iamwilmar.mhriseport.lab".equals(getPackageName())) {
+                modUi = new ModUi(this);
+                if (resumed) modUi.onResume();
+            }
             showCapture();
         } catch (RuntimeException e) {
             // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
@@ -141,15 +153,32 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        RuntimeLifecycle.update(true, false);
+        if (modUi != null) modUi.onResume();
         applyTurbo(true);
     }
 
     @Override
     protected void onPause() {
+        if (modUi != null) modUi.onPause();
         applyTurbo(false);
         if (pad != null) pad.releaseAll();  // (un dedo que se queda en un botón al irse la app no lo deja pulsado)
         if (controls != null) controls.saveNow();  // (the app may not come back: swiped away from recents, killed for memory)
+        resumed = false;
+        RuntimeLifecycle.update(false, false);
         super.onPause();
+    }
+
+    @Override
+    public void surfaceDestroyed(android.view.SurfaceHolder holder) {
+        // NativeActivity waits for the frame consumer to release its old swapchain.
+        RuntimeLifecycle.update(resumed, true);
+        try {
+            super.surfaceDestroyed(holder);
+        } finally {
+            RuntimeLifecycle.update(resumed, false);
+        }
     }
 
     // The capture button goes in its own small window above the controls' one, only as big as the button, so touches
@@ -207,6 +236,9 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     @Override
     protected void onDestroy() {
+        // NativeActivity will tear down the runtime. Let parked threads finish cleanup with audio paused.
+        RuntimeLifecycle.update(false, true);
+        if (modUi != null) modUi.dispose();
         if (capture != null) {
             try {
                 getWindowManager().removeViewImmediate(capture);
@@ -256,6 +288,11 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             nativeTouch(buttons, sticksOn, lx, ly, rx, ry);
         } catch (UnsatisfiedLinkError ignored) {
         }
+    }
+
+    @Override
+    public boolean modTouch(int action, int id, float screenX, float screenY) {
+        return modUi != null && modUi.routeTouch(action, id, screenX, screenY);
     }
 
     @Override
@@ -341,9 +378,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     // Settings → Mods & cheats: a mod's zip or a cheat file, copied into the mods folder (ModFiles), then the menu again
     void importMod() {
-        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
-                        "application/octet-stream"}), IMPORT_MOD);
+        // SAF providers disagree on MIME types for RAR and 7z. Detect the format from the contents.
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), IMPORT_MOD);
     }
 
     void importCheats() {
@@ -372,7 +408,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         new Thread(() -> {
             String done;
             try {
-                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importZip(getContentResolver(), uri, data);
+                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importArchive(getContentResolver(), uri, data);
                 else if (request == IMPORT_CHEATS) done = "Cheats added: " + ModFiles.importCheats(getContentResolver(), uri, data);
                 else if (request == IMPORT_DRIVER) done = "Driver added: " + Drivers.unpack(this, uri) + ". Choose it in the list to use it.";
                 else done = "Lossless.dll imported (" + Drivers.importDll(this, uri, data) + "). It's used from the next start.";
