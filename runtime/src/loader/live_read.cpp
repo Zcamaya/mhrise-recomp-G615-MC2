@@ -780,8 +780,8 @@ bool array_method(std::string_view name) {
          name == "get_elements" || name == "get_element" ||
          name == "get_Item" || name == "set_element" || name == "set_Item";
 }
-// Rise 16.0.1 MotionFsm2Layer::setCurrentNode passes its embedded core (+0x18)
-// to the engine; the core's tree pointer is at +8. Resolve node IDs anew on
+// Rise 16.0.1 CoreHandle exposes the embedded core (+0x18) to its layers.
+// The core's tree pointer is at +8. Resolve node IDs anew on
 // each status read so a retained Lua handle never dereferences a retired node.
 uintptr_t layer_tree(lua_State *L, int layer) {
   auto o = object(L, layer);
@@ -830,18 +830,20 @@ int invoke(lua_State *L) {
     arg = 3;
   }
   try {
-    if (name == "get_tree_object" &&
-        f.db.full_name(obj.type) == "via.motion.MotionFsm2Layer") {
-      if (!layer_tree(L, 1)) {
-        lua_pushnil(L);
+    if (name == "get_tree_object") {
+      const auto core = f.db.find("via.behaviortree.BehaviorTree.CoreHandle");
+      if (core && isa(f.db, obj.type, core)) {
+        if (!layer_tree(L, 1)) {
+          lua_pushnil(L);
+          return 1;
+        }
+        lua_newtable(L);
+        lua_pushvalue(L, lua_upvalueindex(1));
+        lua_pushvalue(L, 1);
+        lua_pushcclosure(L, node_by_id, 2);
+        lua_setfield(L, -2, "get_node_by_id");
         return 1;
       }
-      lua_newtable(L);
-      lua_pushvalue(L,lua_upvalueindex(1));
-      lua_pushvalue(L,1);
-      lua_pushcclosure(L,node_by_id,2);
-      lua_setfield(L,-2,"get_node_by_id");
-      return 1;
     }
     if (name == "get_address") {
       lua_pushinteger(L, obj.address);
