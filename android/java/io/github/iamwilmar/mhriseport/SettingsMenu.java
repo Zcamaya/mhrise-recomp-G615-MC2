@@ -55,6 +55,16 @@ final class SettingsMenu {
     static final String PREFS = "menu", SCALE_KEY = "escala";
     static final int SCALE_DEFAULT = 80;
     private static final String LANGUAGE_KEY = "language";
+    static final String[] LANGUAGES = {"English", "简体中文"};
+
+    static boolean usesChinese(android.content.Context context) {
+        return "zh-Hans".equals(context.getSharedPreferences(PREFS, 0).getString(LANGUAGE_KEY, "en"));
+    }
+
+    static void setChinese(android.content.Context context, boolean chinese) {
+        context.getSharedPreferences(PREFS, 0).edit().putString(LANGUAGE_KEY, chinese ? "zh-Hans" : "en").apply();
+    }
+
     private final boolean chinese;
     private final String[] mapNames;
 
@@ -65,7 +75,7 @@ final class SettingsMenu {
     SettingsMenu(GameActivity activity, Controls cfg) {
         this.activity = activity;
         this.cfg = cfg;
-        chinese = "zh-Hans".equals(activity.getSharedPreferences(PREFS, 0).getString(LANGUAGE_KEY, "en"));
+        chinese = usesChinese(activity);
         mapNames = mappingNames();
         this.scale = menuScale(activity) / 100f;
         dialog = new Dialog(activity);
@@ -176,11 +186,10 @@ final class SettingsMenu {
     private void buildDisplay() {
         header(tr("Menu", "菜单"));
         String language = tr("Menu language", "菜单语言");
-        String[] languages = {"English", "简体中文"};
         int selected = chinese ? 1 : 0;
-        row(language, languages[selected] + "  ▾", tr("Language of the settings menu.", "齿轮设置菜单使用的语言。"),
-                step -> dropDown(language, languages, selected, i -> {
-                    activity.getSharedPreferences(PREFS, 0).edit().putString(LANGUAGE_KEY, i == 1 ? "zh-Hans" : "en").apply();
+        row(language, LANGUAGES[selected] + "  ▾", tr("Language for setup and settings.", "首次设置和齿轮菜单使用的语言。"),
+                step -> dropDown(language, LANGUAGES, selected, i -> {
+                    setChinese(activity, i == 1);
                     dialog.dismiss();
                     new SettingsMenu(activity, cfg).show();
                 }), false);
