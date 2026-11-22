@@ -1,4 +1,4 @@
-"""Build the side-by-side Windows research APK with the Rise source renderer."""
+"""Build the Android port from source on Windows, or update a signed Lua Lab APK."""
 import argparse
 import hashlib
 import os
@@ -59,7 +59,7 @@ def replace_entries(baseline, base, replacements, license_entries=None):
         for name, data in license_entries.items():
             apk.writestr(name, data, compress_type=ZIP_DEFLATED)
 
-def build_dex(root, staging, platform, tools, jdk):
+def build_dex(root, staging, platform, tools, jdk, release=False):
     classes = staging/"classes"
     classes.mkdir()
     prepare_mod_archives(staging)
@@ -69,7 +69,7 @@ def build_dex(root, staging, platform, tools, jdk):
     jar = staging/"classes.jar"
     run(jdk/"jar.exe", "cf", jar, "-C", classes, ".")
     run(jdk/"java.exe", "-cp", tools/"lib/d8.jar", "com.android.tools.r8.D8", "--min-api", "30",
-        "--lib", platform, "--output", staging, jar, archive_jar)
+        *(["--release"] if release else []), "--lib", platform, "--output", staging, jar, archive_jar)
     return staging/"classes.dex"
 
 
@@ -93,6 +93,7 @@ def main():
         p.add_argument("--" + opt, type=Path, required=True)
     p.add_argument("--ndk", type=Path, help="Android NDK for native builds")
     inputs = p.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--source-release", action="store_true", help="Build a non-debuggable release APK from source")
     inputs.add_argument("--release-apk", type=Path, help="Original release for a full Lua Lab build")
     inputs.add_argument("--baseline-apk", type=Path, help="Signed Lua Lab APK to update")
     updates = p.add_mutually_exclusive_group()
@@ -120,7 +121,9 @@ def main():
     os.environ["JAVA_HOME"] = str(args.jdk)
     signer = [jdk/"java.exe", "-jar", tools/"lib/apksigner.jar"]
     name = "mhrise-lua-lab-renderer.apk" if args.baseline_apk else "mhrise-lua-lab.apk"
-    if args.touch_panel_only:
+    if args.source_release:
+        name = "MHRise.apk"
+    elif args.touch_panel_only:
         name = "mhrise-lua-lab-touch-panel.apk"
     elif args.setup_only:
         name = "mhrise-lua-lab-setup.apk"
@@ -160,22 +163,31 @@ def main():
         return
     run(cmake/"cmake.exe", "-S", root/"runtime", "-B", build, *android_options,
         "-DMHRISE_LUA_DEBUG=ON", "-DMHRISE_LOADER_ONLY=ON")
-    run(cmake/"cmake.exe", "--build", build, "--target", "nier", "nier_loader", "--parallel", "12")
+    hooks = ("hook_impl", "file_redirect_hook", "main_hook", "gsl_alloc_hook")
+    run(cmake/"cmake.exe", "--build", build, "--target", "nier", "nier_loader",
+        *(hooks if args.source_release else ()), "--parallel", "12")
     with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
         staging = Path(tmp)
-        build_dex(root, staging, platform, tools, jdk)
+        build_dex(root, staging, platform, tools, jdk, release=args.source_release)
         base = staging/"base.apk"
         run(tools/"aapt2.exe", "compile", "--dir", root/"android/res", "-o", staging/"res.zip")
         run(tools/"aapt2.exe", "link", "--manifest", root/"android/AndroidManifest.xml", "-I", platform,
-            "-R", staging/"res.zip", "--auto-add-overlay", "--debug-mode", "--rename-manifest-package",
+            "-R", staging/"res.zip", "--auto-add-overlay", *([] if args.source_release else ["--debug-mode"]), "--rename-manifest-package",
             "io.github.iamwilmar.mhriseport.lab", "-o", base)
         loader = "lib/arm64-v8a/libnier.so"
         license_entries = {"assets/licenses/" + name: data for name, data in
                            notices(vendor=args.renderer_source / "third_party", lua_deps=build / "_deps").items()}
-        with ZipFile(args.release_apk) as original, ZipFile(base, "a", ZIP_DEFLATED) as apk:
-            for name in original.namelist():
-                if name.startswith(("assets/", "lib/")) and name not in (loader, RENDERER_ENTRY) and name not in license_entries:
-                    apk.writestr(name, original.read(name))
+        with ZipFile(base, "a", ZIP_DEFLATED) as apk:
+            if args.source_release:
+                apk.write(root/"android/assets/citrus_curves.bin", "assets/citrus_curves.bin")
+                for hook in hooks:
+                    library = "lib" + hook + ".so"
+                    apk.write(build/"adrenotools/src/hook"/library, "lib/arm64-v8a/" + library)
+            else:
+                with ZipFile(args.release_apk) as original:
+                    for name in original.namelist():
+                        if name.startswith(("assets/", "lib/")) and name not in (loader, RENDERER_ENTRY) and name not in license_entries:
+                            apk.writestr(name, original.read(name))
             apk.write(build/"libnier.so", loader)
             apk.write(staging/"lib/arm64-v8a/libarchive-jni.so", "lib/arm64-v8a/libarchive-jni.so")
             apk.write(renderer, RENDERER_ENTRY)

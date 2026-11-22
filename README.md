@@ -2,11 +2,11 @@
 
 在 64 位 Android 设备上运行自己持有的 Switch 版《怪物猎人 崛起》16.0.1。启动器从 ExeFS 加载游戏的 ARM64 代码，游戏资源从 RomFS 读取。图形后端将 NVN 命令映射到 Vulkan，并在设备上把 Maxwell 着色器翻译成 SPIR-V。
 
-这个分支整合了 Lua MOD、触屏操作和中文版设置菜单。近期的联想 Y700 实机验证覆盖了村庄、工匠预览和狩猎，也修正了命中时血花连成大片、部分碰撞粒子异常放大的问题。测试使用 Turnip V39-patched，其他设备和驱动的表现可能不同。
+这个分支整合了 Lua MOD、触屏操作和中文版设置菜单，并修正了命中时血花连成大片、部分碰撞粒子异常放大的渲染问题。
 
 ## 安装与首次启动
 
-需要 Android 11 或以上、ARM64 处理器和 Vulkan 驱动。APK 发布后可从本仓库的 [Releases](https://github.com/yun-wulian/mhrise-recomp/releases) 获取。
+需要 Android 11 或以上、ARM64 处理器和 Vulkan 驱动。安装包见[最新发行版](https://github.com/yun-wulian/mhrise-recomp/releases/latest)。
 
 1. 从自己持有的 Switch 游戏提取 **16.0.1** 的 ExeFS 和已合并同一更新的完整 RomFS，将两者放进平板上的同一个游戏文件夹。ExeFS 包含 `main` 和 `main.npdm`，RomFS 包含 `re_chunk_000.pak` 和更新文件 `re_chunk_000.pak.patch_015.pak`。如有 DLC，保留各 DLC 文件夹名称中的标题 ID。
 2. 打开 **MHRise**。首次授权页右上角有 **⚙ Language / 语言**，点开选择 **简体中文**。首次设置和游戏内的齿轮菜单共用这个选择，游戏文本语言由游戏自身管理。
@@ -33,7 +33,13 @@ LUA_LAB=1 bash tools/build_apk.sh
 
 产物为 `build/mhriseport.apk`，应用名为 **MHRise**，包名为 `io.github.iamwilmar.mhriseport.lab`。默认使用本机 Android 调试密钥。FFmpeg 提供部分过场视频需要的 MP4 解封装后备路径。构建 APK 无需游戏文件，运行时再选择自己的文件夹。
 
-Windows 上的增量打包入口是 `python tools/build_lua_lab.py --help`。对已有合并版使用 `--baseline-apk`，其中 `--setup-only` 仅更新首次设置和菜单，`--settings-update` 同时构建渲染库。工具需要指定 JDK 和 SDK，原生构建还需指定 NDK。详细参数见[打包脚本](tools/build_lua_lab.py)。
+Windows 上准备好第三方源码后，可运行以下 PowerShell 命令，从源码构建发行包。SDK 需安装 Build Tools `36.0.0`、平台 `android-34` 和 CMake `3.22.1`。路径按本机配置填写。
+
+```powershell
+python tools/build_lua_lab.py --source-release --sdk $env:ANDROID_HOME --ndk $env:ANDROID_NDK_HOME --jdk $env:JAVA_HOME
+```
+
+已签名合并包的增量更新使用 `--baseline-apk`，其中 `--setup-only` 更新首次设置和菜单，`--settings-update` 同时构建渲染库。签名与输出路径参数见[打包脚本](tools/build_lua_lab.py)。
 
 ## 源码导航
 
@@ -52,4 +58,4 @@ Windows 上的增量打包入口是 `python tools/build_lua_lab.py --help`。对
 
 本项目的移植代码沿用 **GNU General Public License v3.0 或更高版本**（`GPL-3.0-or-later`）。修改和再分发时请保留版权与许可证声明，分发 APK 时同时提供该构建对应的完整源码和构建脚本。第三方组件按各自许可证使用。[许可证全文](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)
 
-这是非官方移植。游戏本体、DLC、商标及取自 PC 游戏的启动图标，其权利归各自权利人所有。
+这是非官方移植。游戏本体、DLC 和商标的权利归各自权利人所有。

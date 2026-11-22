@@ -27,7 +27,7 @@ This project is licensed under GPL-3.0-or-later. It uses or includes the followi
 
 Lossless Scaling and its `Lossless.dll` are not distributed here; the DLL must come from the user's own purchase.
 
-The Android launcher artwork in `android/res/mipmap-*/ic_launcher.png` is derived from the PC game executable. The game's artwork and trademarks remain the property of their respective owners. The project's GPL grant covers the port code.
+The launcher uses artwork supplied for this fork. The game's artwork and trademarks remain the property of their respective owners. The project's GPL grant covers the port code.
 
 AMD FidelityFX FSR 1 license (MIT):
 
