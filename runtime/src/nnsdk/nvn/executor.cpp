@@ -1777,13 +1777,17 @@ private:
     struct HandleRun { uint32_t first, word; };
     struct HandleTable {
         uintptr_t address = 0;
-        uint32_t count = 0, shift = 0;
+        uint32_t count = 0, shift = 0, mask = 0, fixed = 0, left = 0;
+        uint64_t pool_epoch = 0;
         std::vector<uint64_t> pages;
         std::vector<HandleRun> runs;
     };
-    std::array<HandleTable, 16> handle_tables_;
+    std::array<HandleTable, 32> handle_tables_;
+    std::shared_ptr<const std::vector<TexturePoolEntry>> handle_textures_;
+    std::shared_ptr<const std::vector<ResourceRef<Sampler>>> handle_samplers_;
+    uint64_t handle_pool_epoch_ = 0;
     std::vector<std::pair<size_t, size_t>> handle_changes_;
-    const std::vector<HandleRun>* handle_runs(uintptr_t address, uint32_t count, uint32_t shift);
+    const std::vector<HandleRun>* handle_runs(uintptr_t address, uint32_t count, const Resource& r);
     std::map<std::vector<uint64_t>, VkDescriptorSetLayout> bindless_layouts_;  // (binding, count, etapa) de cada array
     bool bindless_ = true;        // <datos>/no_bindless: los handles de los uniform buffers con la de reserva, como antes
     bool sampler_compare_af_ = false, sampler_game_af_ = false, sampler_no_shadows_ = false;
@@ -6210,15 +6214,19 @@ bool Executor::resolve_bindless(Stage s, const Resource& r, Texture*& tex, Textu
 // un sampler fijo: (palabra & handle_and_mask) | handle_or. Las sondas de reflexión de MH Rise guardan
 // medio float << 16 | índice y el shader hace (v & 0x7fff) | 0x10b00000 (sampler 267); los decals guardan el índice y
 // el shader ORea 0x10800000 (264). 0xffffffff es "sin textura": el shader lo comprueba antes de muestrear.
+static uint32_t shader_handle(uint32_t word, const Resource& r) {
+    uint32_t h = word & r.handle_and_mask;
+    if (r.shift_left < 32) h <<= r.shift_left;
+    return h | r.handle_or;
+}
+
 bool Executor::resolve_handle(uint32_t word, const Resource& r, Texture*& tex, TextureViewDesc& v, Sampler*& smp,
                               const std::vector<TexturePoolEntry>* textures, const std::vector<ResourceRef<Sampler>>* samplers) {
     tex = nullptr;
     smp = nullptr;
     v = {};
     if (word == 0xFFFFFFFFu) return false;
-    uint32_t h = word & r.handle_and_mask;
-    if (r.shift_left && r.shift_left < 32) h <<= r.shift_left;
-    h |= r.handle_or;
+    const uint32_t h = shader_handle(word, r);
     const uint32_t texture_id = h & 0xFFFFF;
     const uint32_t sampler_id = h >> 20;  // sin sampler en la palabra ni en el shader: el 0, como la GPU
     TexturePoolEntry entry{};
@@ -6465,27 +6473,44 @@ VkDescriptorSetLayout Executor::bindless_layout_locked(const nvnshader::Translat
     return bindless_layouts_[signature] = layout;
 }
 
-// A watched UBO supplies raw handles only. Pool entries, view residency, samplers
-// and attachment feedback still resolve with the state of this draw or dispatch.
-const std::vector<Executor::HandleRun>* Executor::handle_runs(uintptr_t address, uint32_t count, uint32_t shift) {
+// Unassigned slots in an immutable pool snapshot all select the same default.
+// Keep the sampler independent: a missing image can still have a registered sampler.
+// Assigned slots are resolved live, including retirement, residency changes and feedback.
+const std::vector<Executor::HandleRun>* Executor::handle_runs(uintptr_t address, uint32_t count, const Resource& r) {
+    const uint32_t shift = r.size_shift;
     if (count < 32 || shift >= 16) return nullptr;
     const uint64_t span = (uint64_t{count - 1} << shift) + sizeof(uint32_t);
     if (span > 65536 || !nnsdk::watch::watchable(address, span)) return nullptr;
-    auto& table = handle_tables_[(address ^ (address >> 4) ^ (address >> 12)) % handle_tables_.size()];
-    if (table.address != address || table.count != count || table.shift != shift) {
+    auto& table = handle_tables_[((address >> 2) ^ (address >> 12) ^ (r.handle_or >> 20)) % handle_tables_.size()];
+    if (table.address != address || table.count != count || table.shift != shift || table.pool_epoch != handle_pool_epoch_ ||
+        table.mask != r.handle_and_mask || table.fixed != r.handle_or || table.left != r.shift_left) {
         table.address = address;
         table.count = count;
         table.shift = shift;
+        table.pool_epoch = handle_pool_epoch_;
+        table.mask = r.handle_and_mask;
+        table.fixed = r.handle_or;
+        table.left = r.shift_left;
         table.pages.clear();
     }
     handle_changes_.clear();
     nnsdk::watch::collect(address, span, table.pages, &handle_changes_);
     if (!handle_changes_.empty()) {
         table.runs.clear();
+        uint64_t previous = ~uint64_t{0};
         for (uint32_t k = 0; k < count; ++k) {
             uint32_t word;
             memcpy(&word, reinterpret_cast<const void*>(address + (size_t{k} << shift)), sizeof(word));
-            if (table.runs.empty() || table.runs.back().word != word) table.runs.push_back({k, word});
+            uint64_t identity = 0;
+            if (word != UINT32_MAX) {
+                const uint32_t h = shader_handle(word, r), image = h & 0xfffff, sampler = h >> 20;
+                if (handle_textures_ && image < handle_textures_->size() && (*handle_textures_)[image].texture.assigned())
+                    identity = image + 1;
+                if (handle_samplers_ && sampler < handle_samplers_->size() && (*handle_samplers_)[sampler].assigned())
+                    identity |= uint64_t{sampler + 1} << 32;
+            }
+            if (identity != previous) table.runs.push_back({k, identity ? word : UINT32_MAX});
+            previous = identity;
         }
     }
     return &table.runs;
@@ -6517,6 +6542,11 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
     const bool trace = frame_ == trace_frame_;
     const auto textures = st_.texture_pool ? st_.texture_pool->texture_snapshot() : nullptr;
     const auto samplers = st_.sampler_pool ? st_.sampler_pool->sampler_snapshot() : nullptr;
+    if (textures != handle_textures_ || samplers != handle_samplers_) {
+        handle_textures_ = textures;
+        handle_samplers_ = samplers;
+        ++handle_pool_epoch_;
+    }
     uint64_t resolved = 0;
     for (int s = 0; s < kStages; s++) {
         if (!stages[s] || !stages[s]->shader.has_bindless_set) continue;
@@ -6558,7 +6588,7 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
                 const uint64_t last = r.size_shift < 64 ? (u.size - first_end) >> r.size_shift : 0;
                 readable = static_cast<uint32_t>(std::min<uint64_t>(r.count, last + 1));
             }
-            const auto* runs = !trace && !loading_armed_ ? handle_runs(u.address + r.cbuf_offset, readable, r.size_shift) : nullptr;
+            const auto* runs = !trace && !loading_armed_ ? handle_runs(u.address + r.cbuf_offset, readable, r) : nullptr;
             const uint32_t entries = runs ? static_cast<uint32_t>(runs->size()) : readable;
             for (uint32_t i = 0; i < entries; ++i) {
                 const uint32_t k = runs ? (*runs)[i].first : i;

@@ -247,6 +247,79 @@ static bool test_virtual_page_replacement(auto& executor, const auto& read_byte)
     return visible;
 }
 
+static bool test_watched_handle_table(auto& e, nvn::Texture& source) {
+    using namespace nvn;
+    constexpr size_t allocation = 65536;
+    uintptr_t heap = 0;
+    if (nn::os::AllocateMemoryBlock(&heap, allocation).value) return false;
+    std::array<uint32_t, 64> reference{};
+    if (!nnsdk::watch::watchable(heap, sizeof reference)) return false;
+    auto* watched = reinterpret_cast<uint32_t*>(heap);
+    for (uint32_t i = 0; i < reference.size(); ++i) reference[i] = (i << 20) | (i + 8);
+    reference[8] = (1u << 20) | 3;
+    reference[9] = UINT32_MAX;
+    memcpy(watched, reference.data(), sizeof reference);
+
+    ProgramStage fs{};
+    fs.shader.has_bindless_set = true;
+    auto& binding = fs.shader.resources.emplace_back();
+    binding.kind = Resource::Texture;
+    binding.texture_type = 2;
+    binding.set = nvnshader::kBindlessSet;
+    binding.cbuf_index = kUniformBankBase;
+    binding.count = reference.size();
+    binding.size_shift = 2;
+    const ProgramStage* stages[kStages]{};
+    constexpr int fragment = static_cast<int>(Stage::Fragment);
+    stages[fragment] = &fs;
+    DescriptorPool pool;
+    pool.textures.resize(8);
+    pool.samplers.resize(2);
+    auto& uniform = e.st_.bindings[fragment].uniforms[0];
+    const auto saved_uniform = uniform;
+    const auto saved_textures = e.st_.texture_pool, saved_samplers = e.st_.sampler_pool;
+    e.st_.texture_pool = e.st_.sampler_pool = &pool;
+    auto checked_set = [&]() -> VkDescriptorSet {
+        uniform = {heap, sizeof reference};
+        auto set = e.bindless_set(stages);
+        uniform.address = reinterpret_cast<uintptr_t>(reference.data());
+        return set == e.bindless_set(stages) ? set : VK_NULL_HANDLE;
+    };
+    const auto empty = checked_set();
+    ResourceSlots<Texture> slots;
+    const auto resource = slots.insert(&source);
+    pool.register_texture(3, {resource, {}});
+    const auto with_image = checked_set();
+    Sampler sample{};
+    sample.desc.max_anisotropy = 1;
+    pool.register_sampler(1, &sample);
+    const auto both = checked_set();
+    slots.erase(resource);  // Same pool snapshot, different resource generation.
+    const auto only_sampler = checked_set();
+    pool.register_sampler(1, {});
+    bool ok = empty && with_image && with_image != empty && both && both != with_image &&
+              only_sampler && only_sampler != both && only_sampler != empty && checked_set() == empty;
+
+    pool.register_texture(6, {&source, {}});
+    pool.register_sampler(1, &sample);
+    binding.handle_and_mask = 7;
+    binding.shift_left = 1;
+    binding.handle_or = 1u << 20;
+    const auto transformed = checked_set();
+    binding.shift_left = 0;
+    const auto shifted = checked_set();
+    // Reuse the same pages and pool with a different interpretation, then dirty one word.
+    watched[9] = reference[9] = 6;
+    const auto dirty = checked_set();
+    ok &= transformed && shifted && shifted != transformed && dirty && dirty != shifted;
+    e.st_.texture_pool = saved_textures;
+    e.st_.sampler_pool = saved_samplers;
+    uniform = saved_uniform;
+    for (auto handle : {sample.vk, sample.vk_af, sample.vk_lit}) if (handle) e.retire_sampler(handle);
+    nn::os::FreeMemoryBlock(heap, allocation);
+    return ok;
+}
+
 extern "C" int test_texture_sync() {
     using namespace nvn;
     auto& e = g_executor;
@@ -350,6 +423,7 @@ extern "C" int test_texture_sync() {
     words[2] = UINT32_MAX;
     auto changed = e.bindless_set(stages, VK_NULL_HANDLE, &targets);
     if (!changed || changed == feedback) return 19;
+    if (!test_watched_handle_table(e, source)) return 21;
 
     Texture depth{};
     depth.serial = next_texture_serial();
