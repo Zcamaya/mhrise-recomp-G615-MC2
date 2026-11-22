@@ -145,6 +145,82 @@ bool pan() {
     printf("panning cutout, depth prepass + EQUAL, 3 implicit mip levels: %u / %u mismatches\n", bad, 48 * 256);
     return bad == 0;
 }
+// VERTEX_OVERLAY: compile vertex_overlay.comp in addition to the vertex fetch shaders.
+bool overlay_windows(Program& paint, const cmd::SetRenderTargets& target, void* texture) {
+    Program writer;
+    auto& cs = writer.stages.emplace_back();
+    std::ifstream file("vertex_overlay.comp.spv", std::ios::binary | std::ios::ate);
+    const auto size = file.tellg();
+    if (size <= 0 || size % 4) return false;
+    cs.shader.spirv.resize(size / 4);
+    if (!file.seekg(0).read(reinterpret_cast<char*>(cs.shader.spirv.data()), size)) return false;
+    cs.shader.stage = nvnshader::Stage::Compute;
+    nvnshader::Resource storage{nvnshader::Resource::StorageBuffer, 0, 0, 0x310, 0};
+    storage.is_written = true;
+    cs.shader.resources.push_back(storage);
+    cs.tried = true;
+    cs.spirv_id = spirv_identity(cs.shader);
+    if (create_shader_module(vk()->device, cs.shader.spirv, &cs.module) != VK_SUCCESS) return false;
+
+    constexpr unsigned stride = 256;
+    alignas(256) std::array<uint8_t, 4096> ring{};
+    std::array<Words, 16> original{};
+    for (unsigned i = 0; i < original.size(); ++i) {
+        original[i] = {i + 11, i + 23, i + 37, i + 51};
+        memcpy(ring.data() + i * stride, original[i].data(), sizeof(Words));
+    }
+    const uint64_t base = reinterpret_cast<uintptr_t>(ring.data());
+    const uint16_t indices[][3] = {{0, 1, 2}, {1, 2, 0}, {2, 0, 1}};
+    const size_t span = 2 * stride + sizeof(Words);
+    auto no_spill = [](size_t) -> void* { std::abort(); };
+    VertexAttribState attrs[5]{};
+    attrs[4].format = 0x2f;
+    CommandList list;
+    list.commands = {target, cmd::Viewport{0, 0, 0, 16, 8}, cmd::Scissor{0, 0, 0, 16, 8},
+                     cmd::ClearColor{0, {}, 15}, PolygonState{0, 1, 2, 0}, ColorState{0, 0, 8, 0},
+                     ChannelMaskState{15}, cmd::BindVertexAttribs{{attrs, 5, no_spill}}};
+    std::vector<Words> expected;
+    auto draw = [&](unsigned row, unsigned v, bool tight, bool instanced, bool updated) {
+        const BufferRange vb{tight ? base + row * stride : base, tight ? span : ring.size()};
+        const VertexStreamState stream{stride, unsigned(instanced)};
+        list.commands.emplace_back(cmd::BindProgram{&paint, 3});
+        list.commands.emplace_back(cmd::BindVertexStreams{{&stream, 1, no_spill}});
+        list.commands.emplace_back(cmd::BindVertexBuffers{0, {&vb, 1, no_spill}});
+        list.commands.emplace_back(cmd::Scissor{0, int(expected.size()), 0, 1, 8});
+        list.commands.emplace_back(cmd::Draw{4, 1, 3, 0, reinterpret_cast<uintptr_t>(indices[v]),
+                                            tight || instanced ? 0 : int(row), instanced ? int(row + v) : 0, 1});
+        Words value = original[row + v];
+        if (updated) for (auto& word : value) word ^= 0x13579bdfu;
+        expected.push_back(value);
+    };
+    draw(2, 0, false, false, false);  // prime the CPU vertex cache
+    list.commands.emplace_back(cmd::BindProgram{&writer, 32});
+    auto update = [&](unsigned row, unsigned bytes) {
+        list.commands.emplace_back(cmd::BindStorageBuffer{5, 0, {base + row * stride, bytes}});
+        list.commands.emplace_back(cmd::Dispatch{int(bytes / 4), 1, 1});
+    };
+    update(2, span);
+    update(8, sizeof(Words));
+    update(10, sizeof(Words));
+    list.commands.emplace_back(cmd::Barrier{~0});
+    for (unsigned i = 0; i < 3; ++i) {
+        draw(2, i, true, false, true);
+        draw(2, i, false, false, true);
+        draw(8, i, false, false, i != 1);
+        draw(8, i, false, true, i != 1);
+    }
+    list.commands.emplace_back(cmd::SetRenderTargets{});
+    execute({&list});
+    wait_idle();
+    const CopyRegion all{0, 0, 0, 16, 8, 1};
+    std::array<Words, 128> pixels{};
+    nvnTextureReadTexels(texture, nullptr, &all, pixels.data());
+    unsigned bad = 0;
+    for (size_t x = 0; x < expected.size(); ++x)
+        for (unsigned y = 0; y < 8; ++y) bad += pixels[y * 16 + x] != expected[x];
+    printf("GPU vertex windows: %u/%zu pixels incorrect\n", bad, 8 * expected.size());
+    return bad == 0;
+}
 } // namespace
 extern "C" int bench() {
     if (!vk()) return 1;
@@ -173,6 +249,7 @@ extern "C" int bench() {
     cmd::SetRenderTargets target{};
     target.count = 1;
     target.colors[0] = g_textures.get(&key);
+    if (getenv("VERTEX_OVERLAY")) return overlay_windows(p, target, &key) ? 0 : 7;
     struct Case {
         uint8_t format;
         Words input, expected;
