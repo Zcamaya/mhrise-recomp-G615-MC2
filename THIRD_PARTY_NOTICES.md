@@ -27,7 +27,11 @@ This project is licensed under GPL-3.0-or-later. It uses or includes the followi
 
 Lossless Scaling and its `Lossless.dll` are not distributed here; the DLL must come from the user's own purchase.
 
-The launcher uses artwork supplied for this fork. The game's artwork and trademarks remain the property of their respective owners. The project's GPL grant covers the port code.
+This project is independently maintained by the community. It has no affiliation or partnership with Capcom or the official development or publishing teams for its games. They do not sponsor or endorse this project. Rights to Monster Hunter Rise, its DLC and associated trademarks belong to their respective owners.
+
+This repository does not contain or distribute the original game's source code, executables, ROM images, game asset packages, Switch decryption keys or player saves. Players must extract the game program (ExeFS) and assets (RomFS) from their own legitimately obtained Nintendo Switch copy.
+
+The launcher uses artwork supplied for this fork. The project's GPL grant covers the port code.
 
 AMD FidelityFX FSR 1 license (MIT):
 

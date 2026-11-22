@@ -4,6 +4,12 @@
 
 这个分支整合了 Lua MOD、触屏操作和中文版设置菜单，并修正了命中时血花连成大片、部分碰撞粒子异常放大的渲染问题。
 
+## 免责声明
+
+本项目由社区独立维护，与卡普空（CAPCOM）及其旗下游戏的官方开发或发行团队无隶属或合作关系，也未获其赞助或背书。《怪物猎人 崛起》、其 DLC 及相关商标的权利归各自权利人所有。
+
+本仓库不包含或分发原版游戏的源代码、可执行文件、ROM 镜像、游戏资源包、Switch 解密密钥或玩家存档。运行所需的游戏程序（ExeFS）和游戏资源（RomFS）须由玩家从自己合法持有的 Nintendo Switch 正版游戏中自行导出。
+
 ## 安装与首次启动
 
 需要 Android 11 或以上、ARM64 处理器和 Vulkan 驱动。安装包见[最新发行版](https://github.com/yun-wulian/mhrise-recomp/releases/latest)。
@@ -57,5 +63,3 @@ python tools/build_lua_lab.py --source-release --sdk $env:ANDROID_HOME --ndk $en
 原始 Android 移植来自 IamWilmar，本分支基于 klark231 的后续开发。yun-wulian 分支截至 2026-11-22 的修改包括 Lua/MOD 集成、NVN/Vulkan 资源管理与粒子渲染修正，以及 Android 首次设置和中文菜单。[原始项目](https://github.com/IamWilmar/mhrise-recomp) · [直接上游](https://github.com/klark231/mhrise-recomp)
 
 本项目的移植代码沿用 **GNU General Public License v3.0 或更高版本**（`GPL-3.0-or-later`）。修改和再分发时请保留版权与许可证声明，分发 APK 时同时提供该构建对应的完整源码和构建脚本。第三方组件按各自许可证使用。[许可证全文](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)
-
-这是非官方移植。游戏本体、DLC 和商标的权利归各自权利人所有。
