@@ -9667,6 +9667,33 @@ void Executor::prepare_draw_overlays() {
     }
 }
 
+// Splitting a writable binding is safe when the dispatch has no descriptor that crosses either edge.
+// A wider alias needs a contiguous backing shared with the writer for the duration of the dispatch.
+static bool compute_binding_crosses(const StageBindings& bindings, const ProgramStage& cs, const BufferRange& write) {
+    auto crosses = [&](BufferRange other) {
+        if (!other.address || !other.size) return false;
+        if (other.address < write.address) return write.address - other.address < other.size;
+        const uint64_t at = other.address - write.address;
+        return at < write.size && other.size > write.size - at;
+    };
+    for (const Resource& r : cs.shader.resources) {
+        if (r.kind == Resource::UniformBuffer) {
+            if (r.cbuf_index == kShaderConstantsBank && crosses({cs.constants, cs.constants_size})) return true;
+            if (r.cbuf_index >= kUniformBankBase && r.cbuf_index - kUniformBankBase < kMaxUniforms &&
+                crosses(bindings.uniforms[r.cbuf_index - kUniformBankBase])) return true;
+        } else if (r.kind == Resource::StorageBuffer && r.cbuf_index == kComputeDriverBank) {
+            if (r.cbuf_offset >= kComputeStorageBase) {
+                const uint32_t index = (r.cbuf_offset - kComputeStorageBase) / 16;
+                if (index < kMaxStorage && crosses(bindings.storage[index])) return true;
+            } else if (r.cbuf_offset >= kComputeUbeBase && r.cbuf_offset < kComputeUbeBase + 16 * kComputeUbeCount) {
+                const uint32_t index = kComputeUbeFirst + (r.cbuf_offset - kComputeUbeBase) / 16;
+                if (index < kMaxUniforms && crosses(bindings.uniforms[index])) return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Ver la declaración. Mismos rangos y tamaños que los descriptores del dispatch (los SSBO de la tabla de c0; los UBE son
 // uniform buffers aunque se lean como storage: no se unen).
 void Executor::prepare_dispatch_overlays() {
@@ -9682,7 +9709,13 @@ void Executor::prepare_dispatch_overlays() {
         if (!range.address || !range.size) continue;
         const uint64_t size = std::min<uint64_t>(range.size, kStagingChunk);
         if (r.is_written) {
-            if (make_overlay(range.address, size, &off)) note_overlay_written(range.address, kWrittenByCompute);
+            // The guest can reuse the neighbouring bytes independently. Give this write its own
+            // CPU-change check before dispatch, while a split can still copy the old GPU contents.
+            const Overlay* o = find_overlay(range.address, size, &off);
+            if (o && o->size > size && o->writers && split_overlays_ && !write_back_on_ && !o->cpu_reads &&
+                !compute_binding_crosses(sb, *st_.compute, {range.address, size}))
+                o = merge_overlays(range.address, size, &off, false);
+            if (o || make_overlay(range.address, size, &off)) note_overlay_written(range.address, kWrittenByCompute);
         } else if (!find_overlay(range.address, size, &off)) {
             merge_overlays(range.address, size, &off, true);
         }

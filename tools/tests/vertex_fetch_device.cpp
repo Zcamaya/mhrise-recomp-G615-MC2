@@ -219,6 +219,36 @@ bool overlay_windows(Program& paint, const cmd::SetRenderTargets& target, void* 
     for (size_t x = 0; x < expected.size(); ++x)
         for (unsigned y = 0; y < 8; ++y) bad += pixels[y * 16 + x] != expected[x];
     printf("GPU vertex windows: %u/%zu pixels incorrect\n", bad, 8 * expected.size());
+
+    // A compute buffer can be reused for a smaller set of particles while the CPU updates its tail.
+    alignas(256) std::array<uint32_t, 1408> particles{};
+    const uint64_t address = reinterpret_cast<uintptr_t>(particles.data());
+    const cmd::BindStorageBuffer part{5, 0, {address, 5120}};
+    CommandList initialize;
+    initialize.commands = {cmd::BindProgram{&writer, 32},
+                           cmd::BindStorageBuffer{5, 0, {address, sizeof(particles)}},
+                           cmd::Dispatch{1408, 1, 1}, cmd::Barrier{~0},
+                           part, cmd::Dispatch{1, 1, 1}, cmd::Barrier{~0}};
+    execute({&initialize});
+    wait_idle();
+    particles[1280] = 1;
+    const BufferRange vertices{address + 256, 3 * sizeof(Words)};
+    const VertexStreamState stream{sizeof(Words), 0};
+    CommandList sample;
+    sample.commands = {cmd::BindProgram{&writer, 32}, part, cmd::Dispatch{1, 1, 1}, cmd::Barrier{~0},
+                       target, cmd::Viewport{0, 0, 0, 16, 8}, cmd::Scissor{0, 0, 0, 16, 8},
+                       cmd::BindProgram{&paint, 3}, cmd::BindVertexAttribs{{attrs, 5, no_spill}},
+                       cmd::BindVertexStreams{{&stream, 1, no_spill}},
+                       cmd::BindVertexBuffers{0, {&vertices, 1, no_spill}},
+                       cmd::Draw{4, -1, 3, 0, 0, 0, 0, 1}, cmd::SetRenderTargets{}};
+    execute({&sample});
+    wait_idle();
+    nvnTextureReadTexels(texture, nullptr, &all, pixels.data());
+    Words gpu_value;
+    gpu_value.fill(0x13579bdfu);
+    const auto mismatches = pixels.size() - std::count(pixels.begin(), pixels.end(), gpu_value);
+    printf("compute subrange after neighbouring CPU write: %zu/%zu pixels incorrect\n", mismatches, pixels.size());
+    bad += mismatches;
     return bad == 0;
 }
 } // namespace
