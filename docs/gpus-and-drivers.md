@@ -1,7 +1,7 @@
 # GPUs and drivers
 
 The port was written for the Adreno 650 with Qualcomm's driver (Retroid Pocket 5 / Flip 2) and has since been made to
-run on other phones. Each section lists what that family needs and why. The README's switch table has the switch for
+run on other phones. Each section lists what that family needs and why. The [settings reference](settings.md) has the switch for
 each workaround.
 
 **Tell drivers apart by `driverID`** (`VkPhysicalDeviceDriverProperties`), not by the device name. Some Turnip builds

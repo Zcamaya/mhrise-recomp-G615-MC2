@@ -29,6 +29,11 @@ fi
 STAGE="$ROOT/build/apk"
 APK="${APK_OUT:-$ROOT/build/mhriseport.apk}"
 PACKAGE="${PACKAGE:-}"
+LUA_LAB="${LUA_LAB:-0}"
+if [ "$LUA_LAB" = 1 ]; then
+  PACKAGE="${PACKAGE:-io.github.iamwilmar.mhriseport.lab}"
+  LABEL="${LABEL:-MHRise}"
+fi
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 4)}"
 
 for need in "$NDK/build/cmake/android.toolchain.cmake" "$BT/aapt2" "$JAR"; do
@@ -38,6 +43,7 @@ done
 
 mkdir -p "$BUILD"
 cmake -S "$ROOT/runtime" -B "$BUILD" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+  -DMHRISE_LUA_DEBUG="$LUA_LAB" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_NDK="$NDK" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static > /dev/null
 if ! cmake --build "$BUILD" -j"$JOBS" > "$BUILD/build.log" 2>&1; then
@@ -50,18 +56,14 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/lib/arm64-v8a" "$STAGE/classes"
 # Start screen (SetupActivity: find the user's game files, then start): javac + d8 into classes.dex.
 python3 "$ROOT/tools/mod_archive_dependency.py" "$STAGE"
-javac -Xlint:-options --release 11 -classpath "$JAR:$STAGE/mod-archive.jar" -d "$STAGE/classes" $(find "$ROOT/android/java" -name '*.java')
+javac -Xlint:-options --release 11 -encoding UTF-8 -classpath "$JAR:$STAGE/mod-archive.jar" -d "$STAGE/classes" $(find "$ROOT/android/java" -name '*.java')
 "$BT/d8" --release --min-api 30 --lib "$JAR" --output "$STAGE" "$STAGE/mod-archive.jar" $(find "$STAGE/classes" -name '*.class')
 cp "$BUILD/libnier.so" "$BUILD/libnnsdk.so" "$STAGE/lib/arm64-v8a/"
 # libadrenotools' hooks (a driver of the user's own, runtime/src/nnsdk/nvn/driver.h): they must be in nativeLibraryDir.
 cp $(find "$BUILD/adrenotools" -name 'lib*hook*.so') "$STAGE/lib/arm64-v8a/"
-# The third-party notices and licenses that go with the binaries (BSD-2 libadrenotools, MIT volk).
-mkdir -p "$STAGE/assets/licenses"
-cp "$ROOT/android/assets/licenses/mod-archives.txt" "$STAGE/assets/licenses/"
-cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/assets/licenses/"
-cp "$ROOT/runtime/external/libadrenotools/LICENSE" "$STAGE/assets/licenses/libadrenotools.txt"
-cp "$ROOT/runtime/external/libadrenotools/lib/linkernsbypass/LICENSE" "$STAGE/assets/licenses/linkernsbypass.txt"
-cp "$ROOT/runtime/external/volk/LICENSE.md" "$STAGE/assets/licenses/volk.txt"
+NOTICE_ARGS=()
+if [ "$LUA_LAB" = 1 ]; then NOTICE_ARGS+=("$BUILD/_deps"); fi
+python3 "$ROOT/tools/apk_notices.py" "$STAGE/assets/licenses" "${NOTICE_ARGS[@]}"
 # The Citrus curves for Steam saves (SaveData.java)
 cp "$ROOT/android/assets/citrus_curves.bin" "$STAGE/assets/"
 "$BT/aapt2" compile --dir "$ROOT/android/res" -o "$STAGE/res.zip"
