@@ -7283,6 +7283,14 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
             v = vertex_variant(*const_cast<ProgramStage*>(st_.stages[s]), input_types);
             if (!v.module) return VK_NULL_HANDLE;
         }
+        // The evaluation shader in its domain: Eden would make it isolines, and the game's terrain is quads. Lines
+        // drew the wrong thing everywhere, and ARM's G57 driver aborted the game compiling it.
+        if (s == static_cast<int>(Stage::TessEval) && st_.stages[static_cast<int>(Stage::TessControl)]) {
+            if (const int domain = tess_domain(*st_.stages[static_cast<int>(Stage::TessControl)])) {
+                v = geometry_variant(*const_cast<ProgramStage*>(st_.stages[s]), ~0ull, domain);
+                if (!v.module) return pipelines_[h] = VK_NULL_HANDLE;
+            }
+        }
         if (s == static_cast<int>(Stage::Geometry) && vs) {
             // Topología de entrada según la primitiva de NVN (orden de OpenGL).
             int topology = d.primitive == 0                       ? 0

@@ -499,7 +499,13 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
                 for (size_t c = 0; c < 4; c++)
                     runtime.previous_stage_stores.Set(Shader::IR::Attribute::Generic0X + k * 4 + c);
         for (size_t c = 0; c < 4; c++) runtime.previous_stage_stores.Set(Shader::IR::Attribute::PositionX + c);
-        runtime.input_topology = static_cast<Shader::InputTopology>(options.input_topology);
+        if (env.ShaderStage() == Shader::Stage::TessellationEval) {
+            // (input_topology, for a tessellation evaluation shader: its domain, 1 + TessPrimitive; 0, isolines as before)
+            if (options.input_topology > 0)
+                runtime.tess_primitive = static_cast<Shader::TessPrimitive>(options.input_topology - 1);
+        } else {
+            runtime.input_topology = static_cast<Shader::InputTopology>(options.input_topology);
+        }
         for (size_t k = 0; k < 16; k++) {
             const uint32_t type = options.input_types >> (4 * k) & 0x7;
             if (type <= static_cast<uint32_t>(Shader::AttributeType::UnsignedScaled))

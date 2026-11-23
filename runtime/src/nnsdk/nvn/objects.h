@@ -409,6 +409,9 @@ bool use_stripped_module(const ProgramStage& stage);
 // Geometry: el módulo para un vertex shader que escribe `previous_stores` y una topología de entrada de
 // Eden; module a VK_NULL_HANDLE si no se puede traducir.
 ProgramStage::Variant geometry_variant(ProgramStage& stage, uint64_t previous_stores, int input_topology);
+// The tessellation domain of a control shader's patches, as nvnshader::Options::input_topology takes it for the
+// evaluation shader (2 triangles, 3 quads, 1 isolines; 0 if its translation doesn't say): from the levels it writes.
+int tess_domain(const ProgramStage& control);
 // La misma etapa traducida con opciones más prudentes, para un driver que rechazó la pipeline (executor.cpp): nivel 1 sin
 // la decoración NonUniform; 2, además pasada por spirv-opt; 3, además sin operaciones de subgrupo. Ninguna cambia los
 // recursos (el layout es el mismo). previous_stores: el de la variante que se usaba (~0: la etapa tal cual).

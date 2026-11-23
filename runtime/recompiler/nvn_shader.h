@@ -91,6 +91,8 @@ struct Options {
     // admite 128 componentes y declarar los 32 + la posición se pasa) y topología de entrada
     // (InputTopology de Eden: puntos 0, líneas 1, líneas con adyacencia 2, triángulos 3, con adyacencia 4).
     uint64_t previous_stores = ~0ull;
+    // Tessellation evaluation: the domain instead, 1 + Eden's TessPrimitive (isolines, triangles, quads); 0, isolines.
+    // NVN keeps it out of the shader's code; nvn::tess_domain reads it from what the control shader writes.
     int input_topology = 0;
     // Vertex: el tipo de cada atributo según el formato con el que llega (4 bits por atributo, el AttributeType de Eden:
     // 0 float, 1 entero con signo, 2 sin signo, 3 y 4 enteros que se pasan a float). El Maxwell lee los atributos

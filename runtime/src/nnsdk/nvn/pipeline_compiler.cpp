@@ -35,9 +35,10 @@ struct GuardNote {
     uint64_t vertex;
     char text[kGuardNote - 8];
 };
-// The list's first line. Bumped when a translator change can fix what crashed (the point size on ARM's driver: 2), so
-// an older list is dropped and those pipelines are tried again.
-constexpr const char* kSkipHeader = "pipeline_skip 2";
+// The list's first line. Bumped when a translator change can fix what crashed (2: the point size on ARM's driver; 3:
+// tessellation in its domain), so an older list is dropped and those pipelines are tried again, with the crash the
+// last run left marked (it was the older translation too).
+constexpr const char* kSkipHeader = "pipeline_skip 3";
 struct Guard {
     std::atomic<uint64_t>* slots = nullptr;  // in the mapped file: the pipeline of each build in progress
     char* notes = nullptr;
@@ -52,6 +53,7 @@ Guard* guard() {
         const char* home = getenv("NIER_INTERNO");
         if (!c || !home) return g;
         const std::string list = std::string(home) + "/pipeline_skip.txt";
+        bool older = false;
         {
             char first[64] = "";
             if (FILE* f = fopen(list.c_str(), "r")) {
@@ -59,6 +61,7 @@ Guard* guard() {
                 fclose(f);
             }
             first[strcspn(first, "\r\n")] = 0;
+            older = first[0] && strcmp(first, kSkipHeader) != 0;
             if (strcmp(first, kSkipHeader) != 0)
                 if (FILE* f = fopen(list.c_str(), "w")) {
                     if (first[0]) NVN_LOG("pipelines: the skip list was from an older translator: dropped, they're tried again\n");
@@ -76,7 +79,7 @@ Guard* guard() {
                 g->notes = static_cast<char*>(m) + kGuardSlots * sizeof(uint64_t);
                 if (FILE* f = fopen(list.c_str(), "a")) {
                     for (int i = 0; i < kGuardSlots; i++)
-                        if (uint64_t id = g->slots[i].exchange(0)) {
+                        if (uint64_t id = g->slots[i].exchange(0); id && !older) {
                             auto* note = reinterpret_cast<GuardNote*>(g->notes + i * kGuardNote);
                             note->text[sizeof note->text - 1] = 0;
                             fprintf(f, "%016llx\n", static_cast<unsigned long long>(id));

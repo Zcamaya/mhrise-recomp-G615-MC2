@@ -968,6 +968,34 @@ nvn::ProgramStage::Variant nvn::geometry_variant(ProgramStage& stage, uint64_t p
     return stage.variants[key] = v;
 }
 
+int nvn::tess_domain(const ProgramStage& control) {
+    // The highest outer and inner level the SPIR-V stores to: quads write four and two, triangles three and one,
+    // isolines two and none (the levels are arrays indexed by constants: OpAccessChain, then OpStore)
+    const std::vector<uint32_t>& w = control.shader.spirv;
+    if (w.size() < 5) return 0;
+    std::unordered_map<uint32_t, uint32_t> level, constant;  // variable -> 0 outer, 1 inner; id -> value
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> chain;  // pointer -> (outer/inner, index)
+    int outer = -1, inner = -1;
+    for (size_t i = 5; i < w.size();) {
+        const uint32_t n = w[i] >> 16, op = w[i] & 0xffff;
+        if (!n || i + n > w.size()) return 0;
+        if (op == 71 && n == 4 && w[i + 2] == 11 && (w[i + 3] == 11 || w[i + 3] == 12))  // OpDecorate BuiltIn TessLevel*
+            level[w[i + 1]] = w[i + 3] - 11;
+        else if (op == 43 && n == 4) constant[w[i + 2]] = w[i + 3];  // OpConstant
+        else if (op == 65 && n == 5 && level.count(w[i + 3]) && constant.count(w[i + 4]))  // OpAccessChain
+            chain[w[i + 2]] = {level[w[i + 3]], constant[w[i + 4]]};
+        else if (op == 62 && n >= 3 && chain.count(w[i + 1])) {  // OpStore
+            auto [which, index] = chain[w[i + 1]];
+            int& top = which ? inner : outer;
+            top = std::max(top, static_cast<int>(index));
+        }
+        i += n;
+    }
+    if (outer >= 3 || inner >= 1) return 3;
+    if (outer == 2 || inner == 0) return 2;
+    return outer >= 0 ? 1 : 0;
+}
+
 nvn::ProgramStage::Variant nvn::vertex_variant(ProgramStage& stage, uint64_t input_types) {
     if (auto it = stage.variants.find(input_types); it != stage.variants.end()) return it->second;
     ProgramStage::Variant v;
