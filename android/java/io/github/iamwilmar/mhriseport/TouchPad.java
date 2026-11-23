@@ -46,12 +46,17 @@ final class TouchPad extends View {
     private final Appearance[] artwork = new Appearance[CONTROLS.length];
     private long dirtyGlyphs = -1L;
     private final Rect damage = new Rect();
-    // The game presents at up to 60 Hz. Sample continuous stick artwork at that cadence,
-    // even when the Android window receives input and vsync at 120 Hz or higher.
-    private static final long SOFTWARE_FRAME_NS = 1_000_000_000L / 60;
-    private final Choreographer.FrameCallback softwareFrame = this::drawSoftwareControls;
-    private boolean softwareFramePending;
-    private long nextSoftwareFrame;
+    // A moving stick redraws the controls at the game's own frame rate (30, or 60 with the 60 fps switch: setGameFps),
+    // not at every touch event or vsync. Redrawn at the screen's 90-144 Hz, the overlay kept the GPU (or, drawn by the
+    // CPU, a core) busy for frames the game never shows: playing with the touch controls was slower than with a pad.
+    private long animationFrameNs = 1_000_000_000L / 30;
+    private final Choreographer.FrameCallback animationFrame = this::drawAnimatedControls;
+    private boolean animationFramePending;
+    private long nextAnimationFrame;
+
+    void setGameFps(int fps) {
+        animationFrameNs = 1_000_000_000L / Math.max(20, Math.min(60, fps));
+    }
 
     // Per-control visual state. Layout and style changes invalidate all display lists.
     private static final class Appearance {
@@ -561,10 +566,10 @@ final class TouchPad extends View {
             lastSticks = on;
         }
         if (editing) invalidate();
-        else if (moving && animateControls && !isHardwareAccelerated()) {
-            if (!softwareFramePending) {
-                softwareFramePending = true;
-                Choreographer.getInstance().postFrameCallback(softwareFrame);
+        else if (moving && animateControls) {
+            if (!animationFramePending) {
+                animationFramePending = true;
+                Choreographer.getInstance().postFrameCallback(animationFrame);
             }
         } else if (animateControls && syncAppearance(isHardwareAccelerated() ? null : damage)) {
             if (isHardwareAccelerated()) super.invalidate();
@@ -572,15 +577,18 @@ final class TouchPad extends View {
         }
     }
 
-    private void drawSoftwareControls(long frameTime) {
-        if (frameTime + 500_000L < nextSoftwareFrame) {
-            Choreographer.getInstance().postFrameCallback(softwareFrame);
+    private void drawAnimatedControls(long frameTime) {
+        if (frameTime + 500_000L < nextAnimationFrame) {
+            Choreographer.getInstance().postFrameCallback(animationFrame);
             return;
         }
-        softwareFramePending = false;
-        nextSoftwareFrame = frameTime >= nextSoftwareFrame + SOFTWARE_FRAME_NS
-                ? frameTime + SOFTWARE_FRAME_NS : nextSoftwareFrame + SOFTWARE_FRAME_NS;
-        if (!editing && syncAppearance(damage)) super.invalidate(damage);
+        animationFramePending = false;
+        nextAnimationFrame = frameTime >= nextAnimationFrame + animationFrameNs
+                ? frameTime + animationFrameNs : nextAnimationFrame + animationFrameNs;
+        if (editing) return;
+        if (isHardwareAccelerated()) {
+            if (syncAppearance(null)) super.invalidate();
+        } else if (syncAppearance(damage)) super.invalidate(damage);
     }
 
     private boolean syncAppearance(Rect changedArea) {
@@ -627,9 +635,9 @@ final class TouchPad extends View {
     }
 
     @Override protected void onDetachedFromWindow() {
-        Choreographer.getInstance().removeFrameCallback(softwareFrame);
-        softwareFramePending = false;
-        nextSoftwareFrame = 0;
+        Choreographer.getInstance().removeFrameCallback(animationFrame);
+        animationFramePending = false;
+        nextAnimationFrame = 0;
         for (Appearance a : artwork) if (a.node != null) a.node.discardDisplayList();
         dirtyGlyphs = -1L;
         super.onDetachedFromWindow();

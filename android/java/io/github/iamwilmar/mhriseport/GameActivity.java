@@ -44,6 +44,17 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     private TouchPad pad;
     private ModUi modUi;
     void showModUi() { modUi.setMenu(true); }
+
+    // The frame rate the game is limited to (Display → FPS limit): the touch controls animate no faster
+    private int gameFps() {
+        File folder = SettingsMenu.gameFolder(this);
+        if (folder == null) return 30;
+        Ini ini = new Ini(folder);
+        if (ini.on("60fps")) return 60;
+        for (int fps : new int[] {45, 40, 25, 20})
+            if (ini.on("fps_" + fps)) return fps;
+        return 30;
+    }
     // The controller hotkey (android_main.cpp, from a thread of its own) and the floating button
     public void toggleModUi() {
         runOnUiThread(() -> {
@@ -85,6 +96,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
         applyPad();
         pad = new TouchPad(this, controls, this);
+        pad.setGameFps(gameFps());
         // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
         getWindow().getDecorView().post(this::showPad);
         showSaveMessage();
@@ -350,6 +362,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     void refresh() {
         controls.save();
         applyPad();
+        pad.setGameFps(gameFps());
         pad.invalidate();
         showCapture();
         showModButton();

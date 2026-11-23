@@ -226,6 +226,11 @@ in Local Play and it's listed there; search for hubs and the ones listed show up
 server connects the players and passes their traffic. Only MH Rise hubs are listed for MH Rise (the server keeps each
 game's hubs apart), so this isn't crossplay with MHGU.
 
+The game's packets go by UDP when it gets through (through the hub server's UDP relay, or straight to the host's port
+on a direct join), and by the TCP connection when it doesn't: a lost packet on TCP holds up the ones behind it, which
+shows as hitches in a hunt. The log says which: "UDP through the hub server" when joining. Hubs of earlier versions of
+the port (without UDP) aren't listed for this one; everyone needs the same version.
+
 Settings, under **Multiplayer** in the settings panel (saved as text files in the game folder):
 
 | Setting | File | |
@@ -233,7 +238,7 @@ Settings, under **Multiplayer** in the settings panel (saved as text files in th
 | Matchmaking key | `hub_key` | Players with the same key only see each other's hubs; empty, public. Only its SHA-256 is sent. |
 | Hub servers | `hub_servers` | One `host[:port]` per line; `#` in front keeps it in the list switched off. Missing: the default. `off`: none. |
 | Search hosts | `hub_hosts` | Other phones' `IP[:port]`, asked directly for their hub (same Wi-Fi, or a forwarded port). |
-| Port | `hub_port` | The TCP port a created hub listens on for direct joins (default 39510, 0 off). |
+| Port | `hub_port` | The port a created hub listens on for direct joins, TCP and UDP (default 39510, 0 off). |
 
 The hub servers' protocol is the one documented in MHGU for Android's `server/`; the client here is this port's own
 code (`runtime/src/nnsdk/ldn.cpp`), with its own link protocol between the players.
