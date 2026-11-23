@@ -4979,7 +4979,7 @@ bool Executor::cpu_texture_changed(Texture& t) {
     // este (la huella de las ~600 que sube la CPU, cada frame, es casi todo el tramo "texturas"). Lo que la CPU reescriba
     // se ve como mucho un frame más tarde; WriteTexels y CopyBufferToTexture no pasan por aquí (apply_texel_writes) y las
     // vigiladas tampoco.
-    if (t.checked_frame + 1 == frame_ && t.content_hash && NVN_FLAG("print_every_2")) return false;
+    if (t.checked_frame + 1 == frame_ && t.content_hash && (NVN_FLAG("print_every_2") || NVN_FLAG("fast_textures"))) return false;
     t.checked_frame = frame_;
     if (frame_ <= t.full_check_until || frame_ >= t.next_full_check) {
         t.next_full_check = frame_ + 120;
@@ -6682,6 +6682,11 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
                          g_texel_writes.load(std::memory_order_acquire) == 0 && !NVN_FLAG("no_bindless_memo");
     uint64_t memo_hash = 0;
     const uint64_t memo_mapping = g_mapping_serial.load(std::memory_order_acquire);
+    // <data>/fast_textures (Settings → Performance → Fast textures, live): the memo as v1.0.85 cached set 1, by where the
+    // handles are rather than what they say, kept through texture uploads and for sets with an attachment snapshot.
+    // Faster where textures stream in, and the glitches the per-draw resolution fixed (blood as big patches, magnified
+    // particles) can come back.
+    const bool fast = NVN_FLAG("fast_textures");
     if (memo_ok) {
         uint64_t h = 0x9E3779B97F4A7C15ull;
         auto mix = [&h](uint64_t v) { h = (h ^ v) * 0x100000001B3ull + (h >> 29); };
@@ -6710,7 +6715,7 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
                 mix(uint64_t{r.handle_and_mask} | uint64_t{r.handle_or} << 32);
                 // the handle words themselves (the game rewrites a buffer in place between draws)
                 const uint64_t first_end = uint64_t{r.cbuf_offset} + sizeof(uint32_t);
-                if (bindless_ && u.address && u.size >= first_end) {
+                if (!fast && bindless_ && u.address && u.size >= first_end) {
                     const uint64_t last = r.size_shift < 64 ? (u.size - first_end) >> r.size_shift : 0;
                     const uint32_t readable = static_cast<uint32_t>(std::min<uint64_t>(r.count, last + 1));
                     for (uint32_t k = 0; k < readable; k++) {
@@ -6724,7 +6729,7 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
         }
         memo_hash = h | 1;
         const BindlessMemo& m = bindless_memo_[(memo_hash >> 7) % bindless_memo_.size()];
-        if (m.hash == memo_hash && m.epoch == descriptor_epoch_ && m.events == texture_events_ && m.mapping == memo_mapping &&
+        if (m.hash == memo_hash && m.epoch == descriptor_epoch_ && (fast || (m.events == texture_events_ && m.mapping == memo_mapping)) &&
             m.set) {
             prof_bindless_memo_++;
             return m.set;
@@ -6732,7 +6737,7 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
     }
     bool redirected = false;  // a sampled attachment's snapshot went in: not for the memo
     auto remember = [&](VkDescriptorSet set) {
-        if (!memo_ok || redirected || !set || !pending_clears_.empty()) return;
+        if (!memo_ok || (redirected && !fast) || !set || !pending_clears_.empty()) return;
         bindless_memo_[(memo_hash >> 7) % bindless_memo_.size()] = {memo_hash, descriptor_epoch_, texture_events_, memo_mapping, set};
     };
     uint64_t resolved = 0;

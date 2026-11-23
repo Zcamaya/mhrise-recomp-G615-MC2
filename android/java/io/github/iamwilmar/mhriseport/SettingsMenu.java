@@ -527,6 +527,12 @@ final class SettingsMenu {
                         + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.", "省略中间没有任务的连续 GPU 屏障，减少等待与发热。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "tight_barriers", false);
+        flag(tr("Fast textures", "快速纹理"),
+                tr("For speed over accuracy: each draw's textures are looked up as in v1.0.85 (by where the game keeps them, "
+                        + "not what they are now), and textures the CPU rewrites are checked every other frame. Less CPU time "
+                        + "in busy places, but old glitches can come back: blood as big patches, magnified particles, a texture "
+                        + "a frame late. Applies at once.", "以准确性换取速度：按 v1.0.85 的方式查找每次绘制的纹理，CPU 改写的纹理隔帧检查。人多的场景 CPU 负担更低，但旧问题可能重现：血迹变成大块、粒子被放大、纹理晚一帧更新。立即生效。"),
+                "fast_textures", false);
         exclusive(tr("Pipeline worker threads", "管线编译线程数"),
                 tr("Threads available to build GPU pipelines. More can finish shader warm-up sooner. "
                         + "A draw waits if its pipeline is still being built. Takes effect on the next start.", "可用于编译 GPU 管线的线程数。增加线程可加快预热；绘制仍会等待正在构建的管线。下次启动生效。"),
@@ -2067,7 +2073,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
+        "60fps", "adreno_turbo", "fast_textures", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",
