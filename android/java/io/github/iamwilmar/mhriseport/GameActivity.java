@@ -43,7 +43,26 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     private Controls controls;
     private TouchPad pad;
     private ModUi modUi;
-    void showModUi() { modUi.setMenu(true); }
+    void showModUi() {
+        if (modUi != null && modUiReady()) modUi.setMenu(true);
+    }
+
+    // The MOD UI draws the Lua scripts' windows: with no script running there's nothing to draw, and the button seemed
+    // to do nothing. Says why instead.
+    private boolean modUiReady() {
+        String why;
+        switch (ModUi.runtime()) {
+            case 2: return true;
+            case 1:
+                why = "The scripts start once you're in the village or a quest (not on the title screen). Open the MOD UI then.";
+                break;
+            default:
+                why = "No Lua scripts are installed, so the MOD UI has nothing to show. Add a REFramework script mod in "
+                        + "Settings → Mods & cheats, or turn on Debug → Object Explorer, and restart the game.";
+        }
+        Toast.makeText(this, why, Toast.LENGTH_LONG).show();
+        return false;
+    }
 
     // The frame rate the game is limited to (Display → FPS limit): the touch controls animate no faster
     private int gameFps() {
@@ -58,7 +77,9 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     // The controller hotkey (android_main.cpp, from a thread of its own) and the floating button
     public void toggleModUi() {
         runOnUiThread(() -> {
-            if (modUi != null) modUi.setMenu(!modUi.menuOpen());
+            if (modUi == null) return;
+            if (modUi.menuOpen()) modUi.setMenu(false);
+            else if (modUiReady()) modUi.setMenu(true);
         });
     }
 

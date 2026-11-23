@@ -717,6 +717,14 @@ void on_player_update(uintptr_t context, uintptr_t manager) {
   }
 }
 
+// For the MOD UI button: 0 no Lua runtime (no scripts installed), 1 scripts loaded but not running yet (they start
+// with the game's first frame in a village or quest), 2 running
+extern "C" JNIEXPORT jint JNICALL Java_io_github_iamwilmar_mhriseport_ModUi_nativeRuntime(JNIEnv *, jclass) {
+  std::unique_lock lock(mod_lua::lua_mutex(), std::try_to_lock);
+  if (!lock.owns_lock()) return 2;  // (a script is running right now)
+  return !resident_vm ? 0 : !resident_frame ? 1 : 2;
+}
+
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_io_github_iamwilmar_mhriseport_SettingsMenu_nativeLuaReport(JNIEnv *env,
                                                                  jclass) {

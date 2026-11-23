@@ -165,6 +165,15 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
             post(() -> { if (isAttachedToWindow() && menu) setKeyboard(wants); });
     }
     private static native boolean nativeMenuOpen();
+    private static native int nativeRuntime();
+    // 0: no Lua runtime (no scripts), 1: scripts loaded, not running yet, 2: running
+    static int runtime() {
+        try {
+            return nativeRuntime();
+        } catch (UnsatisfiedLinkError e) {
+            return 0;
+        }
+    }
     private void setKeyboard(boolean wants) {
         if (keyboard == wants) return;
         keyboard = wants;
