@@ -23,6 +23,13 @@ if [ ! -d "$TP/eden" ]; then
   git -C "$TP/eden" fetch -q --depth 1 --filter=blob:none origin "$EDEN_COMMIT"
   git -C "$TP/eden" checkout -q FETCH_HEAD
   for patch in "$ROOT"/tools/patches/eden-*.patch; do git -C "$TP/eden" apply "$patch"; done
+  # The same Mali drivers (has_broken_pack_half) abort on a plain f32 to f16 conversion in a vertex stage too ("Cannot
+  # select: zero_extend (fp_round ...)" in __start__position_shader, a Mali-G57): F2F.F16.F32 goes through the integer
+  # packing as well, its low half taken back as an f16. A sed rather than a patch, as it's one line in the function;
+  # setup stops if that line isn't there any more.
+  convert="$TP/eden/src/shader_recompiler/backend/spirv/emit_spirv_convert.cpp"
+  sed -i '/^Id EmitConvertF16F32(EmitContext& ctx, Id value) {$/,/^}$/ s/^\( *\)return ctx\.OpFConvert(ctx\.F16\[1\], value);$/\1if (ctx.profile.has_broken_pack_half \&\& ctx.stage != Stage::Fragment \&\& ctx.stage != Stage::Compute) {\n\1    const Id bits{EmitPackHalf2x16(ctx, ctx.OpCompositeConstruct(ctx.F32[2], value, ctx.Const(0.0f)))};\n\1    return ctx.OpCompositeExtract(ctx.F16[1], ctx.OpBitcast(ctx.F16[2], bits), 0U);\n\1}\n&/' "$convert"
+  grep -q has_broken_pack_half "$convert" || { echo "Eden's EmitConvertF16F32 changed: tools/setup.sh can't apply the Mali fix" >&2; exit 1; }
 fi
 # Same versions as Eden's cpmfile.json.
 clone fmt https://github.com/fmtlib/fmt.git 12.1.0
