@@ -430,6 +430,10 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // and keeps its single instruction. <data>/pack_half_fix forces it on any Mali, <data>/no_pack_half_fix turns it off.
         options.broken_pack_half = c->props.vendorID == 0x13B5 && !NVN_FLAG("no_pack_half_fix") &&
                                    (NVN_FLAG("pack_half_fix") || !c->draw_indexed_indirect_count);
+        static bool pack_half_logged = false;
+        if (c->props.vendorID == 0x13B5 && !pack_half_logged && (pack_half_logged = true))
+            NVN_LOG("Mali f16 fix (packHalf2x16 and f32-to-f16 in vertex stages as integer operations): %s\n",
+                    options.broken_pack_half ? "on" : "off");
         // Samsung's Xclipse (vendor 0x144D, AMD RDNA inside) and AMD (0x1002): discards moved to the end, as Eden does
         // for them. <data>/no_demote_reorder at translation: as before; <data>/demote_reorder forces it on any GPU.
         options.demote_reorder = NVN_FLAG("demote_reorder") ||
@@ -526,6 +530,11 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         if (ok && final_key) {
             nvn::spirv_cache::global().insert(*final_key, out.shader);
             out.cache_key = *final_key;
+            // On the Mali drivers whose compiler aborts the game on some vertex stages, a new one is on disk before
+            // its pipeline is built (the writer thread would lose it to the abort): spirv.bin then has the culprit.
+            if (options.broken_pack_half && out.shader.stage != nvnshader::Stage::Fragment &&
+                out.shader.stage != nvnshader::Stage::Compute)
+                nvn::spirv_cache::global().wait_idle();
         }
         if (ok) note_spirv_opt(print, out.shader);
     }

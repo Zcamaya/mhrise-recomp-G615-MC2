@@ -16,6 +16,13 @@ clone() {  # <folder> <repo> <tag>: shallow clone of a fixed version
 # Eden (GPL-3.0-or-later): only src/shader_recompiler and the headers in src/common, at the commit this port was built
 # and tested with.
 EDEN_COMMIT=060026dc2d1daa749cf0b39378f132f506cbfd93
+# The patches are applied when Eden is fetched, so a checkout made before a patch (or this script's own edit below)
+# changed would keep building without it: a stamp of what was applied, and a fresh fetch when it no longer matches.
+EDEN_STAMP="$EDEN_COMMIT $(cat "$ROOT"/tools/patches/eden-*.patch "$0" | sha256sum | cut -c1-16)"
+if [ -d "$TP/eden" ] && [ "$(cat "$TP/eden/.mhrise-stamp" 2>/dev/null)" != "$EDEN_STAMP" ]; then
+  echo "third_party/eden was set up with older patches: fetching it again" >&2
+  rm -rf "$TP/eden"
+fi
 if [ ! -d "$TP/eden" ]; then
   git init -q "$TP/eden"
   git -C "$TP/eden" remote add origin https://git.eden-emu.dev/eden-emu/eden.git
@@ -30,6 +37,7 @@ if [ ! -d "$TP/eden" ]; then
   convert="$TP/eden/src/shader_recompiler/backend/spirv/emit_spirv_convert.cpp"
   sed -i '/^Id EmitConvertF16F32(EmitContext& ctx, Id value) {$/,/^}$/ s/^\( *\)return ctx\.OpFConvert(ctx\.F16\[1\], value);$/\1if (ctx.profile.has_broken_pack_half \&\& ctx.stage != Stage::Fragment \&\& ctx.stage != Stage::Compute) {\n\1    const Id bits{EmitPackHalf2x16(ctx, ctx.OpCompositeConstruct(ctx.F32[2], value, ctx.Const(0.0f)))};\n\1    return ctx.OpCompositeExtract(ctx.F16[1], ctx.OpBitcast(ctx.F16[2], bits), 0U);\n\1}\n&/' "$convert"
   grep -q has_broken_pack_half "$convert" || { echo "Eden's EmitConvertF16F32 changed: tools/setup.sh can't apply the Mali fix" >&2; exit 1; }
+  echo "$EDEN_STAMP" > "$TP/eden/.mhrise-stamp"
 fi
 # Same versions as Eden's cpmfile.json.
 clone fmt https://github.com/fmtlib/fmt.git 12.1.0
