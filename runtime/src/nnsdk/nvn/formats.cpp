@@ -2,6 +2,8 @@
 
 #include "nnsdk/nvn/nvn.h"
 
+#include <atomic>
+
 namespace nvn {
 
 namespace {
@@ -179,8 +181,78 @@ const FormatInfo* format_info(int nvn_format) {
     return &kFormats[nvn_format];
 }
 
-VkFormat vertex_format(uint8_t nvn_format) {
-    const auto* info = format_info(nvn_format);
-    return info && info->vk != VK_FORMAT_UNDEFINED ? info->vk : VK_FORMAT_R32G32B32A32_SFLOAT;
+namespace {
+bool vertex_buffer_format(VkFormat f) {
+    VkFormatProperties p{};
+    vkGetPhysicalDeviceFormatProperties(vk()->gpu, f, &p);
+    return p.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT;
 }
+
+// The same layout with a fourth component (Vulkan's order: R8G8B8 UNORM..SRGB, then R8G8B8A8 UNORM..SRGB; R16G16B16
+// UNORM..SFLOAT, then R16G16B16A16).
+VkFormat with_alpha(VkFormat f) {
+    static_assert(VK_FORMAT_R8G8B8A8_SRGB - VK_FORMAT_R8G8B8_SRGB == 14 && VK_FORMAT_R16G16B16A16_SFLOAT - VK_FORMAT_R16G16B16_SFLOAT == 7);
+    if (f >= VK_FORMAT_R8G8B8_UNORM && f <= VK_FORMAT_R8G8B8_SRGB) return VkFormat(f + 14);
+    if (f >= VK_FORMAT_R16G16B16_UNORM && f <= VK_FORMAT_R16G16B16_SFLOAT) return VkFormat(f + 7);
+    return VK_FORMAT_UNDEFINED;
+}
+
+// A scaled format as the plain integers it holds (USCALED, SSCALED, UINT, SINT in a row in every layout that has
+// them); the shader converts them to float, as it already does for the 32-bit ones, which have no scaled format.
+VkFormat as_integers(VkFormat f, uint8_t& fetch) {
+    switch (f) {
+        case VK_FORMAT_R8_USCALED: case VK_FORMAT_R8G8_USCALED: case VK_FORMAT_R8G8B8_USCALED:
+        case VK_FORMAT_R8G8B8A8_USCALED: case VK_FORMAT_A2B10G10R10_USCALED_PACK32: case VK_FORMAT_R16_USCALED:
+        case VK_FORMAT_R16G16_USCALED: case VK_FORMAT_R16G16B16_USCALED: case VK_FORMAT_R16G16B16A16_USCALED:
+            fetch = uint8_t(VertexFetch::UnsignedScaled);
+            return VkFormat(f + 2);
+        case VK_FORMAT_R8_SSCALED: case VK_FORMAT_R8G8_SSCALED: case VK_FORMAT_R8G8B8_SSCALED:
+        case VK_FORMAT_R8G8B8A8_SSCALED: case VK_FORMAT_A2B10G10R10_SSCALED_PACK32: case VK_FORMAT_R16_SSCALED:
+        case VK_FORMAT_R16G16_SSCALED: case VK_FORMAT_R16G16B16_SSCALED: case VK_FORMAT_R16G16B16A16_SSCALED:
+            fetch = uint8_t(VertexFetch::SignedScaled);
+            return VkFormat(f + 2);
+        default: return VK_FORMAT_UNDEFINED;
+    }
+}
+static_assert(VK_FORMAT_R16G16B16A16_UINT == VK_FORMAT_R16G16B16A16_USCALED + 2 &&
+              VK_FORMAT_A2B10G10R10_SINT_PACK32 == VK_FORMAT_A2B10G10R10_SSCALED_PACK32 + 2);
+
+VertexInput choose_vertex_input(uint8_t nvn_format) {
+    const FormatInfo* info = format_info(nvn_format);
+    if (!info || info->vk == VK_FORMAT_UNDEFINED) return {VK_FORMAT_R32G32B32A32_SFLOAT, uint8_t(VertexFetch::Float)};
+    const VertexInput wanted{info->vk, uint8_t(info->fetch)};
+    if (vertex_buffer_format(wanted.format)) return wanted;
+    // Not every driver reads every format from a vertex buffer (the three-component 8- and 16-bit ones and the
+    // scaled ones are optional in Vulkan), and one that doesn't can't be trusted to reject it: ARM's G57 driver
+    // crashed compiling such a pipeline. Each fallback reads the same bytes.
+    VertexInput integers = wanted;
+    integers.format = as_integers(wanted.format, integers.fetch);
+    VertexInput tried[4] = {integers, {with_alpha(wanted.format), uint8_t(wanted.fetch | kFetchWIsOne)}};
+    tried[2] = {integers.format ? with_alpha(integers.format) : VK_FORMAT_UNDEFINED, uint8_t(integers.fetch | kFetchWIsOne)};
+    for (const VertexInput& v : tried) {
+        if (v.format == VK_FORMAT_UNDEFINED || !vertex_buffer_format(v.format)) continue;
+        NVN_LOG("vertex format %s: the driver doesn't read Vulkan format %d from vertex buffers, read as %d%s%s\n",
+                info->name, int(wanted.format), int(v.format), v.fetch != wanted.fetch ? ", converted in the shader" : "",
+                v.fetch & kFetchWIsOne ? " (w read as 1)" : "");
+        return v;
+    }
+    NVN_LOG("vertex format %s: the driver doesn't read Vulkan format %d from vertex buffers, and none of the "
+            "replacements either\n", info->name, int(wanted.format));
+    return wanted;
+}
+}  // namespace
+
+VertexInput vertex_input(uint8_t nvn_format) {
+    // Decided on first use, per format (only formats really used for vertices get queried and logged).
+    static std::atomic<uint32_t> known[256];
+    uint32_t packed = known[nvn_format].load(std::memory_order_acquire);
+    if (!packed) {
+        const VertexInput v = choose_vertex_input(nvn_format);
+        packed = 1u << 31 | uint32_t(v.fetch) << 24 | uint32_t(v.format);
+        known[nvn_format].store(packed, std::memory_order_release);
+    }
+    return {VkFormat(packed & 0xffffff), uint8_t(packed >> 24 & 0x7f)};
+}
+
+VkFormat vertex_format(uint8_t nvn_format) { return vertex_input(nvn_format).format; }
 }  // namespace nvn

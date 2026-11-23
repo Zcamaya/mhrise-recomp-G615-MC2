@@ -22,6 +22,16 @@ struct FormatInfo {
 
 // nullptr si no lo conocemos todavía (se registra en el log).
 const FormatInfo* format_info(int nvn_format);
+
+// A vertex attribute as Vulkan reads it: its format, and how the vertex shader takes it (VertexFetch, plus
+// kFetchWIsOne when a three-component format is read as four and w has to read as 1, as it does on the console).
+// Formats the driver can't read from a vertex buffer are swapped for one it can (see formats.cpp).
+constexpr uint8_t kFetchWIsOne = 8;
+struct VertexInput {
+    VkFormat format;
+    uint8_t fetch;
+};
+VertexInput vertex_input(uint8_t nvn_format);
 VkFormat vertex_format(uint8_t nvn_format);
 
 }  // namespace nvn

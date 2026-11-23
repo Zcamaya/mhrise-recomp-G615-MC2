@@ -501,9 +501,11 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         for (size_t c = 0; c < 4; c++) runtime.previous_stage_stores.Set(Shader::IR::Attribute::PositionX + c);
         runtime.input_topology = static_cast<Shader::InputTopology>(options.input_topology);
         for (size_t k = 0; k < 16; k++) {
-            const uint32_t type = options.input_types >> (4 * k) & 0xF;
+            const uint32_t type = options.input_types >> (4 * k) & 0x7;
             if (type <= static_cast<uint32_t>(Shader::AttributeType::UnsignedScaled))
                 runtime.generic_input_types[k] = static_cast<Shader::AttributeType>(type);
+            // (bit 3: a three-component format read as four, w reads as 1; nvn::vertex_input)
+            if (options.input_types >> (4 * k) & 0x8) runtime.generic_input_w_one |= 1u << k;
         }
         runtime.convert_depth_mode = options.convert_depth_mode;
         Shader::Backend::Bindings bindings{};

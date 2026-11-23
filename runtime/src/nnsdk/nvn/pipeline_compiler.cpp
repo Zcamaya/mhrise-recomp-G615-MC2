@@ -73,10 +73,7 @@ Guard* guard() {
 
 }  // namespace
 
-static VertexFetch fetch_type(uint8_t format) {
-    const FormatInfo* info = format_info(format);
-    return info ? info->fetch : VertexFetch::Float;
-}
+static uint8_t fetch_type(uint8_t format) { return vertex_input(format).fetch; }
 
 uint64_t vertex_input_types(const PipelineKey& key, uint64_t inputs) {
     uint64_t types = 0;
@@ -87,9 +84,12 @@ uint64_t vertex_input_types(const PipelineKey& key, uint64_t inputs) {
 
 void normalize_vertex_input(PipelineKey& key) {
     // Keep the fetch type in the shader ABI even when Vulkan takes the buffer layout per draw.
+    // (a format read wider than it is keeps its own: w is fixed in the shader)
     constexpr uint8_t representative[]{0, 0x04, 0x03, 0x56, 0x55};
-    for (auto& a : key.attribs)
-        a = {representative[a.format ? unsigned(fetch_type(a.format)) : 0], 0, 0};
+    for (auto& a : key.attribs) {
+        const uint8_t fetch = a.format ? fetch_type(a.format) : 0;
+        a = {fetch & kFetchWIsOne ? a.format : representative[fetch], 0, 0};
+    }
     memset(key.strides, 0, sizeof key.strides);
     memset(key.divisors, 0, sizeof key.divisors);
 }

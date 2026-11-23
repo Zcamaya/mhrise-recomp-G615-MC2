@@ -20,6 +20,8 @@ This project's changes, on top of that commit:
   triangle edges.
 - Qualcomm: an `OpReturn` in place of `OpUnreachable` where its driver mis-optimises.
 - Shared memory in the entry point's interface only where SPIR-V 1.4+ asks for it.
+- `RuntimeInfo::generic_input_w_one`: generics read from a four-component format that stands in for a
+  three-component one the driver can't fetch (`nvn::vertex_input`); their w reads as 1.
 
 A change here that alters the SPIR-V produced needs `kKeyVersion` in `runtime/src/nnsdk/nvn/program.cpp` bumped, or
 cached translations keep being used.

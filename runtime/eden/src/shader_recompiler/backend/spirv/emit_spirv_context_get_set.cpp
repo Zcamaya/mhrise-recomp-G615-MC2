@@ -312,6 +312,11 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, Id vertex) {
             // Attribute is disabled or varying component is not written
             return ctx.Const(element == 3 ? 1.0f : 0.0f);
         }
+        if (element == 3 && (ctx.runtime_info.generic_input_w_one >> index & 1)) {
+            // 1 as the attribute's type gives it: an integer one keeps its bits in the float register
+            return generic.load_op == InputGenericLoadOp::Bitcast ? ctx.OpBitcast(ctx.F32[1], ctx.Const(1u))
+                                                                  : ctx.Const(1.0f);
+        }
         const Id pointer{
             AttrPointer(ctx, generic.pointer_type, vertex, generic.id, ctx.Const(element))};
         const Id value{ctx.OpLoad(generic.component_type, pointer)};

@@ -57,7 +57,7 @@ bool specialize_vertex_fetch(const std::vector<uint32_t>& w, uint64_t signature,
         }
         if (op == SpvOpEntryPoint && n >= 4) vertex |= w[i + 1] == SpvExecutionModelVertex;
         if (op == SpvOpDecorate && n == 4 && w[i + 2] == SpvDecorationLocation && w[i + 3] < 16 && w[i + 1] < bound)
-            location[w[i + 1]] = Fetch((signature >> (4 * w[i + 3])) & 15);
+            location[w[i + 1]] = Fetch((signature >> (4 * w[i + 3])) & 7);  // (bit 3, w read as 1, only in the typed translation)
         if ((op == SpvOpTypeFloat && n == 3) ||
             ((op == SpvOpTypeInt || op == SpvOpTypeVector || op == SpvOpTypePointer) && n == 4)) {
             if (w[i + 1] >= bound) return false;

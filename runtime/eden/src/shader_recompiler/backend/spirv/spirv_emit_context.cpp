@@ -793,7 +793,14 @@ void EmitContext::DefineAttributeMemAccess(const Info& info) {
                     return value;
                 };
             }()};
-            OpReturnValue(result);
+            if (runtime_info.generic_input_w_one >> index & 1) {
+                // (w reads as 1: see RuntimeInfo::generic_input_w_one)
+                const Id one{generic.load_op == InputGenericLoadOp::Bitcast ? OpBitcast(F32[1], Const(1U))
+                                                                            : Const(1.0f)};
+                OpReturnValue(OpSelect(F32[1], OpIEqual(U1, masked_index, Const(3U)), one, result));
+            } else {
+                OpReturnValue(result);
+            }
             ++label_index;
         }
         AddLabel(end_block);

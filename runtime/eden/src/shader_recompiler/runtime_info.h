@@ -84,6 +84,9 @@ struct TransformFeedbackVarying {
 
 struct RuntimeInfo {
     std::array<AttributeType, 32> generic_input_types{};
+    // Generics read from a four-component format standing in for a three-component one the driver can't
+    // fetch: their w reads as 1, as the three-component format gives it.
+    u32 generic_input_w_one{};
     VaryingState previous_stage_stores;
     std::map<IR::Attribute, IR::Attribute> previous_stage_legacy_stores_mapping;
 

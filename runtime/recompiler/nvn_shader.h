@@ -96,7 +96,8 @@ struct Options {
     // 0 float, 1 entero con signo, 2 sin signo, 3 y 4 enteros que se pasan a float). El Maxwell lee los atributos
     // enteros tal cual, como bits en el registro; Vulkan solo define un formato UINT/SINT en una entrada entera. Con todo
     // declarado float, el Adreno y Turnip dan los bits igual, pero la Mali los convierte (5 → 5.0) y los índices de
-    // hueso del skinning salían disparados: personajes con picos hasta el infinito. 0: todo float, como antes.
+    // hueso del skinning salían disparados: personajes con picos hasta el infinito. 0: todo float, como antes. El bit 3 (8):
+    // un formato de tres componentes que se lee como de cuatro porque el driver no tiene el de tres, y w tiene que dar 1.
     uint64_t input_types = 0;
     // Subgrupos del dispositivo (VkPhysicalDeviceSubgroupProperties): tamaño, etapas (bits de
     // VkShaderStageFlagBits) y operaciones (VkSubgroupFeatureFlagBits). Sin nada, no se usan.
