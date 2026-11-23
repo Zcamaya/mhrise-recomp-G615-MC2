@@ -3,11 +3,13 @@
 #include "loader/live_read.h"
 #include "loader/lua_mod_hooks.h"
 #include "loader/lua_values.h"
+#include "loader/mod_ui.h"
 #include <algorithm>
 #include <android/log.h>
 #include <atomic>
 #include <cstring>
 #include <lua.hpp>
+#include <string>
 #include <memory>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -65,6 +67,7 @@ struct Subscriber {
   Layout layout;
   int pre, post;
   std::atomic<bool> enabled{true};
+  std::string last_error;  // (each error is reported once, not every call)
 };
 struct Site {
   NativePatch
@@ -237,14 +240,17 @@ uint64_t bits(lua_State *L, int index) {
   throw std::runtime_error(
       "Expected sdk.to_ptr, a hook argument, or managed object");
 }
+// As in REFramework, a callback that errors stays hooked: the game's own method runs as if it weren't there and the
+// next call tries again. Scripts lean on that (one written for the hunter can error on every other player's call
+// before it has what it needs). The calls are on the Lua lock, so last_error needs no lock of its own.
 void report_error(Subscriber &s, const std::string &error) {
-  if (!s.enabled.exchange(false))
+  if (s.last_error == error)
     return;
+  s.last_error = error;
   auto owner = read<uint32_t>(db->methods, 12ull * s.method) & id_mask;
-  log_message(ANDROID_LOG_ERROR, (db->full_name(owner) + "." +
-                                  std::string(db->method(s.method, owner)) +
-                                  " hook disabled: " + error)
-                                     .c_str());
+  auto message = db->full_name(owner) + "." + std::string(db->method(s.method, owner)) + " hook: " + error;
+  log_message(ANDROID_LOG_ERROR, message.c_str());
+  script_error(message);
 }
 void execute(Invocation &inv, size_t n, int ref, int argument) {
   auto previous = swap_hook_storage(&inv.storage[n]);

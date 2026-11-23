@@ -1651,6 +1651,10 @@ final class SettingsMenu {
                         tr("Buttons pressed together on the controller open and close the MOD UI. L3 + R3 by default, as in "
                                 + "REFramework.", "在手柄上同时按下这些按键可打开或关闭 MOD 界面。默认为 L3 + R3，与 REFramework 相同。"),
                         this::captureHotkey);
+                number(tr("MOD UI opacity", "MOD 界面不透明度"),
+                        tr("How much of the game the MOD UI's window hides. Lower to watch the hunt while changing values.",
+                                "MOD 界面窗口遮挡游戏画面的程度。调低后可以一边调整数值一边观察狩猎。"),
+                        30, 100, 5, " %", () -> ModUi.opacity(ini), v -> ini.set(ModUi.OPACITY, Integer.toString(v)));
             }
         }
         if (folder == null) {

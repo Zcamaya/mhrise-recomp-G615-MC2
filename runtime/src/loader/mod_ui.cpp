@@ -16,6 +16,8 @@
 #include <jni.h>
 #include <lua.hpp>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <vector>
 
 namespace {
@@ -785,12 +787,13 @@ void apply_theme(ImGuiStyle &st) {
   st.WindowRounding = 6;
   st.ChildRounding = st.FrameRounding = st.PopupRounding = st.GrabRounding = st.ScrollbarRounding = 4;
   st.WindowBorderSize = 2;
-  st.FrameBorderSize = 0;
-  st.WindowPadding = {12, 10};
-  st.FramePadding = {10, 6};
-  st.ItemSpacing = {10, 8};
-  st.ScrollbarSize = 18;  // (a finger drags it)
-  st.GrabMinSize = 16;
+  st.FrameBorderSize = 1;  // (the settings menu's thin edge: a box is visible ticked or not)
+  st.WindowPadding = {14, 12};
+  st.FramePadding = {10, 9};  // (rows about as tall as a finger, like the settings menu's)
+  st.ItemSpacing = {10, 10};
+  st.ItemInnerSpacing = {10, 6};
+  st.ScrollbarSize = 22;  // (a finger drags it)
+  st.GrabMinSize = 22;
   st.WindowTitleAlign = {.5f, .5f};
 }
 
@@ -805,7 +808,12 @@ void restyle(float scale) {
   ImGui::GetIO().FontGlobalScale = font_scale > 0 ? scale / font_scale : scale * 18 / 13;  // (its font is 13 px)
 }
 float ui_scale = 1;
-bool place_again = true;  // (a new size puts the window back where a fresh one goes)
+std::mutex errors_mutex;
+std::vector<std::string> errors;  // (newest last, each once)
+bool place_again = true;
+std::atomic<float> window_alpha = .94f;  // (Mods → MOD UI opacity)
+float content_height = 0;  // how tall last frame's contents were: the window fits them
+int sections = 0, sections_drawn = 0;  // scripts with controls (last frame's, this frame's)  // (a new size puts the window back where a fresh one goes)
 
 enum class Primitive { Text, Line, FilledRect, OutlineRect, FilledCircle, OutlineCircle, FilledQuad, OutlineQuad,
                        WorldToScreen, WorldText };
@@ -877,12 +885,45 @@ int primitive(lua_State *L) {
   return 0;
 }
 } // namespace
-int mod_lua::call_ui_callback(lua_State *L) {
+void mod_lua::script_error(const std::string &message) {
+  std::lock_guard lock(errors_mutex);
+  if (std::find(errors.begin(), errors.end(), message) != errors.end()) return;
+  if (errors.size() == 20) errors.erase(errors.begin());
+  errors.push_back(message);
+}
+void mod_lua::clear_script_errors() {
+  std::lock_guard lock(errors_mutex);
+  errors.clear();
+}
+static void draw_errors() {
+  std::lock_guard lock(errors_mutex);
+  if (errors.empty()) return;
+  ImGui::PushStyleColor(ImGuiCol_Text, rgb(0xF08070));
+  bool open = ImGui::CollapsingHeader(("Script errors (" + std::to_string(errors.size()) + ")").c_str(),
+                                      ImGuiTreeNodeFlags_DefaultOpen);
+  ImGui::PopStyleColor();
+  if (!open) return;
+  ImGui::TextDisabled("A script that stops on an error while loading adds nothing below.");
+  for (auto &e : errors)
+    ImGui::TextWrapped("%s", e.c_str());
+  ImGui::Separator();
+}
+int mod_lua::call_ui_callback(lua_State *L, const char *id) {
   auto base = scopes.size();
+  if (id && drawing) ImGui::PushID(id);  // (two scripts can both have a "Enabled" checkbox)
   int status = lua_pcall(L, 0, 0, 0);
   while (scopes.size() > base)
     close_scope();
+  if (id && drawing) ImGui::PopID();
   return status;
+}
+bool mod_lua::script_section(const char *name) {
+  if (!drawing) return true;
+  ++sections_drawn;
+  ImGui::PushStyleColor(ImGuiCol_Text, rgb(0xE2B65C));
+  bool open = ImGui::CollapsingHeader(visible_text(name), ImGuiTreeNodeFlags_DefaultOpen);
+  ImGui::PopStyleColor();
+  return open;
 }
 bool mod_lua::ui_visible() { return visible.load(); }
 void mod_lua::service_ui_frame() {
@@ -902,14 +943,32 @@ void mod_lua::service_ui_frame() {
   ImGui::NewFrame();
   drawing = true;
   if (visible) {
-    // Where the settings menu goes: centred, as wide as it (940 dp at most, 94% of the screen), 92% of the height
+    // As wide as the settings menu (940 dp at most, 94% of the screen), from near the top, and only as tall as what
+    // the scripts draw (up to the screen's bottom edge, then it scrolls)
     auto cond = place_again ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
     place_again = false;
-    ImGui::SetNextWindowSize({std::min(io.DisplaySize.x * .94f, 940 * ui_scale), io.DisplaySize.y * .92f}, cond);
-    ImGui::SetNextWindowPos({io.DisplaySize.x * .5f, io.DisplaySize.y * .5f}, cond, {.5f, .5f});
+    const float w = std::min(io.DisplaySize.x * .94f, 940 * ui_scale), top = io.DisplaySize.y * .04f;
+    ImGui::SetNextWindowPos({io.DisplaySize.x * .5f, top}, cond, {.5f, 0});
+    float y = top;
+    if (auto *win = ImGui::FindWindowByName("###MOD UI")) y = win->Pos.y;
+    const float most = std::max(io.DisplaySize.y * .3f, io.DisplaySize.y * .98f - y);
+    ImGui::SetNextWindowSize({w, std::clamp(content_height, std::min(160 * ui_scale, most), most)});
+    ImGui::SetNextWindowBgAlpha(window_alpha);
+    // The settings menu's title: gold, with how many mods have controls
+    std::string title = "MOD UI";
+    if (sections) title += "  \u25C6  " + std::to_string(sections) + (sections == 1 ? " mod" : " mods");
+    title += "###MOD UI";
     bool open = true;
-    if (ImGui::Begin("MOD UI", &open, ImGuiWindowFlags_NoBringToFrontOnFocus))
+    ImGui::PushStyleColor(ImGuiCol_Text, rgb(0xE2B65C));
+    bool shown = ImGui::Begin(visible_text(title.c_str()), &open, ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoResize);
+    ImGui::PopStyleColor();
+    sections_drawn = 0;
+    if (shown) {
+      draw_errors();
       draw_ui();
+      content_height = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + ImGui::GetStyle().WindowPadding.y;
+      sections = sections_drawn;
+    }
     ImGui::End();
     if (!open) visible = false;
   }
@@ -1060,6 +1119,12 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeCreate(JNIEnv *, jclass,
   needs_render = true;
   had_geometry = false;
 }
+// Mods → MOD UI opacity
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_iamwilmar_mhriseport_ModUi_nativeOpacity(JNIEnv *, jclass, jfloat alpha) {
+  window_alpha = std::clamp(float(alpha), .3f, 1.f);
+}
+
 // Settings → Display → Menu size changed (or the screen did): the same font, scaled
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_iamwilmar_mhriseport_ModUi_nativeScale(JNIEnv *, jclass, jfloat scale) {

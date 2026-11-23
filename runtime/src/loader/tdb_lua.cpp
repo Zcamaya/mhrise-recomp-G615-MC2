@@ -480,12 +480,14 @@ bool load_scripts(lua_State *L, const fs::path &directory) {
   for (const auto &path : scripts) {
     auto previous = mod_lua::checkpoint();
     auto previous_events = mod_lua::event_checkpoint(L);
-    if (luaL_loadfilex(L, path.c_str(), "t") || lua_pcall(L, 0, 0, 0)) {
+    mod_lua::set_loading_script(path.stem().string());
+    bool failed = luaL_loadfilex(L, path.c_str(), "t") || lua_pcall(L, 0, 0, 0);
+    mod_lua::set_loading_script({});
+    if (failed) {
       const char *error = lua_tostring(L, -1);
-      report((path.filename().string() + ": " +
-              (error ? error : "non-string Lua error"))
-                 .c_str(),
-             true);
+      auto message = path.filename().string() + ": " + (error ? error : "non-string Lua error");
+      report(message.c_str(), true);
+      mod_lua::script_error(message);
       lua_pop(L, 1);
       mod_lua::rollback(L, previous);
       mod_lua::rollback_events(L, previous_events);
@@ -497,6 +499,7 @@ bool load_scripts(lua_State *L, const fs::path &directory) {
 bool initialize_resident(const Module &main, const fs::path &directory,
                          bool run = true) {
   auto &tdb = *resident_metadata;
+  mod_lua::clear_script_errors();
   resident_vm.reset(luaL_newstate());
   auto *L = resident_vm.get();
   if (!L)

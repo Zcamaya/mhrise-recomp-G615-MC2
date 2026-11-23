@@ -16,6 +16,7 @@ import javax.microedition.khronos.opengles.GL10;
 final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
     private static native void nativeCreate(float scale);
     private static native void nativeScale(float scale);
+    private static native void nativeOpacity(float alpha);
     private static native int nativeFrame(int width,int height);
     private static native void nativeSize(int width,int height);
     private static native boolean nativePending();
@@ -65,6 +66,14 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
     // REFramework. "0": none. android_main.cpp reads the same line to open the menu; while it's open, this window has
     // the keys, so it closes it here.
     static final String HOTKEY = "mod_ui_hotkey";
+    static final String OPACITY = "mod_ui_opacity";  // (percent: how much of the hunt the window hides)
+    static int opacity(Ini ini) {
+        try {
+            return Math.max(30, Math.min(100, Integer.parseInt(ini.get(OPACITY).trim())));
+        } catch (RuntimeException e) {
+            return 94;
+        }
+    }
     static final int[] DEFAULT_HOTKEY = {KeyEvent.KEYCODE_BUTTON_THUMBL, KeyEvent.KEYCODE_BUTTON_THUMBR};
 
     static int[] hotkey(Ini ini) {
@@ -93,7 +102,11 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
         held.clear();
         if (open) {
             java.io.File folder = SettingsMenu.gameFolder(activity);
-            if (folder != null) menuHotkey = hotkey(new Ini(folder));
+            if (folder != null) {
+                Ini ini = new Ini(folder);
+                menuHotkey = hotkey(ini);
+                nativeOpacity(opacity(ini) / 100f);
+            }
         }
         if (open) nativeScale(uiScale());  // (Menu size may have changed since)
         nativeMenu(open);

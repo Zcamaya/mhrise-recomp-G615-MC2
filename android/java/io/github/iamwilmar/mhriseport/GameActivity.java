@@ -49,6 +49,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     // The MOD UI draws the Lua scripts' windows: with no script running there's nothing to draw, and the button seemed
     // to do nothing. Says why instead.
+    private boolean luaAtLaunch;  // (the runtime only reads the scripts when the game starts)
     private boolean modUiReady() {
         String why;
         switch (ModUi.runtime()) {
@@ -57,6 +58,15 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 why = "The scripts start once you're in the village or a quest (not on the title screen). Open the MOD UI then.";
                 break;
             default:
+                if (luaAtLaunch) {
+                    why = "The Lua runtime didn't start. Settings → Debug → Lua / TDB shows why.";
+                    break;
+                }
+                if (luaScripts()) {
+                    why = "Lua mods added since the game started load the next time it starts: close the game fully "
+                            + "and open it again.";
+                    break;
+                }
                 why = "No Lua scripts are installed, so the MOD UI has nothing to show. Add a REFramework script mod in "
                         + "Settings → Mods & cheats, or turn on Debug → Object Explorer, and restart the game.";
         }
@@ -116,7 +126,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         applyPad();
         pad = new TouchPad(this, controls, this);
         pad.setGameFps(gameFps());
-        pad.setModsAvailable(luaScripts());
+        luaAtLaunch = luaScripts();
+        pad.setModsAvailable(luaAtLaunch);
         // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
         getWindow().getDecorView().post(this::showPad);
         showSaveMessage();
