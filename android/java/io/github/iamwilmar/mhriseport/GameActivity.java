@@ -33,13 +33,43 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     static native void nativePad(float deadzone, float trigger, int rightAxes, long[] combos, long[] mapping);
     static native void nativeTextAnswer(int serial, String text);
     static native void nativeTurbo(boolean on);
+    // Load after the NativeActivity has configured the game paths and driver environment.
+    private static final class RuntimeLifecycle {
+        static { System.loadLibrary("nnsdk"); }
+        static native void update(boolean resumed, boolean releasingSurface);
+    }
+    private boolean resumed;
 
     private Controls controls;
     private TouchPad pad;
+    private ModUi modUi;
+    void showModUi() { modUi.setMenu(true); }
+    // The controller hotkey (android_main.cpp, from a thread of its own) and the floating button
+    public void toggleModUi() {
+        runOnUiThread(() -> {
+            if (modUi != null) modUi.setMenu(!modUi.menuOpen());
+        });
+    }
+
+    // A build with the Lua runtime (tools/build_apk.sh LUA_LAB=1, the releases): it ships assets/lua_build. The script
+    // menus and the mod UI only exist there.
+    private static Boolean lua;
+    static boolean luaBuild(android.content.Context c) {
+        if (lua == null) {
+            try (java.io.InputStream in = c.getAssets().open("lua_build")) {
+                lua = true;
+            } catch (java.io.IOException e) {
+                lua = false;
+            }
+        }
+        return lua;
+    }
     private boolean shown;
     private Vibrator vibrator;
     private CaptureButton capture;  // the floating capture button, while Debug → Capture button is on
     private WindowManager.LayoutParams captureLp;
+    private ModButton modButton;  // the floating MOD UI button, while Mods → MOD UI button is on
+    private WindowManager.LayoutParams modButtonLp;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -98,7 +128,12 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         try {
             getWindowManager().addView(pad, lp);
             shown = true;
+            if (luaBuild(this)) {
+                modUi = new ModUi(this);
+                if (resumed) modUi.onResume();
+            }
             showCapture();
+            showModButton();
         } catch (RuntimeException e) {
             // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
             System.err.println("[controles] no se pudo poner la ventana de los controles: " + e);
@@ -141,15 +176,32 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        RuntimeLifecycle.update(true, false);
+        if (modUi != null) modUi.onResume();
         applyTurbo(true);
     }
 
     @Override
     protected void onPause() {
+        if (modUi != null) modUi.onPause();
         applyTurbo(false);
         if (pad != null) pad.releaseAll();  // (un dedo que se queda en un botón al irse la app no lo deja pulsado)
         if (controls != null) controls.saveNow();  // (the app may not come back: swiped away from recents, killed for memory)
+        resumed = false;
+        RuntimeLifecycle.update(false, false);
         super.onPause();
+    }
+
+    @Override
+    public void surfaceDestroyed(android.view.SurfaceHolder holder) {
+        // NativeActivity waits for the frame consumer to release its old swapchain.
+        RuntimeLifecycle.update(resumed, true);
+        try {
+            super.surfaceDestroyed(holder);
+        } finally {
+            RuntimeLifecycle.update(resumed, false);
+        }
     }
 
     // The capture button goes in its own small window above the controls' one, only as big as the button, so touches
@@ -192,6 +244,57 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         }
     }
 
+    // The MOD UI button, the same way: its own small window, added after the MOD UI's so it stays above it and can close it
+    private void showModButton() {
+        if (!shown || modUi == null) return;
+        File folder = SettingsMenu.gameFolder(this);
+        boolean want = folder != null && new Ini(folder).on(ModButton.SWITCH);
+        if (want == (modButton != null)) return;
+        if (!want) {
+            try {
+                getWindowManager().removeViewImmediate(modButton);
+            } catch (RuntimeException ignored) {
+            }
+            modButton = null;
+            return;
+        }
+        ModButton b = new ModButton(this, new ModButton.Host() {
+            @Override public void toggle() { toggleModUi(); }
+            @Override public void moved(int x, int y) { placeModButton(x, y); }
+            @Override public void tick() { GameActivity.this.tick(); }
+        });
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(b.size(), b.size(),
+                WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                        | overlayAcceleration(),
+                PixelFormat.TRANSLUCENT);
+        lp.token = getWindow().getDecorView().getWindowToken();
+        lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        lp.gravity = Gravity.TOP | Gravity.LEFT;
+        lp.setTitle("mod button");
+        try {
+            getWindowManager().addView(b, lp);
+            modButton = b;
+            modButtonLp = lp;
+            placeModButton(b.x, b.y);
+        } catch (RuntimeException e) {
+            System.err.println("[controles] couldn't add the MOD UI button: " + e);
+        }
+    }
+
+    private void placeModButton(int x, int y) {
+        if (modButton == null) return;
+        View decor = getWindow().getDecorView();
+        int size = modButton.size();
+        modButtonLp.x = modButton.x = Math.max(0, Math.min(x, decor.getWidth() - size));
+        modButtonLp.y = modButton.y = Math.max(0, Math.min(y, decor.getHeight() - size));
+        try {
+            getWindowManager().updateViewLayout(modButton, modButtonLp);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
     // Kept on the screen, even if it was left near an edge on a bigger screen or in the other orientation.
     private void placeCapture(int x, int y) {
         if (capture == null) return;
@@ -207,12 +310,22 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     @Override
     protected void onDestroy() {
+        // NativeActivity will tear down the runtime. Let parked threads finish cleanup with audio paused.
+        RuntimeLifecycle.update(false, true);
+        if (modUi != null) modUi.dispose();
         if (capture != null) {
             try {
                 getWindowManager().removeViewImmediate(capture);
             } catch (RuntimeException ignored) {
             }
             capture = null;
+        }
+        if (modButton != null) {
+            try {
+                getWindowManager().removeViewImmediate(modButton);
+            } catch (RuntimeException ignored) {
+            }
+            modButton = null;
         }
         if (shown) {
             try {
@@ -239,6 +352,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         applyPad();
         pad.invalidate();
         showCapture();
+        showModButton();
         applyTurbo(true);
     }
 
@@ -256,6 +370,11 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             nativeTouch(buttons, sticksOn, lx, ly, rx, ry);
         } catch (UnsatisfiedLinkError ignored) {
         }
+    }
+
+    @Override
+    public boolean modTouch(int action, int id, float screenX, float screenY) {
+        return modUi != null && modUi.routeTouch(action, id, screenX, screenY);
     }
 
     @Override
@@ -341,9 +460,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     // Settings → Mods & cheats: a mod's zip or a cheat file, copied into the mods folder (ModFiles), then the menu again
     void importMod() {
-        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-                .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
-                        "application/octet-stream"}), IMPORT_MOD);
+        // SAF providers disagree on MIME types for RAR and 7z. Detect the format from the contents.
+        start(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), IMPORT_MOD);
     }
 
     void importCheats() {
@@ -372,7 +490,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         new Thread(() -> {
             String done;
             try {
-                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importZip(getContentResolver(), uri, data);
+                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importArchive(getContentResolver(), uri, data);
                 else if (request == IMPORT_CHEATS) done = "Cheats added: " + ModFiles.importCheats(getContentResolver(), uri, data);
                 else if (request == IMPORT_DRIVER) done = "Driver added: " + Drivers.unpack(this, uri) + ". Choose it in the list to use it.";
                 else done = "Lossless.dll imported (" + Drivers.importDll(this, uri, data) + "). It's used from the next start.";

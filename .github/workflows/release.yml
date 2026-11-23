@@ -40,6 +40,7 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
           KS_PASS: ${{ secrets.RELEASE_KS_PASS }}
+          LUA_LAB: '1'
         run: |
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
           if [ -z "$KEYSTORE_B64" ] || [ -z "$KS_PASS" ]; then

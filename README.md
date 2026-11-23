@@ -270,6 +270,10 @@ tools/build_apk.sh   # builds build/mhriseport.apk
 adb install -r build/mhriseport.apk
 ```
 
+`LUA_LAB=1 tools/build_apk.sh` adds the Lua runtime for mods (CMake fetches Lua, Dear ImGui, FreeType and JSON for
+Modern C++, and the build fetches libarchive-android for rar/7z archives); the CI builds and the releases are made that
+way. `tools/build_ffmpeg.sh` first gives it FFmpeg's MP4 demuxer for some of the cutscenes.
+
 `ANDROID_HOME` selects the SDK (default `~/Library/Android/sdk`). The APK is signed with the Android debug key unless you
 pass `KEYSTORE=… KS_PASS=…`. `RELEASE=1` makes the build for players: `-O3` without debug info, unused code and duplicate
 functions removed, symbols stripped, and an APK that isn't debuggable. Releases are built that way by the `release`
@@ -328,6 +332,12 @@ gives every value both have. Have a save of your own on the target side for the 
 The port itself is [IamWilmar](https://github.com/IamWilmar)'s work; this fork builds on it. If you'd like to thank
 him, he has a Ko-fi at [ko-fi.com/iamwilmar](https://ko-fi.com/iamwilmar).
 
+The Lua scripting for mods, PC mod import (resource and Lua mods, zip, rar and 7z), the Chinese menus, and the fixes
+for blood splashes turning into big patches and some collision particles drawn hugely magnified come from
+[yun-wulian](https://github.com/yun-wulian)'s fork, [yun-wulian/mhrise-recomp](https://github.com/yun-wulian/mhrise-recomp)
+(its commits up to 2026-11-22, merged with their history). Their NVN/Vulkan resource work behind those fixes came
+with it.
+
 ## License
 
 GPL-3.0-or-later (see [LICENSE](LICENSE)), because it builds on Eden's shader recompiler (GPL-3.0-or-later). Third-party
@@ -367,6 +377,17 @@ and the first files it served (`[fs] mod file:`). Your game folder is never chan
 Settings → **Mods & cheats** does the same from the app: **Add a mod (.zip)** takes a zip made for Eden or Yuzu (it
 finds the `romfs`/`cheats` folders inside, or a bare `natives/...` tree), and each mod gets an on/off row and can be
 removed. `exefs` patches aren't used.
+
+### Lua scripts
+
+Builds with the Lua runtime (the releases; `LUA_LAB=1` in [Building](#building)) also run REFramework-style Lua mods:
+the PC version's `reframework/autorun/*.lua` scripts, with their `reframework/data` files. **Add a mod** takes a PC mod's
+archive (zip, rar or 7z) and puts its scripts and resource files where the game reads them. How much of a script works
+depends on which REFramework calls it uses: the common ones (hooks on the game's methods, singletons, managed objects,
+on-frame windows and ImGui) are there, not all of them. Settings → **Mods & cheats** → **MOD UI** opens the scripts'
+own windows, and so do **L3 + R3** on a controller (REFramework's own shortcut; Mods & cheats → MOD UI controller
+hotkey sets another, up to three buttons) and the floating **MOD** button (Mods & cheats → MOD UI button); Debug → **Lua / TDB** shows what the scripts did at start-up. This is
+[yun-wulian](https://github.com/yun-wulian)'s work (see Credits).
 
 ### Cheats
 
