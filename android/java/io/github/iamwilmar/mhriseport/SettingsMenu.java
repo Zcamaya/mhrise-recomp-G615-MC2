@@ -707,14 +707,83 @@ final class SettingsMenu {
     // with a name here. Most of them are only read at start-up.
     private static native byte[] nativeLuaReport();
 
+    // What the Lua runtime did since the game started, in the settings menu's own look: where it stands, then its log
+    // (scripts loaded or failed, reloads), errors in red
+    private void showLuaReport() {
+        String text = new String(nativeLuaReport(), java.nio.charset.StandardCharsets.UTF_8).trim();
+        String state;
+        switch (ModUi.runtime()) {
+            case 2: state = tr("Running: the scripts are loaded.", "运行中：脚本已加载。"); break;
+            case 1: state = tr("Ready: the scripts load once you're in the village or a quest.", "已就绪：进入村庄或任务后加载脚本。"); break;
+            default: state = tr("Not running: no Lua scripts were installed when the game started.", "未运行：游戏启动时没有安装 Lua 脚本。");
+        }
+        final Dialog d = new Dialog(activity);
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(12), dp(16), dp(14));
+        box.setBackground(plate(PANEL, 2, 0));
+        TextView title = text("Lua / TDB", 20, GOLD, true);
+        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
+        box.addView(title);
+        box.addView(rule(RED, 2));
+        box.addView(rule(GREEN, 1));
+        TextView now = text(state, 16, CREAM, false);
+        now.setPadding(0, dp(12), 0, dp(8));
+        box.addView(now);
+
+        LinearLayout lines = new LinearLayout(activity);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        lines.setPadding(dp(10), dp(8), dp(10), dp(8));
+        lines.setBackground(plate(ROW, 1, 0));
+        if (text.isEmpty()) lines.addView(text(tr("Nothing logged yet.", "暂无记录。"), 14, DIM, false));
+        for (String line : text.split("\n")) {
+            if (line.isEmpty()) continue;
+            boolean bad = line.contains("rror") || line.contains("failed") || line.contains(" hook: ");
+            TextView t = text(line, 13, bad ? 0xFFF08070 : CREAM, false);
+            t.setTypeface(Typeface.MONOSPACE);
+            t.setTextIsSelectable(true);
+            t.setPadding(0, dp(2), 0, dp(2));
+            lines.addView(t);
+        }
+        ScrollView scroll = new ScrollView(activity);
+        scroll.addView(lines);
+        DisplayMetrics m = activity.getResources().getDisplayMetrics();
+        box.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        LinearLayout buttons = new LinearLayout(activity);
+        buttons.setPadding(0, dp(14), 0, 0);
+        TextView copy = button(tr("Copy", "复制"), false);
+        copy.setOnClickListener(v -> {
+            android.content.ClipboardManager clip =
+                    (android.content.ClipboardManager) activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (clip != null) clip.setPrimaryClip(android.content.ClipData.newPlainText("Lua / TDB", state + "\n" + text));
+            d.dismiss();
+        });
+        TextView ok = button(tr("OK", "确定"), true);
+        ok.setOnClickListener(v -> d.dismiss());
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, dp(48), 1);
+        half.setMargins(dp(4), 0, dp(4), 0);
+        buttons.addView(copy, half);
+        buttons.addView(ok, new LinearLayout.LayoutParams(half));
+        box.addView(buttons);
+
+        d.setContentView(box);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            // (as tall as the log needs, the lines scrolling past 80% of the screen)
+            box.measure(View.MeasureSpec.makeMeasureSpec(Math.min(dp(720), (int) (m.widthPixels * 0.8f)), View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            int tall = Math.min(box.getMeasuredHeight(), (int) (m.heightPixels * 0.8f));
+            w.setLayout(Math.min(dp(720), (int) (m.widthPixels * 0.8f)), tall);
+        }
+        d.show();
+    }
+
     private void buildDebug() {
         if (GameActivity.luaBuild(activity)) {
-            action("Lua / TDB", tr("View startup script results.", "查看启动时脚本的运行结果。"), () -> {
-                String text = new String(nativeLuaReport(), java.nio.charset.StandardCharsets.UTF_8);
-                new android.app.AlertDialog.Builder(activity).setTitle("Lua / TDB")
-                    .setMessage(text.isEmpty() ? tr("Waiting for game startup.", "正在等待游戏启动。") : text)
-                    .setPositiveButton(android.R.string.ok, null).show();
-            });
+            action("Lua / TDB", tr("View startup script results.", "查看启动时脚本的运行结果。"), this::showLuaReport);
             flag(tr("Object Explorer", "对象浏览器"),
                     tr("REFramework's explorer in the MOD UI: search the game's types, see their fields and methods, and "
                             + "read a manager's fields live. For writing scripts. Takes effect on the next start.",

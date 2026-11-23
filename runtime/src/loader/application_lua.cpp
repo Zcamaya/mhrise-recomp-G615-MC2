@@ -123,6 +123,10 @@ void fire(lua_State *L, Phase phase, int index) {
           }
           lua_rawseti(L, record, 4);
         } else {
+          lua_rawgeti(L, record, 4);
+          if (const char *was = lua_tostring(L, -1))
+            script_error_over(was);  // (it ran clean this time)
+          lua_pop(L, 1);
           lua_pushnil(L);
           lua_rawseti(L, record, 4);
         }

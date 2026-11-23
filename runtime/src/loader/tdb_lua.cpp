@@ -492,6 +492,8 @@ bool load_scripts(lua_State *L, const fs::path &directory) {
       mod_lua::rollback(L, previous);
       mod_lua::rollback_events(L, previous_events);
       ok = false;
+    } else {
+      report(("Loaded " + path.filename().string()).c_str());
     }
   }
   return ok;

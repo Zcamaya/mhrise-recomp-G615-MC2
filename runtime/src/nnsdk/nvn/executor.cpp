@@ -3580,7 +3580,9 @@ bool Executor::run(const std::vector<const CommandList*>& lists) {
     buffer_cache_.set_generations(generations_);
     prof_count_stage_keys_ = NVN_FLAG("verbose_log");
     per_stage_keys_ = NVN_FLAG("pipelines_per_stage");
-    prof_timing_ = frame_ % kProfileEvery == 0 && NVN_FLAG("verbose_log");  // los tiempos por draw, solo depurando
+    // The per-draw times (one frame in kProfileEvery, a few clock reads per draw): with the detailed log, and with
+    // Performance stats too, since where the executor's time goes in a heavy spot is what those reports are for
+    prof_timing_ = frame_ % kProfileEvery == 0 && (NVN_FLAG("verbose_log") || NVN_FLAG("perf_stats"));
     if (prof_timing_ && prof_timed_frame_ != frame_) prof_timed_frame_ = frame_, prof_timed_frames_++;
     buffer_cache_.prof = prof_timing_ ? &fine_.vtx : nullptr;
     read_flags();

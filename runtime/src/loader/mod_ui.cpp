@@ -891,6 +891,10 @@ void mod_lua::script_error(const std::string &message) {
   if (errors.size() == 20) errors.erase(errors.begin());
   errors.push_back(message);
 }
+void mod_lua::script_error_over(const std::string &message) {
+  std::lock_guard lock(errors_mutex);
+  errors.erase(std::remove(errors.begin(), errors.end(), message), errors.end());
+}
 void mod_lua::clear_script_errors() {
   std::lock_guard lock(errors_mutex);
   errors.clear();
@@ -903,7 +907,7 @@ static void draw_errors() {
                                       ImGuiTreeNodeFlags_DefaultOpen);
   ImGui::PopStyleColor();
   if (!open) return;
-  ImGui::TextDisabled("A script that stops on an error while loading adds nothing below.");
+  ImGui::TextDisabled("Errors still happening. A script that stops on one while loading adds nothing below.");
   for (auto &e : errors)
     ImGui::TextWrapped("%s", e.c_str());
   ImGui::Separator();

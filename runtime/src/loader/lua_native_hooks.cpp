@@ -67,7 +67,7 @@ struct Subscriber {
   Layout layout;
   int pre, post;
   std::atomic<bool> enabled{true};
-  std::string last_error;  // (each error is reported once, not every call)
+  std::string last_error[2];  // pre, post (each error is reported once, not every call)
 };
 struct Site {
   NativePatch
@@ -243,14 +243,21 @@ uint64_t bits(lua_State *L, int index) {
 // As in REFramework, a callback that errors stays hooked: the game's own method runs as if it weren't there and the
 // next call tries again. Scripts lean on that (one written for the hunter can error on every other player's call
 // before it has what it needs). The calls are on the Lua lock, so last_error needs no lock of its own.
-void report_error(Subscriber &s, const std::string &error) {
-  if (s.last_error == error)
-    return;
-  s.last_error = error;
+void report_error(Subscriber &s, bool post, const std::string &error) {
   auto owner = read<uint32_t>(db->methods, 12ull * s.method) & id_mask;
   auto message = db->full_name(owner) + "." + std::string(db->method(s.method, owner)) + " hook: " + error;
+  if (s.last_error[post] == message)
+    return;
+  s.last_error[post] = message;
   log_message(ANDROID_LOG_ERROR, message.c_str());
   script_error(message);
+}
+// A call that went through: its earlier error is over (it stays in the log, not in the MOD UI's list)
+void report_ok(Subscriber &s, bool post) {
+  if (s.last_error[post].empty())
+    return;
+  script_error_over(s.last_error[post]);
+  s.last_error[post].clear();
 }
 void execute(Invocation &inv, size_t n, int ref, int argument) {
   auto previous = swap_hook_storage(&inv.storage[n]);
@@ -352,6 +359,7 @@ bool before(Invocation &inv, NativeFrame &frame) {
         lua_rawseti(vm, draft, i);
       }
       execute(inv, n, s.pre, draft);
+      report_ok(s, false);
       auto action = pre_action(vm);
       if (hidden) {
         lua_rawgeti(vm, draft, 1);
@@ -373,7 +381,7 @@ bool before(Invocation &inv, NativeFrame &frame) {
       }
       skip |= action == PreHookResult::SkipOriginal;
     } catch (const std::exception &e) {
-      report_error(s, e.what());
+      report_error(s, false, e.what());
     }
     lua_settop(vm, top);
   }
@@ -411,6 +419,7 @@ void after(Invocation &inv, NativeFrame &frame) {
       else
         push_bits(vm, result);
       execute(inv, n - 1, s.post, top + 1);
+      report_ok(s, true);
       if (!lua_isnil(vm, -1)) {
         auto replacement =
             changed_argument(inv, Argument{t, 0, 0}, lua_gettop(vm), result);
@@ -426,7 +435,7 @@ void after(Invocation &inv, NativeFrame &frame) {
         }
       }
     } catch (const std::exception &e) {
-      report_error(s, e.what());
+      report_error(s, true, e.what());
     }
     lua_settop(vm, top);
   }

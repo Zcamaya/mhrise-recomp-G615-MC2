@@ -10,4 +10,6 @@ bool ui_visible();
 // Shown at the top of the MOD UI, since a script that fails while loading draws nothing
 void script_error(const std::string &message);
 void clear_script_errors();
+// One that stopped happening (a callback or hook that has run without it since)
+void script_error_over(const std::string &message);
 } // namespace mod_lua
