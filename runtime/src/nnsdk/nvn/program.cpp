@@ -283,7 +283,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.subgroup_operations);
     h.u32(o.broken_subgroup_shuffle);
     h.u32(o.broken_unreachable);
-    if (o.broken_pack_half) h.u32(0x48414C46);  // (only where it's on: other GPUs keep their keys)
+    if (o.broken_pack_half) h.u32(0x48414C32);  // (only where it's on; 2: the plain integer version, not the magic-number one)
     if (o.demote_reorder) h.u32(0x44454D4F);  // (only where it's on: other GPUs keep their keys)
     if (o.warp_barriers) h.u32(0x57415250);  // (only where it's on: other GPUs keep their keys)
     if (!o.multi_viewport) h.u32(0x4D56);  // (solo sin multiViewport: las claves de siempre no cambian)
@@ -425,7 +425,7 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         options.broken_unreachable = (c->props.vendorID == 0x5143 && !NVN_FLAG("no_return_qualcomm")) ||
                                      (c->props.vendorID == 0x13B5 && !NVN_FLAG("no_return_mali"));
         // ARM's older drivers (no draw-indirect-count, as for short subgroups): packHalf2x16 in vertex stages from integer
-        // operations. A Mali-G68's (Vulkan 1.1.177) aborted the game compiling it; the G615's newer driver compiles it fine
+        // operations. A Mali-G68's and a G57's (Vulkan 1.1.177) aborted the game compiling it; the G615's newer driver compiles it fine
         // and keeps its single instruction. <data>/pack_half_fix forces it on any Mali, <data>/no_pack_half_fix turns it off.
         options.broken_pack_half = c->props.vendorID == 0x13B5 && !NVN_FLAG("no_pack_half_fix") &&
                                    (NVN_FLAG("pack_half_fix") || !c->draw_indexed_indirect_count);

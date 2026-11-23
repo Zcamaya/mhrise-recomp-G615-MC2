@@ -208,7 +208,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_mirrors_at_start` | The mirrors (GPU copies of game buffers the shaders read) that were used in the last frame are no longer checked and uploaded together at the start of each submit, but by the first draw that reads each one, as before. That closed the render pass open at that moment and put two full barriers around each upload: after a quest, with about ten 4 MB buffers rewritten every frame, the depth pre-pass was split five times. Live. |
 | `perf_stats` | The profile lines ("perfil …": where the port's CPU time goes) every 10 seconds, without the rest of `verbose_log`. Debug → Performance stats. Live. |
 | `no_return_mali` | On Mali GPUs (ARM's driver and PanVK), the impossible branch Eden leaves after a switch is written as a plain return instead of an "unreachable", as on Qualcomm's driver, so the compiler can't make assumptions from it in the skinning shaders. This puts the "unreachable" back. Read at start-up. |
-| `pack_half_fix`, `no_pack_half_fix` | On ARM's older Mali drivers (the ones without draw-indirect-count, like a Mali-G68's), a vertex shader's float-to-half packing (packHalf2x16) is built from integer operations: that driver's compiler failed on it ("LLVM ERROR: Cannot select" in the log) and closed the game mid-hunt. Newer Mali drivers keep the single instruction. `pack_half_fix` forces it on any Mali, `no_pack_half_fix` turns it off. Read at start-up. |
+| `pack_half_fix`, `no_pack_half_fix` | On ARM's older Mali drivers (the ones without draw-indirect-count, like a Mali-G57's or G68's), a vertex shader's float-to-half packing (packHalf2x16) is built from plain integer operations: that driver's compiler failed on it ("LLVM ERROR: Cannot select" in the log) and closed the game mid-hunt. Newer Mali drivers keep the single instruction. `pack_half_fix` forces it on any Mali, `no_pack_half_fix` turns it off. Read at start-up. |
 | (no switch) | 24-bit depth on GPUs without it (AMD-based ones such as Samsung's Xclipse have no DEPTH24_STENCIL8): the image is made as 32-bit float depth instead. Without that, every pass with the game's main depth buffer failed to start and its draws were skipped. |
 | `no_demote_reorder` | On Samsung Xclipse and AMD GPUs, pixel discards are gathered into one at the end of each shader, as Eden does there: their compilers mishandle an early discard, and alpha-tested scenery (foliage, smoke, cliff edges) came out as big flat brown sheets. This turns that off. `demote_reorder` forces it on any GPU. Read at start-up. |
 | `no_safe_translation` | Turns off the automatic retry for pipelines a driver rejects. Normally, when a driver refuses one (Qualcomm's own driver does with many of the scene's pixel shaders on newer Adrenos), its vertex and pixel shaders are translated again more conservatively, step by step (no NonUniform marking, then also optimized by spirv-opt, then also without subgroup operations), and the first that works is kept and remembered for the warm-up. |
@@ -388,6 +388,13 @@ on-frame windows and ImGui) are there, not all of them. Settings → **Mods & ch
 own windows, and so do **L3 + R3** on a controller (REFramework's own shortcut; Mods & cheats → MOD UI controller
 hotkey sets another, up to three buttons) and the floating **MOD** button (Mods & cheats → MOD UI button); Debug → **Lua / TDB** shows what the scripts did at start-up. This is
 [yun-wulian](https://github.com/yun-wulian)'s work (see Credits).
+
+The imgui table has REFramework's whole list of widgets except its draw lists, font loading and ImGuizmo (tables,
+menus, child windows, list boxes, color edits, drag_float2-4, scrolling, style colors…). A call a script makes that
+isn't here yet does nothing instead of stopping the script, and the log and Lua / TDB name it once, with the script
+and line: that list is what to add next. Debug → **Object Explorer** (`object_explorer` in mhr.ini) adds REFramework's
+explorer to the MOD UI, for writing scripts: search the game's types by name, see their fields (with offsets) and
+methods, open a manager's instance and read its fields live, and call its getters.
 
 ### Cheats
 

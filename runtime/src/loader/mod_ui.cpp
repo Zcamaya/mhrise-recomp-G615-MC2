@@ -7,6 +7,7 @@
 #include <GLES3/gl3.h>
 #include <android/log.h>
 #include <atomic>
+#include <cfloat>
 #include <backends/imgui_impl_opengl3.h>
 #include <chrono>
 #include <cstdio>
@@ -19,7 +20,8 @@
 
 namespace {
 thread_local bool drawing = false;
-enum class Scope { Tree, Tooltip, Window, Id, Style, Group, Rect, Disabled, Popup, ItemWidth };
+enum class Scope { Tree, Tooltip, Window, Id, Style, Group, Rect, Disabled, Popup, ItemWidth,
+                   Child, ListBox, MenuBar, MainMenuBar, Menu, Table, StyleColor };
 thread_local std::vector<Scope> scopes;
 void close_scope() {
   switch (scopes.back()) {
@@ -33,6 +35,13 @@ void close_scope() {
   case Scope::Disabled: ImGui::EndDisabled(); break;
   case Scope::Popup: ImGui::EndPopup(); break;
   case Scope::ItemWidth: ImGui::PopItemWidth(); break;
+  case Scope::Child: ImGui::EndChild(); break;
+  case Scope::ListBox: ImGui::EndListBox(); break;
+  case Scope::MenuBar: ImGui::EndMenuBar(); break;
+  case Scope::MainMenuBar: ImGui::EndMainMenuBar(); break;
+  case Scope::Menu: ImGui::EndMenu(); break;
+  case Scope::Table: ImGui::EndTable(); break;
+  case Scope::StyleColor: ImGui::PopStyleColor(); break;
   }
   scopes.pop_back();
 }
@@ -81,7 +90,19 @@ enum Widget {
   SetCursorScreenPos, ItemActive, ItemFocused, SetNextItemWidth, CalcItemWidth,
   PushItemWidth, PopItemWidth, BeginGroup, EndGroup, BeginRect, EndRect,
   BeginDisabled, EndDisabled, OpenPopup, BeginPopup, BeginPopupContextItem,
-  EndPopup, CloseCurrentPopup, IsPopupOpen, InputMultiline, ColorPickerArgb
+  EndPopup, CloseCurrentPopup, IsPopupOpen, InputMultiline, ColorPickerArgb,
+  // The rest of REFramework's imgui table
+  BeginChild, EndChild, SmallButton, InvisibleButton, ArrowButton, DragFloat2, DragFloat3, DragFloat4,
+  ColorPicker, ColorPicker3, ColorPicker4, ColorEdit, ColorEditArgb, ColorEdit3, ColorEdit4,
+  TreeNodePtr, TreeNodeStr, CollapsingHeader, LoadFont, PushFont, PopFont, DefaultFontSize, GetMouse,
+  ProgressBar, KeyIndex, KeyDown, KeyPressed, KeyReleased, MouseClicked, MouseReleased, MouseDoubleClicked,
+  SetTooltip, NextItemOpen, BeginListBox, EndListBox, BeginMenuBar, EndMenuBar, BeginMainMenuBar,
+  EndMainMenuBar, BeginMenu, EndMenu, MenuItem, PushStyleColor, PopStyleColor, CursorStartPos,
+  SetItemDefaultFocus, ScrollX, ScrollY, SetScrollX, SetScrollY, ScrollMaxX, ScrollMaxY, SetScrollHereX,
+  SetScrollHereY, SetScrollFromPosX, SetScrollFromPosY, BeginTable, EndTable, TableNextRow, TableNextColumn,
+  TableSetColumnIndex, TableSetupColumn, TableSetupScrollFreeze, TableHeadersRow, TableHeader,
+  TableColumnCount, TableColumnIndex, TableRowIndex, TableColumnName, TableColumnFlags, TableSetBgColor,
+  SetClipboard, GetClipboard, PushFontSize, PopFontSize
 };
 ImVec2 vec2(lua_State *L, int index) {
   float v[2];
@@ -99,6 +120,39 @@ ImVec2 vec2(lua_State *L, int index) {
   }
   return {v[0], v[1]};
 }
+// A Vector2f/3f/4f, or a table with x, y, z, w (or 1..4)
+void vecn(lua_State *L, int index, float *v, int n) {
+  if (mod_lua::read_components(L, index, false, v, n))
+    return;
+  luaL_checktype(L, index, LUA_TTABLE);
+  static const char *const axes[] = {"x", "y", "z", "w"};
+  for (int i = 0; i < n; ++i) {
+    lua_rawgeti(L, index, i + 1);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 1);
+      lua_getfield(L, index, axes[i]);
+    }
+    v[i] = luaL_checknumber(L, -1);
+    lua_pop(L, 1);
+  }
+}
+// ImU32 colors are ABGR (as REFramework's color_picker / color_edit take them); the _argb ones are ARGB
+ImVec4 from_argb(uint32_t argb) {
+  return {float((argb >> 16) & 255) / 255, float((argb >> 8) & 255) / 255, float(argb & 255) / 255,
+          float(argb >> 24) / 255};
+}
+uint32_t to_argb(const ImVec4 &c) {
+  auto channel = [](float v) { return uint32_t(std::clamp(v, 0.f, 1.f) * 255.f + .5f); };
+  return channel(c.w) << 24 | channel(c.x) << 16 | channel(c.y) << 8 | channel(c.z);
+}
+// Scripts check a key by ImGuiKey; anything else isn't a key here (there's no keyboard on most phones anyway)
+bool key_state(lua_State *L, int which) {
+  auto key = static_cast<ImGuiKey>(luaL_checkinteger(L, 1));
+  if (key < ImGuiKey_NamedKey_BEGIN || key >= ImGuiKey_NamedKey_END)
+    return false;
+  return which == 0 ? ImGui::IsKeyDown(key) : which == 1 ? ImGui::IsKeyPressed(key) : ImGui::IsKeyReleased(key);
+}
+int more_widgets(lua_State *L, Widget kind);
 int widget(lua_State *L) {
   if (!drawing)
     return luaL_error(L, "imgui requires an active on_frame or on_draw_ui callback");
@@ -271,6 +325,8 @@ int widget(lua_State *L) {
     close_scope();
     return 0;
   default:
+    if (kind >= BeginChild)
+      return more_widgets(L, kind);
     break;
   }
   const char *label = visible_text(luaL_checkstring(L, 1));
@@ -330,7 +386,7 @@ int widget(lua_State *L) {
                        "%s", label);
     return 0;
   case Button:
-    lua_pushboolean(L, ImGui::Button(label));
+    lua_pushboolean(L, ImGui::Button(label, lua_isnoneornil(L, 2) ? ImVec2{} : vec2(L, 2)));
     return 1;
   case Tree: {
     bool open = ImGui::TreeNode(label);
@@ -350,7 +406,7 @@ int widget(lua_State *L) {
     int v = luaL_checkinteger(L, 2);
     bool changed =
         ImGui::DragInt(label, &v, luaL_optnumber(L, 3, 1),
-                       luaL_optinteger(L, 4, 0), luaL_optinteger(L, 5, 0));
+                       luaL_optinteger(L, 4, 0), luaL_optinteger(L, 5, 0), luaL_optstring(L, 6, "%d"));
     lua_pushboolean(L, changed);
     lua_pushinteger(L, v);
     return 2;
@@ -368,10 +424,10 @@ int widget(lua_State *L) {
     float v = luaL_checknumber(L, 2);
     bool changed = kind == Slider
                        ? ImGui::SliderFloat(label, &v, luaL_checknumber(L, 3),
-                                            luaL_checknumber(L, 4))
+                                            luaL_checknumber(L, 4), luaL_optstring(L, 5, "%.3f"))
                        : ImGui::DragFloat(label, &v, luaL_optnumber(L, 3, 1),
                                           luaL_optnumber(L, 4, 0),
-                                          luaL_optnumber(L, 5, 0));
+                                          luaL_optnumber(L, 5, 0), luaL_optstring(L, 6, "%.3f"));
     lua_pushboolean(L, changed);
     lua_pushnumber(L, v);
     return 2;
@@ -418,6 +474,252 @@ int widget(lua_State *L) {
     lua_pushinteger(L, edit.from);
     lua_pushinteger(L, edit.to);
     return 4;
+  }
+  default:
+    return luaL_error(L, "Invalid ImGui widget");
+  }
+}
+int more_widgets(lua_State *L, Widget kind) {
+  // The end of a begin that returned false: scripts written for REFramework often call it anyway
+  auto end = [&](Scope scope) {
+    if (!scopes.empty() && scopes.back() == scope)
+      close_scope();
+    return 0;
+  };
+  auto push_bool = [&](bool v) {
+    lua_pushboolean(L, v);
+    return 1;
+  };
+  auto push_number = [&](lua_Number v) {
+    lua_pushnumber(L, v);
+    return 1;
+  };
+  auto push_vec2 = [&](ImVec2 v) {
+    float xy[] = {v.x, v.y};
+    mod_lua::push_components(L, false, xy, 2);
+    return 1;
+  };
+  switch (kind) {
+  case BeginChild: {
+    // REFramework's has no name: one per place in the window
+    auto here = ImGui::GetCursorPos();
+    auto id = ImGui::GetID(static_cast<int>(here.y) * 4096 + static_cast<int>(here.x));
+    bool shown = ImGui::BeginChild(id, lua_isnoneornil(L, 1) ? ImVec2{} : vec2(L, 1),
+                                   lua_toboolean(L, 2) ? ImGuiChildFlags(1) : ImGuiChildFlags(0),
+                                   luaL_optinteger(L, 3, 0));
+    scopes.push_back(Scope::Child);  // (EndChild goes with every BeginChild)
+    return push_bool(shown);
+  }
+  case EndChild: return end(Scope::Child);
+  case SmallButton: return push_bool(ImGui::SmallButton(visible_text(luaL_checkstring(L, 1))));
+  case InvisibleButton:
+    return push_bool(ImGui::InvisibleButton(luaL_checkstring(L, 1), vec2(L, 2), luaL_optinteger(L, 3, 0)));
+  case ArrowButton:
+    return push_bool(ImGui::ArrowButton(luaL_checkstring(L, 1), static_cast<ImGuiDir>(luaL_checkinteger(L, 2))));
+  case DragFloat2:
+  case DragFloat3:
+  case DragFloat4: {
+    int n = kind == DragFloat2 ? 2 : kind == DragFloat3 ? 3 : 4;
+    float v[4]{};
+    vecn(L, 2, v, n);
+    const char *label = visible_text(luaL_checkstring(L, 1));
+    float speed = luaL_optnumber(L, 3, 1), lo = luaL_optnumber(L, 4, 0), hi = luaL_optnumber(L, 5, 0);
+    const char *format = luaL_optstring(L, 6, "%.3f");
+    bool changed = n == 2 ? ImGui::DragFloat2(label, v, speed, lo, hi, format)
+                 : n == 3 ? ImGui::DragFloat3(label, v, speed, lo, hi, format)
+                          : ImGui::DragFloat4(label, v, speed, lo, hi, format);
+    lua_pushboolean(L, changed);
+    mod_lua::push_components(L, false, v, n);
+    return 2;
+  }
+  case ColorPicker:
+  case ColorEdit:
+  case ColorEditArgb: {
+    const char *label = visible_text(luaL_checkstring(L, 1));
+    auto color = static_cast<uint32_t>(luaL_checkinteger(L, 2));
+    ImVec4 c = kind == ColorEditArgb ? from_argb(color) : ImGui::ColorConvertU32ToFloat4(color);
+    int flags = luaL_optinteger(L, 3, 0);
+    bool changed = kind == ColorPicker ? ImGui::ColorPicker4(label, &c.x, flags) : ImGui::ColorEdit4(label, &c.x, flags);
+    lua_pushboolean(L, changed);
+    lua_pushinteger(L, kind == ColorEditArgb ? to_argb(c) : ImGui::ColorConvertFloat4ToU32(c));
+    return 2;
+  }
+  case ColorPicker3:
+  case ColorPicker4:
+  case ColorEdit3:
+  case ColorEdit4: {
+    const char *label = visible_text(luaL_checkstring(L, 1));
+    int n = kind == ColorPicker3 || kind == ColorEdit3 ? 3 : 4;
+    float v[4]{0, 0, 0, 1};
+    vecn(L, 2, v, n);
+    int flags = luaL_optinteger(L, 3, 0);
+    bool changed = kind == ColorPicker3 ? ImGui::ColorPicker3(label, v, flags)
+                 : kind == ColorPicker4 ? ImGui::ColorPicker4(label, v, flags)
+                 : kind == ColorEdit3   ? ImGui::ColorEdit3(label, v, flags)
+                                        : ImGui::ColorEdit4(label, v, flags);
+    lua_pushboolean(L, changed);
+    mod_lua::push_components(L, false, v, n);
+    return 2;
+  }
+  case TreeNodePtr:
+  case TreeNodeStr: {
+    const char *label = visible_text(luaL_checkstring(L, 2));
+    bool open;
+    if (kind == TreeNodeStr)
+      open = ImGui::TreeNode(luaL_checkstring(L, 1), "%s", label);
+    else {
+      // Any value as the id: an object's address, a number, a table
+      const void *id = lua_isinteger(L, 1) ? reinterpret_cast<const void *>(static_cast<uintptr_t>(lua_tointeger(L, 1)))
+                                           : lua_topointer(L, 1);
+      open = ImGui::TreeNode(id, "%s", label);
+    }
+    if (open) scopes.push_back(Scope::Tree);
+    return push_bool(open);
+  }
+  case CollapsingHeader:
+    return push_bool(ImGui::CollapsingHeader(visible_text(luaL_checkstring(L, 1)), luaL_optinteger(L, 2, 0)));
+  case LoadFont:  // (one font here, the system's, with every script's glyphs)
+    lua_pushnil(L);
+    return 1;
+  case PushFont:
+  case PopFont:
+  case PushFontSize:
+  case PopFontSize:
+    return 0;
+  case DefaultFontSize: return push_number(ImGui::GetFontSize());
+  case GetMouse: return push_vec2(ImGui::GetMousePos());
+  case ProgressBar:
+    ImGui::ProgressBar(luaL_checknumber(L, 1), lua_isnoneornil(L, 2) ? ImVec2{-FLT_MIN, 0} : vec2(L, 2),
+                       lua_isnoneornil(L, 3) ? nullptr : visible_text(luaL_checkstring(L, 3)));
+    return 0;
+  case KeyIndex: lua_pushinteger(L, luaL_checkinteger(L, 1)); return 1;
+  case KeyDown: return push_bool(key_state(L, 0));
+  case KeyPressed: return push_bool(key_state(L, 1));
+  case KeyReleased: return push_bool(key_state(L, 2));
+  case MouseClicked:
+  case MouseReleased:
+  case MouseDoubleClicked: {
+    int button = luaL_optinteger(L, 1, 0);
+    if (button < 0 || button >= ImGuiMouseButton_COUNT)
+      return luaL_argerror(L, 1, "invalid mouse button");
+    return push_bool(kind == MouseClicked ? ImGui::IsMouseClicked(button)
+                     : kind == MouseReleased ? ImGui::IsMouseReleased(button)
+                                             : ImGui::IsMouseDoubleClicked(button));
+  }
+  case SetTooltip: ImGui::SetTooltip("%s", visible_text(luaL_checkstring(L, 1))); return 0;
+  case NextItemOpen: ImGui::SetNextItemOpen(lua_toboolean(L, 1), luaL_optinteger(L, 2, 0)); return 0;
+  case BeginListBox: {
+    bool open = ImGui::BeginListBox(visible_text(luaL_checkstring(L, 1)), lua_isnoneornil(L, 2) ? ImVec2{} : vec2(L, 2));
+    if (open) scopes.push_back(Scope::ListBox);
+    return push_bool(open);
+  }
+  case EndListBox: return end(Scope::ListBox);
+  case BeginMenuBar:
+  case BeginMainMenuBar: {
+    bool open = kind == BeginMenuBar ? ImGui::BeginMenuBar() : ImGui::BeginMainMenuBar();
+    if (open) scopes.push_back(kind == BeginMenuBar ? Scope::MenuBar : Scope::MainMenuBar);
+    return push_bool(open);
+  }
+  case EndMenuBar: return end(Scope::MenuBar);
+  case EndMainMenuBar: return end(Scope::MainMenuBar);
+  case BeginMenu: {
+    bool open = ImGui::BeginMenu(visible_text(luaL_checkstring(L, 1)), lua_isnoneornil(L, 2) || lua_toboolean(L, 2));
+    if (open) scopes.push_back(Scope::Menu);
+    return push_bool(open);
+  }
+  case EndMenu: return end(Scope::Menu);
+  case MenuItem:
+    return push_bool(ImGui::MenuItem(visible_text(luaL_checkstring(L, 1)), luaL_optstring(L, 2, nullptr),
+                                     lua_toboolean(L, 3), lua_isnoneornil(L, 4) || lua_toboolean(L, 4)));
+  case PushStyleColor: {
+    int index = luaL_checkinteger(L, 1);
+    if (index < 0 || index >= ImGuiCol_COUNT)
+      return luaL_argerror(L, 1, "unknown style color");
+    if (lua_isinteger(L, 2))
+      ImGui::PushStyleColor(index, static_cast<ImU32>(lua_tointeger(L, 2)));
+    else {
+      float v[4]{};
+      vecn(L, 2, v, 4);
+      ImGui::PushStyleColor(index, ImVec4{v[0], v[1], v[2], v[3]});
+    }
+    scopes.push_back(Scope::StyleColor);
+    return 0;
+  }
+  case PopStyleColor: {
+    int count = luaL_optinteger(L, 1, 1);
+    if (count < 0 || count > std::count(scopes.begin(), scopes.end(), Scope::StyleColor))
+      return luaL_error(L, "pop_style_color exceeds the number pushed");
+    ImGui::PopStyleColor(count);
+    while (count--) {
+      auto it = std::find(scopes.rbegin(), scopes.rend(), Scope::StyleColor);
+      scopes.erase(std::next(it).base());
+    }
+    return 0;
+  }
+  case CursorStartPos: return push_vec2(ImGui::GetCursorStartPos());
+  case SetItemDefaultFocus: ImGui::SetItemDefaultFocus(); return 0;
+  case ScrollX: return push_number(ImGui::GetScrollX());
+  case ScrollY: return push_number(ImGui::GetScrollY());
+  case ScrollMaxX: return push_number(ImGui::GetScrollMaxX());
+  case ScrollMaxY: return push_number(ImGui::GetScrollMaxY());
+  case SetScrollX: ImGui::SetScrollX(luaL_checknumber(L, 1)); return 0;
+  case SetScrollY: ImGui::SetScrollY(luaL_checknumber(L, 1)); return 0;
+  case SetScrollHereX: ImGui::SetScrollHereX(luaL_optnumber(L, 1, .5)); return 0;
+  case SetScrollHereY: ImGui::SetScrollHereY(luaL_optnumber(L, 1, .5)); return 0;
+  case SetScrollFromPosX: ImGui::SetScrollFromPosX(luaL_checknumber(L, 1), luaL_optnumber(L, 2, .5)); return 0;
+  case SetScrollFromPosY: ImGui::SetScrollFromPosY(luaL_checknumber(L, 1), luaL_optnumber(L, 2, .5)); return 0;
+  case BeginTable: {
+    int columns = luaL_checkinteger(L, 2);
+    if (columns < 1 || columns > 512)
+      return luaL_argerror(L, 2, "column count out of range");
+    bool open = ImGui::BeginTable(luaL_checkstring(L, 1), columns, luaL_optinteger(L, 3, 0),
+                                  lua_isnoneornil(L, 4) ? ImVec2{} : vec2(L, 4), luaL_optnumber(L, 5, 0));
+    if (open) scopes.push_back(Scope::Table);
+    return push_bool(open);
+  }
+  case EndTable: return end(Scope::Table);
+  default:
+    break;
+  }
+  // The rest only make sense inside a table
+  if (std::find(scopes.begin(), scopes.end(), Scope::Table) == scopes.end()) {
+    switch (kind) {
+    case TableNextColumn:
+    case TableSetColumnIndex: return push_bool(false);
+    case TableColumnCount:
+    case TableColumnIndex:
+    case TableRowIndex:
+    case TableColumnFlags: lua_pushinteger(L, 0); return 1;
+    case TableColumnName: lua_pushliteral(L, ""); return 1;
+    case SetClipboard:
+    case GetClipboard: break;
+    default: return 0;
+    }
+  }
+  switch (kind) {
+  case TableNextRow: ImGui::TableNextRow(luaL_optinteger(L, 1, 0), luaL_optnumber(L, 2, 0)); return 0;
+  case TableNextColumn: return push_bool(ImGui::TableNextColumn());
+  case TableSetColumnIndex: return push_bool(ImGui::TableSetColumnIndex(luaL_checkinteger(L, 1)));
+  case TableSetupColumn:
+    ImGui::TableSetupColumn(visible_text(luaL_checkstring(L, 1)), luaL_optinteger(L, 2, 0), luaL_optnumber(L, 3, 0),
+                            static_cast<ImGuiID>(luaL_optinteger(L, 4, 0)));
+    return 0;
+  case TableSetupScrollFreeze: ImGui::TableSetupScrollFreeze(luaL_checkinteger(L, 1), luaL_checkinteger(L, 2)); return 0;
+  case TableHeadersRow: ImGui::TableHeadersRow(); return 0;
+  case TableHeader: ImGui::TableHeader(visible_text(luaL_checkstring(L, 1))); return 0;
+  case TableColumnCount: lua_pushinteger(L, ImGui::TableGetColumnCount()); return 1;
+  case TableColumnIndex: lua_pushinteger(L, ImGui::TableGetColumnIndex()); return 1;
+  case TableRowIndex: lua_pushinteger(L, ImGui::TableGetRowIndex()); return 1;
+  case TableColumnName: lua_pushstring(L, ImGui::TableGetColumnName(luaL_optinteger(L, 1, -1))); return 1;
+  case TableColumnFlags: lua_pushinteger(L, ImGui::TableGetColumnFlags(luaL_optinteger(L, 1, -1))); return 1;
+  case TableSetBgColor:
+    ImGui::TableSetBgColor(luaL_checkinteger(L, 1), static_cast<ImU32>(luaL_checkinteger(L, 2)), luaL_optinteger(L, 3, -1));
+    return 0;
+  case SetClipboard: ImGui::SetClipboardText(luaL_checkstring(L, 1)); return 0;
+  case GetClipboard: {
+    const char *text = ImGui::GetClipboardText();
+    lua_pushstring(L, text ? text : "");
+    return 1;
   }
   default:
     return luaL_error(L, "Invalid ImGui widget");
@@ -581,7 +883,40 @@ void mod_lua::open_imgui(lua_State *L) {
                             {"end_disabled", EndDisabled}, {"open_popup", OpenPopup}, {"begin_popup", BeginPopup},
                             {"begin_popup_context_item", BeginPopupContextItem}, {"end_popup", EndPopup},
                             {"close_current_popup", CloseCurrentPopup}, {"is_popup_open", IsPopupOpen},
-                            {"input_text_multiline", InputMultiline}, {"color_picker_argb", ColorPickerArgb}}) {
+                            {"input_text_multiline", InputMultiline}, {"color_picker_argb", ColorPickerArgb},
+                            {"begin_child_window", BeginChild}, {"end_child_window", EndChild},
+                            {"small_button", SmallButton}, {"invisible_button", InvisibleButton},
+                            {"arrow_button", ArrowButton}, {"drag_float2", DragFloat2}, {"drag_float3", DragFloat3},
+                            {"drag_float4", DragFloat4}, {"color_picker", ColorPicker}, {"color_picker3", ColorPicker3},
+                            {"color_picker4", ColorPicker4}, {"color_edit", ColorEdit}, {"color_edit_argb", ColorEditArgb},
+                            {"color_edit3", ColorEdit3}, {"color_edit4", ColorEdit4}, {"tree_node_ptr_id", TreeNodePtr},
+                            {"tree_node_str_id", TreeNodeStr}, {"collapsing_header", CollapsingHeader},
+                            {"load_font", LoadFont}, {"push_font", PushFont}, {"pop_font", PopFont},
+                            {"get_default_font_size", DefaultFontSize}, {"get_mouse", GetMouse},
+                            {"progress_bar", ProgressBar}, {"get_key_index", KeyIndex}, {"is_key_down", KeyDown},
+                            {"is_key_pressed", KeyPressed}, {"is_key_released", KeyReleased},
+                            {"is_mouse_clicked", MouseClicked}, {"is_mouse_released", MouseReleased},
+                            {"is_mouse_double_clicked", MouseDoubleClicked}, {"set_tooltip", SetTooltip},
+                            {"set_next_item_open", NextItemOpen}, {"begin_list_box", BeginListBox},
+                            {"end_list_box", EndListBox}, {"begin_menu_bar", BeginMenuBar}, {"end_menu_bar", EndMenuBar},
+                            {"begin_main_menu_bar", BeginMainMenuBar}, {"end_main_menu_bar", EndMainMenuBar},
+                            {"begin_menu", BeginMenu}, {"end_menu", EndMenu}, {"menu_item", MenuItem},
+                            {"push_style_color", PushStyleColor}, {"pop_style_color", PopStyleColor},
+                            {"get_cursor_start_pos", CursorStartPos}, {"set_item_default_focus", SetItemDefaultFocus},
+                            {"get_scroll_x", ScrollX}, {"get_scroll_y", ScrollY}, {"set_scroll_x", SetScrollX},
+                            {"set_scroll_y", SetScrollY}, {"get_scroll_max_x", ScrollMaxX},
+                            {"get_scroll_max_y", ScrollMaxY}, {"set_scroll_here_x", SetScrollHereX},
+                            {"set_scroll_here_y", SetScrollHereY}, {"set_scroll_from_pos_x", SetScrollFromPosX},
+                            {"set_scroll_from_pos_y", SetScrollFromPosY}, {"begin_table", BeginTable},
+                            {"end_table", EndTable}, {"table_next_row", TableNextRow},
+                            {"table_next_column", TableNextColumn}, {"table_set_column_index", TableSetColumnIndex},
+                            {"table_setup_column", TableSetupColumn}, {"table_setup_scroll_freeze", TableSetupScrollFreeze},
+                            {"table_headers_row", TableHeadersRow}, {"table_header", TableHeader},
+                            {"table_get_column_count", TableColumnCount}, {"table_get_column_index", TableColumnIndex},
+                            {"table_get_row_index", TableRowIndex}, {"table_get_column_name", TableColumnName},
+                            {"table_get_column_flags", TableColumnFlags}, {"table_set_bg_color", TableSetBgColor},
+                            {"set_clipboard", SetClipboard}, {"get_clipboard", GetClipboard},
+                            {"push_font_size", PushFontSize}, {"pop_font_size", PopFontSize}}) {
     lua_pushinteger(L, kind);
     lua_pushcclosure(L, widget, 1);
     lua_setfield(L, -2, name);

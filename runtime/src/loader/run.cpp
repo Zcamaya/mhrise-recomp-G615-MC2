@@ -112,6 +112,7 @@ extern "C" __attribute__((visibility("hidden"))) int dl_iterate_phdr(int (*cb)(d
 
 #ifdef MHRISE_LUA_DEBUG
 #include "loader/tdb_lua.h"
+#include "nnsdk/ini.h"
 #include <filesystem>
 #endif
 
@@ -123,6 +124,11 @@ int nier_run(const RunConfig& cfg) {
 #ifdef MHRISE_LUA_DEBUG
     if (const char* priv = getenv("NIER_INTERNO")) {
         const auto scripts = std::filesystem::path(priv) / "reframework" / "autorun";
+        // The Lua runtime only starts with a script folder: the Object Explorer runs in it, so it makes one
+        if (nnsdk::ini::on("object_explorer")) {
+            std::error_code ignored;
+            std::filesystem::create_directories(scripts, ignored);
+        }
         run_tdb_autorun(g_main, scripts);
     }
 #endif

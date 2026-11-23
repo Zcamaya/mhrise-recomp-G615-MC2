@@ -715,6 +715,11 @@ final class SettingsMenu {
                     .setMessage(text.isEmpty() ? tr("Waiting for game startup.", "正在等待游戏启动。") : text)
                     .setPositiveButton(android.R.string.ok, null).show();
             });
+            flag(tr("Object Explorer", "对象浏览器"),
+                    tr("REFramework's explorer in the MOD UI: search the game's types, see their fields and methods, and "
+                            + "read a manager's fields live. For writing scripts. Takes effect on the next start.",
+                            "在 MOD 界面中加入 REFramework 的对象浏览器：搜索游戏类型、查看字段和方法，并实时读取管理器的字段。用于编写脚本。下次启动生效。"),
+                    "object_explorer", false);
         }
         String next = tr(" Takes effect on the next start.", "下次启动生效。");
         note(tr("For testing drivers and sending logs. If the game looks right, leave all of this as it is.", "用于测试驱动和收集日志。画面正常时可保留默认设置。"));

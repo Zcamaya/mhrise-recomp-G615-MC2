@@ -2,6 +2,7 @@
 #include "loader/application_lua.h"
 #include "loader/imports.h"
 #include "loader/live_read.h"
+#include "loader/lua_explorer.h"
 #include "loader/lua_data.h"
 #include "loader/lua_frame_gc.h"
 #include "loader/lua_mod_hooks.h"
@@ -546,6 +547,7 @@ bool initialize_resident(const Module &main, const fs::path &directory,
   if (resident_frame)
     open_live_read(L, *resident_frame);
   mod_lua::select_event_state(L, &resident_gc);
+  mod_lua::watch_missing_calls(L);
   return !run || load_scripts(L, directory);
 }
 
@@ -627,6 +629,7 @@ void on_player_update(uintptr_t context, uintptr_t manager) {
       auto live = p.script.parent_path() / "live";
       if (fs::exists(live))
         load_scripts(resident_vm.get(), live);
+      mod_lua::load_object_explorer(resident_vm.get(), *resident_metadata);
     } catch (const std::exception &e) {
       report(e.what(), true);
     }
@@ -664,6 +667,7 @@ void on_player_update(uintptr_t context, uintptr_t manager) {
       bool ok = initialize_resident(p.main, dir / "autorun");
       if (fs::exists(dir / "live"))
         ok = load_scripts(resident_vm.get(), dir / "live") && ok;
+      mod_lua::load_object_explorer(resident_vm.get(), *resident_metadata);
       report(ok ? "Lua reload complete"
                 : "Lua reload finished with script errors",
              !ok);
