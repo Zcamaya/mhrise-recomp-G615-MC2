@@ -24,7 +24,7 @@ namespace {
 // and nothing to fix from here. So each build marks its pipeline (the key's hash: the same content gives the same one
 // in every run) in a small file mapped in memory, a page the kernel keeps when the process dies, and clears it after;
 // a mark still there at the next start was a build the driver died in, and that pipeline goes to the skip list
-// (<app files>/pipeline_skip.txt): it isn't built again and its draws are left out. So is every other pipeline with
+// (<data>/pipeline_skip.txt): it isn't built again and its draws are left out. So is every other pipeline with
 // the same vertex shader reading the same formats: ARM's driver compiles a position-only copy of the vertex shader
 // from just those two, and on the G57 the same one died again under another pass and pixel shader. One crash per such
 // vertex shader, then the game goes on without that object. <data>/no_pipeline_skip ignores the list.
@@ -52,7 +52,25 @@ Guard* guard() {
         VkContext* c = vk();
         const char* home = getenv("NIER_INTERNO");
         if (!c || !home) return g;
-        const std::string list = std::string(home) + "/pipeline_skip.txt";
+        // The list in the data folder, where it's easy to find and outlives a reinstall. The guard's own file stays in
+        // the app's files: it's mapped and has to outlive the process dying, which a FUSE-backed folder can't promise.
+        const char* data = getenv("NIER_DATA");
+        const std::string list = std::string(data ? data : home) + "/pipeline_skip.txt";
+        if (data) {  // (it was in the app's files before)
+            const std::string old = std::string(home) + "/pipeline_skip.txt";
+            if (access(old.c_str(), F_OK) == 0 && access(list.c_str(), F_OK) != 0 && rename(old.c_str(), list.c_str()) != 0) {
+                // (another filesystem: copied)
+                FILE* from = fopen(old.c_str(), "r");
+                FILE* to = from ? fopen(list.c_str(), "w") : nullptr;
+                if (to) {
+                    char line[64];
+                    while (fgets(line, sizeof line, from)) fputs(line, to);
+                    fclose(to);
+                    unlink(old.c_str());
+                }
+                if (from) fclose(from);
+            }
+        }
         bool older = false;
         {
             char first[64] = "";

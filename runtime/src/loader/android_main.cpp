@@ -1040,6 +1040,13 @@ void android_main(android_app* app) {
         __android_log_print(ANDROID_LOG_ERROR, "NieR", "no puedo escribir %s: ¿falta el permiso de archivos?",
                             log.c_str());
     }
+    // Why the last run ended, as Android recorded it (GameActivity writes it before the game starts)
+    if (FILE* f = fopen((g_data + "/last_exit.txt").c_str(), "r")) {
+        char line[512];
+        while (fgets(line, sizeof line, f)) printf("[android] %s", line);
+        fclose(f);
+        unlink((g_data + "/last_exit.txt").c_str());
+    }
     g_cfg.exefs = rutas::get().exefs;
     g_cfg.nnsdk = "libnnsdk.so";
     // DEPURACIÓN: el vigilante interrumpe el hilo del juego cada 15 s para volcar su pila (un tirón y más de 100 líneas en

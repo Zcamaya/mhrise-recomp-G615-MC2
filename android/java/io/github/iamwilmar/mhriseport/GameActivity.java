@@ -1,5 +1,7 @@
 package io.github.iamwilmar.mhriseport;
 
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
 import android.app.NativeActivity;
 import android.content.Context;
 import android.content.Intent;
@@ -146,6 +148,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     @Override
     protected void onCreate(Bundle state) {
+        noteLastExit();  // (before the game starts and opens its log)
         super.onCreate(state);
         // Expand into the cutout (Settings → Display): the game's window over the strip beside the camera too
         File cutoutFolder = SettingsMenu.gameFolder(this);
@@ -164,6 +167,32 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
         getWindow().getDecorView().post(this::showPad);
         showSaveMessage();
+    }
+
+    private static final String[] EXIT_REASONS = {"unknown", "the game closed itself", "killed by a signal",
+        "killed by Android's low memory killer", "a Java crash", "a native crash", "not responding (ANR)",
+        "failed to start", "a permission change", "too much CPU or memory use", "closed by the user (recent apps)",
+        "force-stopped", "a process it depends on died", "other", "frozen", "a package change", "the app was updated"};
+
+    // Why the last run ended, as Android recorded it, for the game to put in its log (<data>/last_exit.txt): a run killed
+    // by the low memory killer or swiped away from recent apps gets no chance to write a line of its own.
+    private void noteLastExit() {
+        File folder = SettingsMenu.gameFolder(this);
+        if (folder == null) return;
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            java.util.List<ApplicationExitInfo> exits = am.getHistoricalProcessExitReasons(getPackageName(), 0, 1);
+            if (exits.isEmpty()) return;
+            ApplicationExitInfo e = exits.get(0);
+            int reason = e.getReason();
+            String line = String.format(java.util.Locale.ROOT, "last run ended %tF %<tT: %s%s (memory %d MB, %d MB resident)\n",
+                    e.getTimestamp(), reason >= 0 && reason < EXIT_REASONS.length ? EXIT_REASONS[reason] : "reason " + reason,
+                    e.getDescription() != null ? " (" + e.getDescription() + ")" : "", e.getPss() / 1024, e.getRss() / 1024);
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(new File(folder, "last_exit.txt"))) {
+                out.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (java.io.IOException | RuntimeException ignored) {
+        }
     }
 
     // Full screen for real: the Fullscreen theme only drops the status bar, so with three-button navigation (or a visible
