@@ -729,6 +729,84 @@ std::unique_ptr<ModFontGlyphs> glyphs;
 GLint max_texture_size = 0;
 std::chrono::steady_clock::time_point last;
 
+// The settings menu's look (SettingsMenu.java: PANEL, ROW, EDGE, GOLD, CREAM, DIM, RED, GREEN): dark wine panels with a
+// bronze edge, cream text, gold for what's on, the game's red for what's pressed. Scripts can still push their own.
+ImVec4 rgb(uint32_t c, float a = 1) {
+  return {float(c >> 16 & 255) / 255, float(c >> 8 & 255) / 255, float(c & 255) / 255, a};
+}
+void apply_theme(ImGuiStyle &st) {
+  constexpr uint32_t panel = 0x201010, row = 0x2C1614, edge = 0xC49646, gold = 0xE2B65C, cream = 0xF0E4C8,
+                     dim = 0xB09C84, red = 0xB0221E, wine = 0x5A1A16, wine_light = 0x7A2620;
+  ImVec4 *c = st.Colors;
+  c[ImGuiCol_Text] = rgb(cream);
+  c[ImGuiCol_TextDisabled] = rgb(dim);
+  c[ImGuiCol_WindowBg] = rgb(panel, .94f);
+  c[ImGuiCol_ChildBg] = rgb(panel, 0);
+  c[ImGuiCol_PopupBg] = rgb(panel, .97f);
+  c[ImGuiCol_Border] = rgb(edge, .7f);
+  c[ImGuiCol_BorderShadow] = rgb(0, 0);
+  c[ImGuiCol_FrameBg] = rgb(row);
+  c[ImGuiCol_FrameBgHovered] = rgb(wine);
+  c[ImGuiCol_FrameBgActive] = rgb(wine_light);
+  c[ImGuiCol_TitleBg] = rgb(row);
+  c[ImGuiCol_TitleBgActive] = rgb(wine);
+  c[ImGuiCol_TitleBgCollapsed] = rgb(row, .8f);
+  c[ImGuiCol_MenuBarBg] = rgb(row);
+  c[ImGuiCol_ScrollbarBg] = rgb(panel, .6f);
+  c[ImGuiCol_ScrollbarGrab] = rgb(edge, .45f);
+  c[ImGuiCol_ScrollbarGrabHovered] = rgb(edge, .7f);
+  c[ImGuiCol_ScrollbarGrabActive] = rgb(gold);
+  c[ImGuiCol_CheckMark] = rgb(gold);
+  c[ImGuiCol_SliderGrab] = rgb(edge);
+  c[ImGuiCol_SliderGrabActive] = rgb(gold);
+  c[ImGuiCol_Button] = rgb(wine);
+  c[ImGuiCol_ButtonHovered] = rgb(wine_light);
+  c[ImGuiCol_ButtonActive] = rgb(red);
+  c[ImGuiCol_Header] = rgb(wine);
+  c[ImGuiCol_HeaderHovered] = rgb(wine_light);
+  c[ImGuiCol_HeaderActive] = rgb(red);
+  c[ImGuiCol_Separator] = rgb(edge, .5f);
+  c[ImGuiCol_SeparatorHovered] = rgb(edge, .8f);
+  c[ImGuiCol_SeparatorActive] = rgb(gold);
+  c[ImGuiCol_ResizeGrip] = rgb(edge, .3f);
+  c[ImGuiCol_ResizeGripHovered] = rgb(edge, .6f);
+  c[ImGuiCol_ResizeGripActive] = rgb(gold);
+  c[ImGuiCol_Tab] = rgb(row);
+  c[ImGuiCol_TabHovered] = rgb(wine_light);
+  c[ImGuiCol_TableHeaderBg] = rgb(row);
+  c[ImGuiCol_TableBorderStrong] = rgb(edge, .6f);
+  c[ImGuiCol_TableBorderLight] = rgb(edge, .3f);
+  c[ImGuiCol_TableRowBg] = rgb(0, 0);
+  c[ImGuiCol_TableRowBgAlt] = rgb(cream, .04f);
+  c[ImGuiCol_TextSelectedBg] = rgb(red, .5f);
+  c[ImGuiCol_PlotLines] = c[ImGuiCol_PlotHistogram] = rgb(gold);
+  c[ImGuiCol_DragDropTarget] = rgb(gold);
+  c[ImGuiCol_ModalWindowDimBg] = rgb(0, .5f);
+  st.WindowRounding = 6;
+  st.ChildRounding = st.FrameRounding = st.PopupRounding = st.GrabRounding = st.ScrollbarRounding = 4;
+  st.WindowBorderSize = 2;
+  st.FrameBorderSize = 0;
+  st.WindowPadding = {12, 10};
+  st.FramePadding = {10, 6};
+  st.ItemSpacing = {10, 8};
+  st.ScrollbarSize = 18;  // (a finger drags it)
+  st.GrabMinSize = 16;
+  st.WindowTitleAlign = {.5f, .5f};
+}
+
+// The style and text at a scale (the display's density times the menu size, SettingsMenu.uiScale): the font is made at
+// the first one, so later sizes scale it
+float font_scale = 1;   // what the font atlas was made at (0: ImGui's own small font, scaled entirely)
+void restyle(float scale) {
+  ImGuiStyle &st = ImGui::GetStyle();
+  st = ImGuiStyle();
+  apply_theme(st);
+  st.ScaleAllSizes(scale);
+  ImGui::GetIO().FontGlobalScale = font_scale > 0 ? scale / font_scale : scale * 18 / 13;  // (its font is 13 px)
+}
+float ui_scale = 1;
+bool place_again = true;  // (a new size puts the window back where a fresh one goes)
+
 enum class Primitive { Text, Line, FilledRect, OutlineRect, FilledCircle, OutlineCircle, FilledQuad, OutlineQuad,
                        WorldToScreen, WorldText };
 std::optional<rise::CameraMatrices> frame_camera;
@@ -824,8 +902,11 @@ void mod_lua::service_ui_frame() {
   ImGui::NewFrame();
   drawing = true;
   if (visible) {
-    ImGui::SetNextWindowSize({io.DisplaySize.x * .82f, io.DisplaySize.y * .8f}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos({io.DisplaySize.x * .5f, io.DisplaySize.y * .5f}, ImGuiCond_FirstUseEver, {.5f,.5f});
+    // Where the settings menu goes: centred, as wide as it (940 dp at most, 94% of the screen), 92% of the height
+    auto cond = place_again ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+    place_again = false;
+    ImGui::SetNextWindowSize({std::min(io.DisplaySize.x * .94f, 940 * ui_scale), io.DisplaySize.y * .92f}, cond);
+    ImGui::SetNextWindowPos({io.DisplaySize.x * .5f, io.DisplaySize.y * .5f}, cond, {.5f, .5f});
     bool open = true;
     if (ImGui::Begin("MOD UI", &open, ImGuiWindowFlags_NoBringToFrontOnFocus))
       draw_ui();
@@ -936,24 +1017,26 @@ void mod_lua::open_imgui(lua_State *L) {
 }
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_iamwilmar_mhriseport_ModUi_nativeCreate(JNIEnv *, jclass,
-                                                       jfloat density) {
+                                                       jfloat scale) {
   std::lock_guard lock(mod_lua::lua_mutex());
   ui = ImGui::CreateContext();
   ImGui::SetCurrentContext(ui);
   auto &io = ImGui::GetIO();
   io.IniFilename = nullptr;
-  ImGui::GetStyle().ScaleAllSizes(density);
+  ui_scale = scale;
+  // (18 at 1: between the settings menu's 16 sp rows and its titles, since this text is denser)
   const char *font = "/system/fonts/NotoSansCJK-Regular.ttc";
+  font_scale = 0;
   if (auto f = fopen(font, "rb")) {
     fclose(f);
     glyphs = std::make_unique<ModFontGlyphs>(*io.Fonts);
-    if (io.Fonts->AddFontFromFileTTF(font, 17 * density, nullptr, glyphs->ranges()))
+    if (io.Fonts->AddFontFromFileTTF(font, 18 * scale, nullptr, glyphs->ranges())) {
       io.UserData = glyphs.get();
-    else
+      font_scale = scale;
+    } else
       glyphs.reset();
   } else {
     io.Fonts->AddFontDefault();
-    io.FontGlobalScale = density;
   }
   if (!io.Fonts->Build()) {
     __android_log_write(ANDROID_LOG_ERROR, "RiseLua",
@@ -962,19 +1045,30 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeCreate(JNIEnv *, jclass,
     io.UserData = nullptr;
     glyphs.reset();
     io.Fonts->AddFontDefault();
-    io.FontGlobalScale = density;
+    font_scale = 0;
     if (!io.Fonts->Build()) {
       ImGui::DestroyContext(ui);
       ui = nullptr;
       return;
     }
   }
+  restyle(scale);
   ImGui_ImplOpenGL3_Init("#version 300 es");
   ImGui_ImplOpenGL3_NewFrame();
   glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture_size);
   last = std::chrono::steady_clock::now();
   needs_render = true;
   had_geometry = false;
+}
+// Settings → Display → Menu size changed (or the screen did): the same font, scaled
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_iamwilmar_mhriseport_ModUi_nativeScale(JNIEnv *, jclass, jfloat scale) {
+  std::lock_guard lock(mod_lua::lua_mutex());
+  if (!ui || scale <= 0 || scale == ui_scale) return;
+  ui_scale = scale;
+  place_again = true;
+  restyle(scale);
+  needs_render = true;
 }
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_iamwilmar_mhriseport_ModUi_nativeSize(JNIEnv *, jclass, jint w, jint h) {

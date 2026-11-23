@@ -136,7 +136,7 @@ may stutter while its shaders are translated and compiled; they are cached for t
 
 ## Options
 
-The in-game settings menu (the gear of the touch controls) sets the common ones by section; choices with more than two options open a drop-down, and Display > Menu size scales the menu's text: **Display** (base
+The in-game settings menu (the gear of the touch controls) sets the common ones by section; choices with more than two options open a drop-down, and the menus start at a size that fits the screen, which Display > Menu size scales (the MOD UI too): **Display** (base
 resolution, dynamic resolution, FSR, FPS limit, FPS counter), **Graphics** (shadows, texture arrays, anisotropic filtering), **GPU driver** (the system's or one of your own), **Frame generation** (on/off, generator, Quality Preset, Lossless.dll),
 **Performance** (performance hints, fast cores, low memory, shader warm-up, pipelines on one thread), and the touch
 controls, combos and controller. Underneath, each is a `name = value` line (`1` is on) in `mhr.ini` in your data
@@ -391,7 +391,8 @@ archive (zip, rar or 7z) and puts its scripts and resource files where the game 
 depends on which REFramework calls it uses: the common ones (hooks on the game's methods, singletons, managed objects,
 on-frame windows and ImGui) are there, not all of them. Settings → **Mods & cheats** → **MOD UI** opens the scripts'
 own windows, and so do **L3 + R3** on a controller (REFramework's own shortcut; Mods & cheats → MOD UI controller
-hotkey sets another, up to three buttons) and the floating **MOD** button (Mods & cheats → MOD UI button); Debug → **Lua / TDB** shows what the scripts did at start-up. This is
+hotkey sets another, up to three buttons) and the **MOD** touch control, which shows up with scripts installed (Edit
+layout moves it, changes its look or hides it like any other control); Debug → **Lua / TDB** shows what the scripts did at start-up. This is
 [yun-wulian](https://github.com/yun-wulian)'s work (see Credits).
 
 The imgui table has REFramework's whole list of widgets except its draw lists, font loading and ImGuizmo (tables,

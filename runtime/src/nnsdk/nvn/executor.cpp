@@ -21,6 +21,7 @@
 #include <cerrno>
 #include <cmath>
 #include <functional>
+#include <array>
 #include <future>
 #include <map>
 #include <optional>
@@ -2337,7 +2338,7 @@ private:
     std::unordered_set<uint64_t> warm_done_;
     bool warm_started_ = false;             // solo el hilo del ejecutor
     uint64_t prof_warm_taken_ = 0, prof_warm_waits_ = 0;
-    std::optional<PipelineBuild> warm_take(uint64_t h);
+    std::optional<PipelineBuild> warm_take(uint64_t h, bool* building = nullptr);
     PipelineBuild await_pipeline(const PipelineFuture& build);
     void warm_up();
 
@@ -2348,6 +2349,7 @@ public:
 private:
     // The submitter keeps the modules, layout and pass alive until the worker publishes its VkResult.
     using PipelineTask = std::packaged_task<PipelineBuild()>;
+    std::unordered_map<uint64_t, PipelineFuture> async_builds_;  // graphics pipelines the workers are building (NvnSubmit)
     std::mutex async_mutex_;
     std::condition_variable async_cv_;
     std::deque<PipelineTask> async_queue_;
@@ -7005,10 +7007,27 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
         }
         return it->second;
     }
+    // Built by the worker threads: until it's done, its draws are skipped, a frame or two of one effect or mesh missing,
+    // as before the NVN refactor. Waiting for it here (as the refactor did) stopped the frame for the whole compile, a
+    // freeze for every new pipeline: walking into a new part of a map, the first time an effect plays.
+    std::optional<PipelineBuild> finished;
+    if (auto it = async_builds_.find(h); it != async_builds_.end()) {
+        if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            g_drop_stats.draws_skipped.fetch_add(1, std::memory_order_relaxed);
+            return VK_NULL_HANDLE;
+        }
+        finished = it->second.get();
+        async_builds_.erase(it);
+    }
     std::optional<PipelineBuild> warm;
-    if (!per_stage_keys_) {
+    if (!per_stage_keys_ && !finished) {
         LoadTimer timer(*this, kLdWarm);
-        warm = warm_take(h);
+        bool building = false;
+        warm = warm_take(h, rp_recurring_ ? &building : nullptr);  // (a pass of one frame waits: skipped, it'd stay missing)
+        if (building) {
+            g_drop_stats.draws_skipped.fetch_add(1, std::memory_order_relaxed);
+            return VK_NULL_HANDLE;
+        }
         if (warm && warm->pipeline) {
             ++prof_warm_taken_;
             return pipelines_[h] = warm->pipeline;
@@ -7100,10 +7119,11 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
     VkPipeline p = VK_NULL_HANDLE;
     const auto created_at = std::chrono::steady_clock::now();
     const bool during_save = driver_cache_.reading();
-    const auto build = [&] {
+    // (by value: on a worker it outlives this call; the modules, layout and pass live as long as the executor)
+    const auto build = [this, key, inputs, layout = l.pipeline, rp, stage_modules = std::to_array(modules)] {
         PipelineBuild result;
         result.status = driver_cache_.compile([&](VkPipelineCache cache) {
-            return make_graphics_pipeline(key, modules, inputs, l.pipeline, rp, cache, result.pipeline);
+            return make_graphics_pipeline(key, stage_modules.data(), inputs, layout, rp, cache, result.pipeline);
         });
         return result;
     };
@@ -7114,13 +7134,19 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
         LoadTimer timer(*this, kLdPipeline);
         if (rejected_at_warmup) {
             created = warm->status;
+        } else if (finished) {
+            p = finished->pipeline;
+            created = finished->status;
         } else if (worker) {
             hud::shader_queued();
             g_drop_stats.pipelines_async.fetch_add(1, std::memory_order_relaxed);
-            const auto result = await_pipeline(enqueue_pipeline(PipelineTask(build), true));
-            hud::shader_done();
-            p = result.pipeline;
-            created = result.status;
+            g_drop_stats.draws_skipped.fetch_add(1, std::memory_order_relaxed);
+            async_builds_[h] = enqueue_pipeline(PipelineTask([build] {
+                PipelineBuild result = build();
+                hud::shader_done();
+                return result;
+            }), true);
+            return VK_NULL_HANDLE;
         } else {
             const auto result = build();
             p = result.pipeline;
@@ -11077,7 +11103,8 @@ long available_kb() {
 }  // namespace
 
 // Claim the key before a foreground build. If warm-up already owns it, join its publication.
-std::optional<Executor::PipelineBuild> Executor::warm_take(uint64_t h) {
+// building: one the warm-up is still on goes to async_builds_ instead of being waited for (true).
+std::optional<Executor::PipelineBuild> Executor::warm_take(uint64_t h, bool* building) {
     if (!warm_started_) return {};
     PipelineFuture build;
     {
@@ -11088,7 +11115,14 @@ std::optional<Executor::PipelineBuild> Executor::warm_take(uint64_t h) {
         build = std::move(it->second);
         warm_builds_.erase(it);
     }
-    if (build.wait_for(std::chrono::seconds(0)) != std::future_status::ready) ++prof_warm_waits_;
+    if (build.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        if (building) {
+            async_builds_[h] = std::move(build);
+            *building = true;
+            return {};
+        }
+        ++prof_warm_waits_;
+    }
     return await_pipeline(build);
 }
 

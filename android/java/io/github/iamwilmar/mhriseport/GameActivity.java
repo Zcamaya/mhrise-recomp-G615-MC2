@@ -100,8 +100,6 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     private Vibrator vibrator;
     private CaptureButton capture;  // the floating capture button, while Debug → Capture button is on
     private WindowManager.LayoutParams captureLp;
-    private ModButton modButton;  // the floating MOD UI button, while Mods → MOD UI button is on
-    private WindowManager.LayoutParams modButtonLp;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -118,6 +116,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         applyPad();
         pad = new TouchPad(this, controls, this);
         pad.setGameFps(gameFps());
+        pad.setModsAvailable(luaScripts());
         // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
         getWindow().getDecorView().post(this::showPad);
         showSaveMessage();
@@ -166,7 +165,6 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
                 if (resumed) modUi.onResume();
             }
             showCapture();
-            showModButton();
         } catch (RuntimeException e) {
             // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
             System.err.println("[controles] no se pudo poner la ventana de los controles: " + e);
@@ -277,57 +275,6 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         }
     }
 
-    // The MOD UI button, the same way: its own small window, added after the MOD UI's so it stays above it and can close it
-    private void showModButton() {
-        if (!shown || modUi == null) return;
-        File folder = SettingsMenu.gameFolder(this);
-        boolean want = folder != null && new Ini(folder).on(ModButton.SWITCH);
-        if (want == (modButton != null)) return;
-        if (!want) {
-            try {
-                getWindowManager().removeViewImmediate(modButton);
-            } catch (RuntimeException ignored) {
-            }
-            modButton = null;
-            return;
-        }
-        ModButton b = new ModButton(this, new ModButton.Host() {
-            @Override public void toggle() { toggleModUi(); }
-            @Override public void moved(int x, int y) { placeModButton(x, y); }
-            @Override public void tick() { GameActivity.this.tick(); }
-        });
-        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(b.size(), b.size(),
-                WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                        | overlayAcceleration(),
-                PixelFormat.TRANSLUCENT);
-        lp.token = getWindow().getDecorView().getWindowToken();
-        lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
-        lp.gravity = Gravity.TOP | Gravity.LEFT;
-        lp.setTitle("mod button");
-        try {
-            getWindowManager().addView(b, lp);
-            modButton = b;
-            modButtonLp = lp;
-            placeModButton(b.x, b.y);
-        } catch (RuntimeException e) {
-            System.err.println("[controles] couldn't add the MOD UI button: " + e);
-        }
-    }
-
-    private void placeModButton(int x, int y) {
-        if (modButton == null) return;
-        View decor = getWindow().getDecorView();
-        int size = modButton.size();
-        modButtonLp.x = modButton.x = Math.max(0, Math.min(x, decor.getWidth() - size));
-        modButtonLp.y = modButton.y = Math.max(0, Math.min(y, decor.getHeight() - size));
-        try {
-            getWindowManager().updateViewLayout(modButton, modButtonLp);
-        } catch (RuntimeException ignored) {
-        }
-    }
-
     // Kept on the screen, even if it was left near an edge on a bigger screen or in the other orientation.
     private void placeCapture(int x, int y) {
         if (capture == null) return;
@@ -352,13 +299,6 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             } catch (RuntimeException ignored) {
             }
             capture = null;
-        }
-        if (modButton != null) {
-            try {
-                getWindowManager().removeViewImmediate(modButton);
-            } catch (RuntimeException ignored) {
-            }
-            modButton = null;
         }
         if (shown) {
             try {
@@ -386,7 +326,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         pad.setGameFps(gameFps());
         pad.invalidate();
         showCapture();
-        showModButton();
+        pad.setModsAvailable(luaScripts());
         applyTurbo(true);
     }
 
@@ -463,6 +403,27 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     @Override
     public void layoutChanged() {
         controls.save();
+    }
+
+    @Override
+    public void buttonRemoved() {
+        controls.save();
+        applyPad();  // (its controller buttons go with it)
+    }
+
+    // Lua scripts the MOD UI can show: an enabled mod with REFramework scripts, or the Object Explorer. The MOD control
+    // is only on the screen then.
+    private boolean luaScripts() {
+        if (!luaBuild(this)) return false;
+        File folder = SettingsMenu.gameFolder(this);
+        if (folder == null) return false;
+        if (new Ini(folder).on("object_explorer")) return true;
+        try {
+            for (ModFiles.Mod m : ModFiles.list(folder))
+                if (m.on && new File(m.dir, "reframework/autorun").isDirectory()) return true;
+        } catch (RuntimeException ignored) {
+        }
+        return false;
     }
 
     // ---- pictures for buttons, and layout files (the system's file picker answers in onActivityResult) ----------------

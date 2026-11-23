@@ -37,6 +37,19 @@ final class TouchPad extends View {
         void editControl(Ctl c);
         // The editor's Add: a new button (combo k, already placed in the middle); its buttons are chosen first
         void addButton(int k);
+        // The MOD control: the MOD UI opens or closes
+        void toggleModUi();
+        // The editor's Delete took an added button away (its controller buttons too)
+        void buttonRemoved();
+    }
+
+    // The MOD control is only there with Lua scripts installed (GameActivity: setModsAvailable)
+    private boolean modsAvailable;
+
+    void setModsAvailable(boolean available) {
+        if (modsAvailable == available) return;
+        modsAvailable = available;
+        invalidate();
     }
 
     private final Controls cfg;
@@ -217,7 +230,7 @@ final class TouchPad extends View {
             case DPAD: return 0.13f * u;
             case L: case R: return 0.075f * u;
             case ZL: case ZR: return 0.06f * u;
-            case MINUS: case PLUS: case MENU: case L3: case R3: return 0.042f * u;
+            case MINUS: case PLUS: case MENU: case MOD: case L3: case R3: return 0.042f * u;
             case A: case B: case X: case Y: return 0.062f * u;
             default: return 0.06f * u;  // combos
         }
@@ -226,6 +239,7 @@ final class TouchPad extends View {
     private boolean active(Ctl c) {
         if (c == Ctl.MENU) return true;  // (siempre: es la forma de volver a encender los demás)
         if (!cfg.touchOn) return false;
+        if (c == Ctl.MOD && !modsAvailable) return false;
         if (c.combo() && cfg.combo[c.comboIndex()] == 0) return false;
         return cfg.shown[c.ordinal()] || editing;
     }
@@ -258,7 +272,7 @@ final class TouchPad extends View {
     }
 
     private static boolean isButton(Ctl c) {
-        return c != null && c != Ctl.LSTICK && c != Ctl.RSTICK && c != Ctl.MENU;
+        return c != null && c != Ctl.LSTICK && c != Ctl.RSTICK && c != Ctl.MENU && c != Ctl.MOD;
     }
 
     // ---- los dedos ----------------------------------------------------------------------------------------------------
@@ -428,7 +442,7 @@ final class TouchPad extends View {
             if (f.dirs != 0 && f.dirs != was) host.tick();
             return;
         }
-        if (c == Ctl.MENU) return;  // (al soltarlo)
+        if (c == Ctl.MENU || c == Ctl.MOD) return;  // (al soltarlo)
         if (cfg.hold[c.ordinal()]) {  // (tap to hold: each new touch flips it; the finger itself presses nothing)
             f.mask = 0;
             if (first) {
@@ -466,6 +480,10 @@ final class TouchPad extends View {
     private void release(Finger f, boolean lifted) {
         Ctl c = f.ctl;
         if (c == Ctl.MENU && lifted && !f.moved) host.openMenu();
+        if (c == Ctl.MOD && lifted && !f.moved) {
+            host.tick();
+            host.toggleModUi();
+        }
         if ((c == Ctl.LSTICK || c == Ctl.RSTICK) && lifted && cfg.stickPress) {
             // un toque corto sin mover el stick: L3 / R3
             long held = SystemClock.uptimeMillis() - f.down;
@@ -667,8 +685,8 @@ final class TouchPad extends View {
 
     // ---- la barra del modo edición ------------------------------------------------------------------------------------
 
-    private static final int BAR_SMALLER = 0, BAR_BIGGER = 1, BAR_EDIT = 2, BAR_ADD = 3, BAR_HIDE = 4, BAR_GRID = 5,
-            BAR_RESET = 6, BAR_DONE = 7, BAR_ITEMS = 8;
+    private static final int BAR_SMALLER = 0, BAR_BIGGER = 1, BAR_EDIT = 2, BAR_ADD = 3, BAR_DELETE = 4, BAR_HIDE = 5,
+            BAR_GRID = 6, BAR_RESET = 7, BAR_DONE = 8, BAR_ITEMS = 9;
 
     // The grid's step: a fortieth of the screen's height
     private float gridStep() { return getHeight() / 40f; }
@@ -685,6 +703,7 @@ final class TouchPad extends View {
             case BAR_BIGGER: return "+";
             case BAR_EDIT: return "Edit";
             case BAR_ADD: return "Add";
+            case BAR_DELETE: return "Delete";
             case BAR_HIDE: return selected != null && !cfg.shown[selected.ordinal()] ? "Show" : "Hide";
             case BAR_GRID: return cfg.grid ? "Grid ✓" : "Grid";
             case BAR_RESET: return "Reset";
@@ -723,6 +742,17 @@ final class TouchPad extends View {
                     host.addButton(k);
                     break;
                 }
+                case BAR_DELETE:
+                    if (selected == null) {
+                        hint = "Tap a button you added, then Delete.";
+                    } else if (!selected.combo()) {
+                        hint = "Only buttons you added can be deleted: Hide takes this one off the screen.";
+                    } else {
+                        cfg.removeButton(selected.comboIndex());
+                        selected = null;
+                        host.buttonRemoved();
+                    }
+                    break;
                 case BAR_HIDE:
                     if (selected != null && selected != Ctl.MENU) cfg.shown[selected.ordinal()] = !cfg.shown[selected.ordinal()];
                     break;
@@ -738,7 +768,7 @@ final class TouchPad extends View {
                     host.editDone();
                     break;
             }
-            if (i != BAR_ADD) hint = null;
+            if (i != BAR_ADD && i != BAR_DELETE) hint = null;
             if (editing) host.layoutChanged();
             host.tick();
             invalidate();
@@ -811,6 +841,12 @@ final class TouchPad extends View {
         Appearance state = artwork[k];
         boolean down = state.down;
         android.graphics.Bitmap picture = cfg.image[k] ? bitmap(ctl) : null;
+        if (ctl == Ctl.MOD) {  // (its own text, or the look it was given)
+            glyphs.custom(c, x, y, r, cfg.shape[k] == 0 ? 1 : cfg.shape[k], cfg.icon[k],
+                    cfg.label[k] != null ? cfg.label[k] : "MOD", false, down, a, Controls.COLOR_FILLS[cfg.color[k]], picture,
+                    cfg.outline[k] / 100f, cfg.fit[k]);
+            return;
+        }
         if (ctl == Ctl.MENU && cfg.styled(ctl)) {  // (its gear, unless it has an icon or a label)
             glyphs.custom(c, x, y, r, cfg.shape[k] == 0 ? 1 : cfg.shape[k], cfg.icon[k], cfg.label[k], false, down, a,
                     Controls.COLOR_FILLS[cfg.color[k]], picture, cfg.outline[k] / 100f, cfg.fit[k]);

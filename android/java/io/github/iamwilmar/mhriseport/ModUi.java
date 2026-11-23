@@ -14,7 +14,8 @@ import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
 final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
-    private static native void nativeCreate(float density);
+    private static native void nativeCreate(float scale);
+    private static native void nativeScale(float scale);
     private static native int nativeFrame(int width,int height);
     private static native void nativeSize(int width,int height);
     private static native boolean nativePending();
@@ -94,6 +95,7 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
             java.io.File folder = SettingsMenu.gameFolder(activity);
             if (folder != null) menuHotkey = hotkey(new Ini(folder));
         }
+        if (open) nativeScale(uiScale());  // (Menu size may have changed since)
         nativeMenu(open);
         int pass = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         if (open) panel.flags &= ~pass;
@@ -145,9 +147,13 @@ final class ModUi extends GLSurfaceView implements GLSurfaceView.Renderer {
         if (created) nativeClose();
         created = false;
     }
+    // The settings menu's size: pixels per dp, the screen's share and Menu size
+    private float uiScale() {
+        return getResources().getDisplayMetrics().density * SettingsMenu.sizeFactor(getContext());
+    }
     public void onSurfaceCreated(GL10 gl,EGLConfig config) {
         closeRenderer();
-        nativeCreate(getResources().getDisplayMetrics().density);
+        nativeCreate(uiScale());
         created = true;
     }
     @Override public void surfaceDestroyed(SurfaceHolder holder){

@@ -77,7 +77,7 @@ final class SettingsMenu {
         this.cfg = cfg;
         chinese = usesChinese(activity);
         mapNames = mappingNames();
-        this.scale = menuScale(activity) / 100f;
+        this.scale = sizeFactor(activity);
         dialog = new Dialog(activity);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
@@ -193,7 +193,7 @@ final class SettingsMenu {
                     dialog.dismiss();
                     new SettingsMenu(activity, cfg).show();
                 }), false);
-        number(tr("Menu size", "菜单大小"), tr("The size of this menu's text and buttons.", "调整本菜单的文字和按钮大小。"), 60, 130, 5, " %", () -> menuScale(activity), v -> {
+        number(tr("Menu size", "菜单大小"), tr("The size of this menu and the MOD UI, on top of what fits your screen.", "本菜单和 MOD UI 的大小（在适配屏幕的基础上调整）。"), 60, 130, 5, " %", () -> menuScale(activity), v -> {
                     try {
                         activity.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit().putInt(SCALE_KEY, v).apply();
                     } catch (RuntimeException ignored) {
@@ -1299,14 +1299,15 @@ final class SettingsMenu {
         goldBar(alpha);
         box.addView(alpha);
 
-        final boolean button = Controls.isButton(c), stick = Controls.isStick(c), menu = c == Controls.Ctl.MENU;
+        final boolean button = Controls.isButton(c), stick = Controls.isStick(c),
+                menu = c == Controls.Ctl.MENU || c == Controls.Ctl.MOD;
         if (c != Controls.Ctl.DPAD)
             box.addView(pickRow(tr("Shape", "形状"), chinese ? new String[]{"默认", "圆形", "圆角方形", "方形"} : Controls.SHAPES, () -> cfg.shape[k], v -> cfg.shape[k] = v,
                     stick ? tr("The stick's base. Its own: the usual circle.", "摇杆底座的形状。默认使用圆形。")
                           : tr("Its own: the usual look (a combo of one button looks like that button).", "默认使用原有外观，单键组合与对应的按键外观一致。")));
         if (button || menu)
             box.addView(pickRow(tr("Icon", "图标"), chinese ? new String[]{"无（文字）", "上箭头", "下箭头", "左箭头", "右箭头", "星形", "菱形", "盾牌", "刀刃", "准星", "短横线"} : Controls.ICONS, () -> cfg.icon[k], v -> cfg.icon[k] = v,
-                    menu ? tr("An icon instead of the gear.", "用图标替换齿轮。") : tr("An icon instead of the button's letters.", "用图标替换按键文字。")));
+                    menu ? (c == Controls.Ctl.MOD ? tr("An icon instead of MOD.", "用图标替换 MOD 文字。") : tr("An icon instead of the gear.", "用图标替换齿轮。")) : tr("An icon instead of the button's letters.", "用图标替换按键文字。")));
         final TextView edgeValue = text("", 16, GOLD, false);
         Runnable showEdge = () -> edgeValue.setText(cfg.outline[k] == 0 ? tr("None", "无") : cfg.outline[k] + " %");
         showEdge.run();
@@ -1645,10 +1646,6 @@ final class SettingsMenu {
                 activity.showModUi();
             });
             if (folder != null) {
-                flag(tr("MOD UI button", "MOD 界面悬浮按钮"),
-                        tr("A small round button over the game that opens and closes the MOD UI. Drag it out of the way.",
-                                "游戏画面上的小圆形按钮，轻点可打开或关闭 MOD 界面，可拖动位置。"),
-                        ModButton.SWITCH, false);
                 int[] keys = ModUi.hotkey(ini);
                 action(tr("MOD UI controller hotkey: ", "MOD 界面手柄快捷键：") + hotkeyName(keys),
                         tr("Buttons pressed together on the controller open and close the MOD UI. L3 + R3 by default, as in "
@@ -1871,6 +1868,18 @@ final class SettingsMenu {
     }
 
     // Saved menu size, in %
+    // Menu size on top of the screen's own: the menus were laid out on a phone about 400 dp tall, so a small phone
+    // gets them a little smaller and a tablet bigger (the same share of the screen), then Menu size moves that
+    static float screenFactor(android.content.Context c) {
+        android.util.DisplayMetrics m = c.getResources().getDisplayMetrics();
+        float shortDp = Math.min(m.widthPixels, m.heightPixels) / m.density;
+        return Math.max(0.85f, Math.min(1.75f, shortDp / 400f));
+    }
+
+    static float sizeFactor(android.content.Context c) {
+        return menuScale(c) / 100f * screenFactor(c);
+    }
+
     static int menuScale(android.content.Context c) {
         try {
             return c.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getInt(SCALE_KEY, SCALE_DEFAULT);
