@@ -533,6 +533,11 @@ final class SettingsMenu {
                         + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.", "省略中间没有任务的连续 GPU 屏障，减少等待与发热。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "tight_barriers", false);
+        flag(tr("Skip cache-only GPU barriers", "跳过仅刷新缓存的 GPU 屏障"),
+                tr("Some of the game's GPU stops only ask to refresh caches that don't exist on a phone's GPU, and order "
+                        + "nothing. On: those are skipped. Off by default: if graphics glitch with it on, turn it off. "
+                        + "Applies at once.", "游戏的部分 GPU 屏障只要求刷新手机 GPU 上不存在的缓存，并不保证顺序。开启后跳过这些屏障。默认关闭，若开启后画面异常可关闭。立即生效。"),
+                "barrier_bits", false);
         flag(tr("Fast textures", "快速纹理"),
                 tr("For speed over accuracy: each draw's textures are looked up by where the game keeps them ("
                         + "not what they are now), and textures the CPU rewrites are checked every other frame. Less CPU time "
@@ -2079,7 +2084,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "fast_textures", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
+        "60fps", "adreno_turbo", "fast_textures", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "barrier_bits", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",

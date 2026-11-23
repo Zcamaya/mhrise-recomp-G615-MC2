@@ -1754,6 +1754,9 @@ private:
     // Perfil del tiler (por 300 frames).
     uint64_t prof_clear_loads_ = 0, prof_clear_flushes_ = 0, prof_store_none_ = 0, prof_area_cut_ = 0;
     uint64_t prof_barriers_deferred_ = 0, prof_barrier_splits_ = 0, prof_rt_kept_ = 0;
+    uint64_t prof_barrier_bits_[256] = {};  // perfil: barreras de NVN por sus bits
+    uint64_t prof_barriers_no_order_ = 0;   // perfil: barreras de NVN sin bits de orden (saltadas con barrier_bits)
+    bool skip_unordered_barriers_ = false;  // <datos>/barrier_bits
     uint64_t prof_split_storage_ = 0, prof_split_sample_ = 0;  // perfil: por qué se cortó (escribe storage, lee un adjunto)
     // Perfil de cortes (con registro): por qué se cerró cada pase y qué tiene que ver con él el siguiente. Lo dice quien
     // cierra el pase por su cuenta (split_why_: espejo, textura, barrera, unión de overlays…); si nadie lo dijo, el comando
@@ -3686,6 +3689,11 @@ void Executor::read_flags() {
     // flushes its caches for it (on Turnip, a wait for idle each). About half of the ~250 a frame in MH Rise are those.
     // Off by default (Settings → Performance → Skip empty GPU barriers: <datos>/tight_barriers).
     skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
+    // NVN's barrier takes bits: 0x1-0x8 order work (primitives, fragments, fragments of the same tile, indirect data),
+    // 0x10-0x80 only invalidate the GPU's caches (textures, shader code, texture descriptors, ZCull). A barrier with
+    // none of the first four orders nothing, and the caches it names don't exist here as such: our uploads and
+    // descriptor writes bring their own barriers. Off by default: <datos>/barrier_bits drops those.
+    skip_unordered_barriers_ = NVN_FLAG("barrier_bits");
     recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
     keep_gpu_overlays_ = !NVN_FLAG("no_keep_overlays");
@@ -5731,6 +5739,14 @@ void Executor::barrier() {
 // lo que venga puede leerlos: se corta como siempre. Si no, se aplaza al final del pase (end_render_pass); draw() lo
 // corta antes si un draw muestrea un adjunto del pase o escribe storage.
 void Executor::nvn_barrier(int bits) {
+    prof_barrier_bits_[bits & 0xff]++;
+    if (!(bits & 0xf)) {
+        prof_barriers_no_order_++;
+        if (skip_unordered_barriers_) {
+            if (frame_ == trace_frame_) NVN_LOG("F barrera 0x%x sin orden: saltada\n", bits);
+            return;
+        }
+    }
     const bool lazy = opt_.barrera_perezosa && in_render_pass_ && !targets_changed_ && !storage_since_barrier_;
     if (frame_ == trace_frame_) NVN_LOG("F barrera 0x%x%s\n", bits, lazy ? " aplazada" : "");
     if (!lazy) {
@@ -12011,6 +12027,23 @@ void Executor::profile_frame() {
                 prof_barriers_redundant_ / double(period), prof_barriers_after_pass_ / double(period),
                 prof_barriers_skipped_ / double(period), pass_end_is_barrier_ ? " y _pase" : "");
         prof_full_barriers_ = prof_barriers_redundant_ = prof_barriers_after_pass_ = prof_barriers_skipped_ = 0;
+        {
+            // Las de NVN por sus bits, las más frecuentes primero
+            std::vector<std::pair<uint64_t, int>> by_bits;
+            for (int k = 0; k < 256; ++k)
+                if (prof_barrier_bits_[k]) by_bits.emplace_back(prof_barrier_bits_[k], k);
+            std::sort(by_bits.rbegin(), by_bits.rend());
+            std::string kinds;
+            for (size_t k = 0; k < by_bits.size() && k < 8; ++k) {
+                char b[48];
+                snprintf(b, sizeof b, " 0x%x %.1f;", by_bits[k].second, by_bits[k].first / double(period));
+                kinds += b;
+            }
+            NVN_LOG("perfil barreras de NVN (por frame, por bits):%s %.1f sin bits de orden%s\n", kinds.c_str(),
+                    prof_barriers_no_order_ / double(period), skip_unordered_barriers_ ? " (saltadas, barrier_bits)" : "");
+            std::fill(std::begin(prof_barrier_bits_), std::end(prof_barrier_bits_), 0);
+            prof_barriers_no_order_ = 0;
+        }
         NVN_LOG("perfil merged_passes (por frame): %.1f pases con adjuntos de más, %.1f cambios de targets sin cortar%s\n",
                 prof_passes_merged_ / double(period), prof_rt_merged_ / double(period), merge_passes_ ? "" : " (apagado)");
         prof_passes_merged_ = prof_rt_merged_ = 0;
