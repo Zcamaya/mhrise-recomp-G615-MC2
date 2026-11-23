@@ -1180,6 +1180,7 @@ private:
         uint32_t level = 0, layer = 0, width = 0, height = 0, wb = 0, hb = 0;
         uint8_t kind = 0;
         bool srgb = false, ok = false;
+        bool cache_only = false;  // the GPU already encoded the level: this is just the better copy for the cache
         std::vector<uint8_t> blocks, astc;
     };
     static constexpr size_t kAstcDeferTexels = 256 * 256;  // smaller levels are quick enough to encode in the submit
@@ -1196,6 +1197,18 @@ private:
     VkPipelineLayout bc_layout_ = VK_NULL_HANDLE;
     VkPipeline bc_pipeline_ = VK_NULL_HANDLE;
     bool bc_setup_done_ = false;
+    // ASTC encoded on the GPU (shaders/astc_encode.comp), for a big level that isn't in the ASTC cache: its texels go to
+    // staging and the shader writes the blocks the image is filled from, in the same submit. No wait for the background
+    // encoder and no smaller level shown meanwhile; that encoder still makes its (better) copy for the cache, which the
+    // next load uses. Where the pipeline doesn't build, or with <data>/cpu_astc (live), it's the background encoder as
+    // before. One partition only, so a few dB under astcenc on blocks with two colour regions (BC7's); the first load only.
+    bool astc_on_gpu();
+    bool astc_gpu_encode(const LevelLayout& lv, bcn::Kind kind, const uint8_t* blocks, const Staging::Alloc& out);
+    VkDescriptorSetLayout astc_set_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout astc_layout_ = VK_NULL_HANDLE;
+    VkPipeline astc_pipeline_ = VK_NULL_HANDLE;
+    bool astc_setup_done_ = false;
+    uint64_t prof_astc_gpu_ = 0;
     // Draw count check (count_check.h): the vertex stage with it, per stage of the game (code, control, its SPIR-V);
     // null if it didn't translate. The set layout of the count and an empty one for set 1 when there's no bindless.
     std::unordered_map<uint64_t, std::unique_ptr<ProgramStage>> count_check_stages_;
@@ -4170,7 +4183,9 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
     if (slot < t.astc_pending.size()) t.astc_pending[slot] = 0;
     for (uint32_t z = 0; z < std::max(lv.depth, 1u); z++) {
         const uint8_t* slice = blocks + size_t{z} * slice_bc;
-        Staging::Alloc a = staging_->alloc_contiguous(slice_astc, 16);
+        // (aligned for a storage buffer too: the GPU encoder can write it)
+        Staging::Alloc a = staging_->alloc_contiguous(
+            slice_astc, std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16));
         if (!a.data) return false;
         // A level the game hasn't streamed in yet is all zeros (it creates its textures with every mip and fills the big
         // ones later). That decodes to one colour: ASTC has a block for that (void extent), so nothing to encode or cache.
@@ -4190,6 +4205,10 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
             // Block for block, no encoder (astc::from_bc1): about as fast as a copy, so nothing goes to the cache
             LoadTimer timer(*this, kLdDeswizzle, slice_astc);
             astc::from_bc1(slice, a.data, size_t{lv.width_blocks} * lv.height_blocks);
+            prof_astc_direct_++;
+        } else if ((kind == bcn::kBC2 || kind == bcn::kBC3) &&
+                   astc::from_bc2_bc3(kind == bcn::kBC3, slice, a.data, size_t{lv.width_blocks} * lv.height_blocks)) {
+            // A BC2/BC3 level whose alpha is one value in each block: block for block as well, nothing to encode or cache
             prof_astc_direct_++;
         } else {
         // The key: the BC blocks, their kind, size and colour space, and the encoder's version (1 here: change it if the
@@ -4218,13 +4237,18 @@ bool Executor::astc_level(Texture& t, const LevelLayout& lv, const uint8_t* bloc
             job.kind = static_cast<uint8_t>(kind);
             job.srgb = srgb;
             job.blocks.assign(slice, slice + slice_bc);
-            if (t.astc_pending.size() <= slot) t.astc_pending.resize(slot + 1, 0);
-            t.astc_pending[slot] = job.key;
-            defer_astc(std::move(job));
-            prof_astc_deferred_++;
-            continue;  // (nothing for this level now: upload() keeps it out of what's sampled)
-        }
-        if (!cached) {
+            if (astc_on_gpu() && astc_gpu_encode(lv, kind, slice, a)) {
+                job.cache_only = true;
+                defer_astc(std::move(job));
+                prof_astc_gpu_++;  // (on to the copy below: the GPU writes the blocks before it)
+            } else {
+                if (t.astc_pending.size() <= slot) t.astc_pending.resize(slot + 1, 0);
+                t.astc_pending[slot] = job.key;
+                defer_astc(std::move(job));
+                prof_astc_deferred_++;
+                continue;  // (nothing for this level now: upload() keeps it out of what's sampled)
+            }
+        } else if (!cached) {
             LoadTimer timer(*this, kLdDeswizzle, size_t{lv.width} * lv.height * 4);
             // Whole blocks (the edge ones too: the encoder wants them filled), then the encode.
             const uint32_t w = lv.width_blocks * 4, h = lv.height_blocks * 4;
@@ -4271,7 +4295,7 @@ const ProgramStage* Executor::count_check_stage(const ProgramStage& vs) {
 // ---- ASTC encodes in the background (see AstcJob) ---------------------------------------------------------------------
 
 void Executor::defer_astc(AstcJob job) {
-    astc_waiting_[job.texture]++;
+    if (!job.cache_only) astc_waiting_[job.texture]++;
     {
         std::lock_guard lock(astc_mutex_);
         astc_todo_.push_back(std::move(job));
@@ -4319,6 +4343,7 @@ void Executor::apply_astc_results() {
     }
     bool open = false;  // the barrier before the copies, once
     for (AstcJob& j : done) {
+        if (j.cache_only) continue;  // (stored already; the image has the GPU's blocks)
         auto it = astc_waiting_.find(j.texture);
         if (it == astc_waiting_.end()) continue;  // retired meanwhile
         Texture& t = *j.texture;
@@ -4358,6 +4383,90 @@ void Executor::apply_astc_results() {
         vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0,
                              nullptr, 0, nullptr);
     }
+}
+
+bool Executor::astc_on_gpu() {
+#ifdef HAVE_astc_encode_SPV
+    if (NVN_FLAG("cpu_astc")) return false;
+    if (!astc_setup_done_) {
+        astc_setup_done_ = true;
+        VkContext* c = vk();
+        const VkDescriptorSetLayoutBinding b[2] = {
+            {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        dl.bindingCount = 2;
+        dl.pBindings = b;
+        const VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 3 * sizeof(uint32_t)};
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &astc_set_layout_;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pc;
+        VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        mi.codeSize = sizeof k_astc_encode_spv;
+        mi.pCode = k_astc_encode_spv;
+        VkShaderModule module = VK_NULL_HANDLE;
+        if (vkCreateDescriptorSetLayout(c->device, &dl, nullptr, &astc_set_layout_) == VK_SUCCESS &&
+            vkCreatePipelineLayout(c->device, &pl, nullptr, &astc_layout_) == VK_SUCCESS &&
+            vkCreateShaderModule(c->device, &mi, nullptr, &module) == VK_SUCCESS) {
+            VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName = "main";
+            ci.layout = astc_layout_;
+            if (vkCreateComputePipelines(c->device, VK_NULL_HANDLE, 1, &ci, nullptr, &astc_pipeline_) != VK_SUCCESS)
+                astc_pipeline_ = VK_NULL_HANDLE;
+        }
+        if (module) vkDestroyShaderModule(c->device, module, nullptr);
+        NVN_LOG("ASTC: big levels %s\n", astc_pipeline_ ? "encoded on the GPU at load (the CPU encoder fills the cache)"
+                                                         : "encoded on the CPU (the GPU encoder didn't build)");
+    }
+    return astc_pipeline_ != VK_NULL_HANDLE;
+#else
+    return false;  // (spirv.h from before astc_encode.comp: tools/shaders.sh adds it)
+#endif
+}
+
+// The level's texels (whole blocks) decoded into staging, and a dispatch that writes its ASTC blocks to `out`. false:
+// nothing recorded (too big for one staging range, or no staging or set left), and the caller encodes on the CPU.
+bool Executor::astc_gpu_encode(const LevelLayout& lv, bcn::Kind kind, const uint8_t* blocks, const Staging::Alloc& out) {
+    const VkDeviceSize align = std::max<VkDeviceSize>(vk()->props.limits.minStorageBufferOffsetAlignment, 16);
+    const uint32_t w = lv.width_blocks * 4, h = lv.height_blocks * 4;
+    const size_t bytes = size_t{w} * h * 4, count = size_t{lv.width_blocks} * lv.height_blocks;
+    Staging::Alloc texels = staging_->alloc(bytes, align);  // (up to kStagingChunk: 2048x2048)
+    const VkDescriptorSet set = texels.data ? descriptor_set(astc_set_layout_) : VK_NULL_HANDLE;
+    if (!set) return false;
+    {
+        LoadTimer timer(*this, kLdDeswizzle, bytes);
+        bcn::decode(kind, blocks, lv.width_blocks, lv.height_blocks, texels.data, size_t{w} * 4, w, h);
+    }
+    const VkDescriptorBufferInfo in{texels.buffer, texels.offset, bytes}, to{out.buffer, out.offset, count * 16};
+    VkWriteDescriptorSet wr[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+    for (int k = 0; k < 2; k++) {
+        wr[k].dstSet = set;
+        wr[k].dstBinding = static_cast<uint32_t>(k);
+        wr[k].descriptorCount = 1;
+        wr[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr[k].pBufferInfo = k ? &to : &in;
+    }
+    vkUpdateDescriptorSets(vk()->device, 2, wr, 0, nullptr);
+    const uint32_t groups = static_cast<uint32_t>((count + 63) / 64);
+    const uint32_t gx = std::min<uint32_t>(groups, 65535), gy = (groups + gx - 1) / gx;
+    const uint32_t params[3] = {lv.width_blocks, lv.height_blocks, gx};
+    note_gpu_work();
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, astc_pipeline_);
+    vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, astc_layout_, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd_, astc_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, params);
+    vkCmdDispatch(cmd_, gx, gy, 1);
+    // the blocks, before the copy to the image (recorded by upload after this)
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr,
+                         0, nullptr);
+    return true;
 }
 
 bool Executor::bc_on_gpu(const Texture& t) {
@@ -11583,13 +11692,15 @@ void Executor::profile_frame() {
             (unsigned long long)prof_audit_changes_,
             prof_full_hash_bytes_ / double(period) / 1048576.0, (unsigned long long)prof_watched_textures_);
     prof_audit_changes_ = prof_full_hash_bytes_ = 0;
-    if (prof_astc_encoded_ || prof_astc_cached_ || prof_astc_empty_ || prof_astc_direct_ || prof_astc_deferred_ || prof_astc_applied_)
-        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache, %llu BC1 converted directly, %llu empty (not streamed in yet); "
-                "%llu sent to the background encoder, %llu back from it\n",
+    if (prof_astc_encoded_ || prof_astc_cached_ || prof_astc_empty_ || prof_astc_direct_ || prof_astc_deferred_ || prof_astc_applied_ ||
+        prof_astc_gpu_)
+        NVN_LOG("perfil astc: %llu levels encoded, %llu from the cache, %llu converted directly, %llu empty (not streamed in yet); "
+                "%llu encoded on the GPU; %llu sent to the background encoder, %llu back from it\n",
                 (unsigned long long)prof_astc_encoded_, (unsigned long long)prof_astc_cached_,
-                (unsigned long long)prof_astc_direct_, (unsigned long long)prof_astc_empty_,
+                (unsigned long long)prof_astc_direct_, (unsigned long long)prof_astc_empty_, (unsigned long long)prof_astc_gpu_,
                 (unsigned long long)prof_astc_deferred_, (unsigned long long)prof_astc_applied_);
     prof_astc_encoded_ = prof_astc_cached_ = prof_astc_empty_ = prof_astc_direct_ = prof_astc_deferred_ = prof_astc_applied_ = 0;
+    prof_astc_gpu_ = 0;
     if (prof_count_checked_)
         NVN_LOG("perfil multi-draw: %.1f per frame with the draw count check\n", prof_count_checked_ / double(period));
     prof_count_checked_ = 0;

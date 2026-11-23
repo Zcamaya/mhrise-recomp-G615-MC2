@@ -333,11 +333,11 @@ final class SettingsMenu {
                         + "Applies at once.", "将 GPU 可见性结果提供给游戏，用于绘制环境生物、翔虫和部分光源。关闭后仍能采集不可见的对象。开销很小，立即生效。"),
                 "no_readback_copies", true);
         if (gpu.noBc()) {
-            flag(tr("Textures as ASTC (Mali)", "使用 ASTC 纹理（Mali）"),
-                    tr("On GPUs that can't read the game's BC textures (Mali), keeps them compressed as ASTC instead of 4-8 "
-                            + "times bigger: less memory traffic every frame. The first time a texture loads it's encoded on the "
-                            + "CPU (slower loading and some stutter), then it comes from a cache in the app's storage. Restart the "
-                            + "game to apply.", "在无法读取 BC 纹理的 GPU 上转码为 ASTC，可节省内存和带宽。首次载入需 CPU 编码，可能较慢；之后使用应用缓存。重启游戏生效。"),
+            flag(tr("Textures as ASTC", "使用 ASTC 纹理"),
+                    tr("This driver can't read the game's BC textures, so they're unpacked to 4-8 times their size. This keeps "
+                            + "them compressed as ASTC instead: less memory traffic every frame. Most convert straight across; big "
+                            + "ones are encoded on the GPU as they load, while the CPU makes a sharper copy in the background for "
+                            + "a cache in the app's storage that later loads use. Restart the game to apply.", "在无法读取 BC 纹理的 GPU 上转码为 ASTC，可节省内存和带宽。首次载入需 CPU 编码，可能较慢；之后使用应用缓存。重启游戏生效。"),
                     "bc_astc", false);
             action(tr("Clear the ASTC cache", "清除 ASTC 缓存"),
                     tr("Deletes the encoded textures (", "删除应用内已编码的纹理（") + astcCacheSize() + tr(") from the app's storage. They're encoded again as "

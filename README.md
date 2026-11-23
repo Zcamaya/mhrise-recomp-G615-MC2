@@ -197,7 +197,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `count_check`, `no_count_check` | On by default on drivers without `VK_KHR_draw_indirect_count` (ARM's on a Dimensity 720), each GPU-counted multi-draw is still drawn up to its maximum, but the vertex shader reads the count the game's culling wrote and drops the draws past it (`nvn/count_check.h`): it reads it as the draw runs, so nothing is copied or fixed before the pass. Removes the stretched triangles of drawing them all. `no_count_check` turns it off. Graphics → Exact draw counts (Mali). |
 | `no_count_fallback` | On drivers without `VK_KHR_draw_indirect_count` (old Vulkan 1.1 ones, such as ARM's on a Dimensity 720), skips the game's GPU-counted multi-draws as before instead of drawing them all. Without the fallback the world is missing there. |
 | `adreno_turbo` | Keeps an Adreno at its top GPU clock while the game is in front (libadrenotools' turbo, no root). Hotter, more battery; thermal limits still apply. Performance → GPU boost, shown on Adreno only. Live. |
-| `bc_astc` | On GPUs without BC textures (Mali), stores BC1/BC2/BC3/BC7 textures as ASTC 4x4 instead of RGBA8: 2-8 times less memory and bandwidth. BC1 (the most common) is converted block for block with no encoder, as fast as a copy; BC2, BC3 and BC7 are encoded on the CPU the first time (ARM's astcenc), then read from the app's own storage (`/data/data/<app>/files/astc_cache`; Graphics → Clear the ASTC cache empties it). Graphics → Textures as ASTC. Read at start-up. |
+| `bc_astc` | On drivers without BC textures (most Mali and PowerVR ones; the setting only shows there), stores BC1/BC2/BC3/BC7 textures as ASTC 4x4 instead of RGBA8: 2-8 times less memory and bandwidth. BC1 (the most common), and BC2/BC3 whose alpha is one value per block, convert block for block with no encoder, as fast as a copy; other BC2, BC3 and BC7 are encoded on the CPU the first time (ARM's astcenc; a big level is encoded on the GPU at once meanwhile, `shaders/astc_encode.comp`, unless `cpu_astc`), then read from the app's own storage (`/data/data/<app>/files/astc_cache`; Graphics → Clear the ASTC cache empties it). Graphics → Textures as ASTC. Read at start-up. |
 | `astc_cache_in_data_folder` | Keeps the ASTC cache in `<data>/astc_cache/` instead of the app's own storage (slower to open through Android's shared storage, but it survives reinstalling and can be copied). Read at start-up. |
 | `no_gpu_bc` | On GPUs without BC textures (Mali, PowerVR), decodes BC1-BC5 on the CPU as before instead of with a compute shader. Live. |
 | `spirv_opt_compute` | On Mesa drivers (Turnip, PanVK), runs every compute shader through spirv-opt as before, not just those with a switch. That cost seconds of freeze the first time a new attack or effect appeared. Read when shaders are translated. |
@@ -342,6 +342,10 @@ for blood splashes turning into big patches and some collision particles drawn h
 [yun-wulian](https://github.com/yun-wulian)'s fork, [yun-wulian/mhrise-recomp](https://github.com/yun-wulian/mhrise-recomp)
 (its commits up to 2026-11-22, merged with their history). Their NVN/Vulkan resource work behind those fixes came
 with it.
+
+Textures as ASTC converts BC2/BC3 blocks whose alpha is a single value straight to ASTC, without the encoder, after the
+same idea in GameNative's Mesa wrapper (MIT), and encodes the other big ones on the GPU as they load, as that wrapper's
+upload path does (`shaders/astc_encode.comp`, written for this project from the ASTC specification).
 
 ## License
 
