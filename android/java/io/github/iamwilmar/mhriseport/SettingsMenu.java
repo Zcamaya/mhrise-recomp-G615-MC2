@@ -303,6 +303,12 @@ final class SettingsMenu {
                 tr("The size of the shadow maps, as a share of the game's own. Lower: blurrier shadow edges and a lot less "
                         + "GPU work in one of the heaviest passes. Applies at once.", "相对于游戏默认值的阴影贴图大小。调低后阴影边缘更模糊，阴影绘制的 GPU 开销也会降低。立即生效。"),
                 new String[] {tr("Game's", "游戏默认"), tr("Half", "二分之一"), tr("Quarter", "四分之一")}, new String[] {null, "shadow_half", "shadow_quarter"});
+        exclusive(tr("Tessellation", "曲面细分"),
+                tr("The extra detail the game adds to some ground. Fast: a cheap version that leaves most of that detail "
+                        + "out (on ARM's older drivers, which crash on it, the same as Off). Accurate: drawn as the game "
+                        + "means it, more GPU work. Off: not drawn, the least. Next start.",
+                        "游戏为部分地面添加的额外细节。快速：省略大部分细节的低开销版本（在会因此崩溃的 ARM 旧驱动上等同于关闭）。精确：按游戏原样绘制，GPU 开销更高。关闭：不绘制，开销最低。下次启动生效。"),
+                new String[] {tr("Fast", "快速"), tr("Accurate", "精确"), tr("Off", "关闭")}, new String[] {null, "tess_accurate", "no_tess"});
         flag(tr("Dynamic shadows", "动态阴影"),
                 tr("Shadows of things that move (hunters, monsters, swaying plants), like the PC's option. Off: only the "
                         + "scenery's shadows, a lot less shadow work. Applies at once.", "绘制猎人、怪物和摇曳植物等移动物体的阴影。关闭后仅保留场景阴影。立即生效。"),
@@ -2083,7 +2089,7 @@ final class SettingsMenu {
         "no_effect_ssr", "no_film_grain", "no_foliage_sway", "no_fps", "no_fsr", "no_fxaa", "no_god_rays",
         "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
         "no_return_mali", "no_return_qualcomm", "no_robust", "no_count_check", "no_safe_translation", "no_shadows", "no_short_subgroups",
-        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_area", "no_deferred_clear", "no_store_ops", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
+        "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_tess", "tess_accurate", "tess_fast", "no_area", "no_deferred_clear", "no_store_ops", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
         "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
         "shadow_half", "shadow_quarter", "short_subgroups", "single_thread_pipelines", "small_object_culling",
         "texture_bias_1", "texture_bias_2", "tv_mode", "ultrawide", "verbose_log", "wide_view",

@@ -7285,7 +7285,7 @@ VkPipeline Executor::pipeline(const cmd::Draw& d, VkRenderPass rp, Layout& l, ui
         }
         // The evaluation shader in its domain: Eden would make it isolines, and the game's terrain is quads. Lines
         // drew the wrong thing everywhere, and ARM's G57 driver aborted the game compiling it.
-        if (s == static_cast<int>(Stage::TessEval) && st_.stages[static_cast<int>(Stage::TessControl)]) {
+        if (s == static_cast<int>(Stage::TessEval) && st_.stages[static_cast<int>(Stage::TessControl)] && NVN_FLAG("tess_accurate") && !NVN_FLAG("no_tess")) {
             if (const int domain = tess_domain(*st_.stages[static_cast<int>(Stage::TessControl)])) {
                 v = geometry_variant(*const_cast<ProgramStage*>(st_.stages[s]), ~0ull, domain);
                 if (!v.module) return pipelines_[h] = VK_NULL_HANDLE;
@@ -7841,6 +7841,18 @@ void Executor::draw(const cmd::Draw& in) {
             if (logged++ < 4)
                 NVN_LOG("draw con teselación sin dibujar: control %d, evaluación %d, primitiva %d, feature %d\n", tcs, tes,
                         d.primitive, context.tessellation);
+            skip_draw(0);  // (tess)
+            return;
+        }
+        // Settings → Effects → Tessellation (the terrain's): Fast by default, isolines as the port first did, except on the
+        // ARM drivers whose compiler aborts the game on those (there, Off); Accurate, in its domain; Off, not drawn
+        static const int tess_mode = [] {
+            const bool arm_old = vk()->props.vendorID == 0x13B5 && !vk()->draw_indexed_indirect_count;
+            const int mode = NVN_FLAG("no_tess") ? 2 : NVN_FLAG("tess_accurate") ? 0 : arm_old ? 2 : 1;
+            NVN_LOG("tessellation: %s\n", mode == 0 ? "accurate" : mode == 1 ? "fast (isolines)" : "off (not drawn)");
+            return mode;
+        }();
+        if (tess_mode == 2) {
             skip_draw(0);  // (tess)
             return;
         }

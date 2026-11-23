@@ -177,6 +177,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `effects_lower`, `effects_lowest` | Experimental. The Renderer's ReducedTransparentBuffer one or two steps above the game's 2 (up to 4): particles and other see-through effects drawn into a smaller buffer. Graphics → Effects resolution. Live. |
 | `no_ao` | Experimental. The Renderer's GeometryAOQuality at 0 (the game uses 1). Graphics → Ambient occlusion. Live. |
 | `shadow_half`, `shadow_quarter` | Shadow maps at half or a quarter of the game's own size (never below 256), through the game's own shadow setting (the PC version's shadow quality). Blurrier edges, much less GPU work. Live. MH Rise 16.0.1 only. |
+| `tess_accurate`, `no_tess` | Tessellation of the terrain (Effects → Tessellation). Neither (Fast): as isolines, the cheap way the port first drew it, most of the detail missing; on ARM's older drivers, whose compiler aborts the game on that, those draws are skipped instead. `tess_accurate`: in its domain, as the game means it (more GPU work). `no_tess`: those draws are skipped. Next start. |
 | `model_detail_low`, `model_detail_lowest`, `model_detail_min`, `model_detail_high` | Scales the game's mesh LOD rate (the PC version's mesh quality) by 0.75, 0.5, 0.25 or 1.5. Live. MH Rise 16.0.1 only. |
 | `texture_bias_1`, `texture_bias_2` | The texture streamer skips one or two more of the largest mip levels (the game's TextureLoadLevelBias). Live. MH Rise 16.0.1 only. |
 | `60fps` | Unlocks 60 fps mode (needs a strong GPU: most phones won't hold it in hunts). |
