@@ -426,6 +426,13 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, [[maybe_un
     if (Sirit::ValidId(output->type)) {
         value = ctx.OpBitcast(output->type, value);
     }
+    if (attr == IR::Attribute::PointSize && ctx.profile.has_broken_pack_half && ctx.stage != Stage::Fragment) {
+        // ARM's older drivers keep the point size as a half float. Written straight from an integer register, as
+        // the game's terrain tessellation does (a bitcast of 1), their compiler fails to select that conversion and
+        // aborts the whole process. A float operation in between gives it a float, and Vulkan clamps the point size
+        // to 1 or more anyway.
+        value = ctx.OpFMax(ctx.F32[1], value, ctx.Const(1.0f));
+    }
 
     static constexpr IR::Attribute cd0 = IR::Attribute::ClipDistance0;
     static constexpr IR::Attribute cd7 = IR::Attribute::ClipDistance7;

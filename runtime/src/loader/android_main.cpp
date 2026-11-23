@@ -756,7 +756,12 @@ void on_cmd(android_app* app, int32_t cmd) {
         if (ALooper_pollOnce(-1, nullptr, nullptr, reinterpret_cast<void**>(&source)) >= 0 && source)
             source->process(app, source);
     }
-    exit(0);
+    // Android closed the activity (left in the background, or recreated it). Not exit(): that runs the static
+    // destructors under the game's threads, which then abort on destroyed mutexes and the log shows a crash.
+    fprintf(stdout, "[android] activity closed by Android: the game ends here\n");
+    fflush(stdout);
+    if (g_crash_log_drain) g_crash_log_drain();
+    _exit(0);
 }
 
 }  // namespace

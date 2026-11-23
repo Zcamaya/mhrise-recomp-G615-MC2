@@ -283,7 +283,7 @@ bool translation_key(const nvn::ProgramStage& stage, size_t bound, const nvnshad
     h.u32(o.subgroup_operations);
     h.u32(o.broken_subgroup_shuffle);
     h.u32(o.broken_unreachable);
-    if (o.broken_pack_half) h.u32(0x48414C33);  // (only where it's on; 3: F2F.F16.F32 through it too)
+    if (o.broken_pack_half) h.u32(0x48414C34);  // (only where it's on; 3: F2F.F16.F32 through it too; 4: the point size)
     if (o.demote_reorder) h.u32(0x44454D4F);  // (only where it's on: other GPUs keep their keys)
     if (o.warp_barriers) h.u32(0x57415250);  // (only where it's on: other GPUs keep their keys)
     if (!o.multi_viewport) h.u32(0x4D56);  // (solo sin multiViewport: las claves de siempre no cambian)

@@ -16,6 +16,8 @@ This project's changes, on top of that commit:
 - Which attributes count as generics (`IsGeneric`).
 - Mali (`has_broken_pack_half`): on ARM's older drivers, packHalf2x16 and f32-to-f16 conversions in vertex stages as
   integer operations.
+  With it, the point size also goes through a float operation (`max(size, 1)`): written straight from an integer
+  register (the terrain's tessellation), it aborted the driver's compiler.
 - Quad butterflies: in pixel shaders, butterfly shuffles by 1..3 become quad swaps, which include the helper pixels on
   triangle edges.
 - Qualcomm: an `OpReturn` in place of `OpUnreachable` where its driver mis-optimises.

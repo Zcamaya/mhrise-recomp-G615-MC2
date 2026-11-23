@@ -33,7 +33,7 @@
             android:name=".DriverActivity"
             android:exported="false"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|fontScale|keyboard|keyboardHidden|navigation|uiMode"
             android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
         <!-- The game: a NativeActivity (libnier.so) with the touch controls over it. Exported so tools/apk.sh can open it
              directly with am start. -->
@@ -42,7 +42,7 @@
             android:hardwareAccelerated="false"
             android:exported="true"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|fontScale|keyboard|keyboardHidden|navigation|uiMode"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <meta-data android:name="android.app.lib_name" android:value="nier" />
         </activity>

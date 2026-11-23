@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <mutex>
 #include <string>
@@ -34,6 +35,9 @@ struct GuardNote {
     uint64_t vertex;
     char text[kGuardNote - 8];
 };
+// The list's first line. Bumped when a translator change can fix what crashed (the point size on ARM's driver: 2), so
+// an older list is dropped and those pipelines are tried again.
+constexpr const char* kSkipHeader = "pipeline_skip 2";
 struct Guard {
     std::atomic<uint64_t>* slots = nullptr;  // in the mapped file: the pipeline of each build in progress
     char* notes = nullptr;
@@ -48,6 +52,20 @@ Guard* guard() {
         const char* home = getenv("NIER_INTERNO");
         if (!c || !home) return g;
         const std::string list = std::string(home) + "/pipeline_skip.txt";
+        {
+            char first[64] = "";
+            if (FILE* f = fopen(list.c_str(), "r")) {
+                if (!fgets(first, sizeof first, f)) first[0] = 0;
+                fclose(f);
+            }
+            first[strcspn(first, "\r\n")] = 0;
+            if (strcmp(first, kSkipHeader) != 0)
+                if (FILE* f = fopen(list.c_str(), "w")) {
+                    if (first[0]) NVN_LOG("pipelines: the skip list was from an older translator: dropped, they're tried again\n");
+                    fprintf(f, "%s\n", kSkipHeader);
+                    fclose(f);
+                }
+        }
         // What the last run died building, before anything is marked again
         int fd = open((std::string(home) + "/pipeline_guard.bin").c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
         constexpr size_t size = kGuardSlots * (sizeof(uint64_t) + kGuardNote);
@@ -75,8 +93,10 @@ Guard* guard() {
         if (fd >= 0) close(fd);
         if (!NVN_FLAG("no_pipeline_skip"))
             if (FILE* f = fopen(list.c_str(), "r")) {
-                unsigned long long id;
-                while (fscanf(f, "%llx", &id) == 1) g->skip.insert(id);
+                char line[64];
+                while (fgets(line, sizeof line, f))
+                    if (unsigned long long id; sscanf(line, "%llx", &id) == 1 && strncmp(line, "pipeline_skip", 13) != 0)
+                        g->skip.insert(id);
                 fclose(f);
             }
         if (!g->skip.empty())
