@@ -9,7 +9,7 @@ where one exists, so the old behaviour can be compared.
 The main scenery pixel shaders compute their own derivatives with `SHFL.BFLY` by 1 and 2. Eden translated those to
 `OpGroupNonUniformShuffleXor`, which Vulkan doesn't guarantee to run for helper invocations, so pixels on triangle
 edges read garbage. Butterflies by 1..3 in pixel shaders are now quad swaps, which always include helper invocations
-(`tools/patches/eden-quad-butterfly.patch`, cache key version 3). Early on this was wrongly ruled out after counting
+(the quad-butterfly change in `runtime/eden`, cache key version 3). Early on this was wrongly ruled out after counting
 the wrong SPIR-V opcode: `OpGroupNonUniformShuffleXor` is 346, `QuadBroadcast` 365, `QuadSwap` 366.
 
 **Endemic life, wirebugs and some lights invisible but still gatherable** (also on Eden).

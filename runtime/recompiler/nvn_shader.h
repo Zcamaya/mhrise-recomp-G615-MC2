@@ -112,7 +112,7 @@ struct Options {
     bool broken_unreachable = false;
     // packHalf2x16 in a vertex stage: Mali-G68's compiler (driver r32, Vulkan 1.1.177) fails on it in the position shader
     // with an LLVM "Cannot select" and aborts the whole process. Built from integer operations there instead
-    // (has_broken_pack_half, eden-pack-half-mali.patch).
+    // (has_broken_pack_half, in runtime/eden).
     bool broken_pack_half = false;
     // Pixel discards (KIL) gathered into one at the end of the shader (Eden's needs_demote_reorder, which it sets for
     // AMD and Samsung's Xclipse). Their compilers get an early discard wrong: alpha-tested cards (foliage, smoke, the

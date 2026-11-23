@@ -66,7 +66,7 @@ thread_local bool t_cache_only = false, t_cache_missed = false;
 
 // Cambia si cambia lo que entra en la clave de la caché (translation_key) o cómo se usa lo traducido.
 // 2: Options::optimize_stages (spirv-opt).
-// 3: butterflies by 1..3 in pixel shaders become quad swaps (tools/patches/eden-quad-butterfly.patch).
+// 3: butterflies by 1..3 in pixel shaders become quad swaps (runtime/eden: EmitShuffleButterfly).
 // 4: Options::warp_barriers.
 // 5: those quad swaps also where the other subgroup operations are off (ARM's driver).
 constexpr uint32_t kKeyVersion = 5;

@@ -36,7 +36,7 @@ JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 4)}"
 for need in "$NDK/build/cmake/android.toolchain.cmake" "$BT/aapt2" "$JAR"; do
   [ -e "$need" ] || { echo "missing: $need (see README: Building)" >&2; exit 1; }
 done
-[ -d "$ROOT/third_party/eden/src/shader_recompiler" ] || { echo "run tools/setup.sh first" >&2; exit 1; }
+[ -d "$ROOT/third_party/sirit" ] || { echo "run tools/setup.sh first" >&2; exit 1; }
 
 mkdir -p "$BUILD"
 cmake -S "$ROOT/runtime" -B "$BUILD" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \

@@ -18,14 +18,9 @@ def run(*args):
     subprocess.run([str(arg) for arg in args], check=True)
 
 def prepare_eden(source):
-    eden = source / "third_party/eden"
-    patch = source / "tools/patches/eden-workgroup-interface.patch"
-    if not patch.is_file() or not (eden / "src/shader_recompiler").is_dir():
-        raise SystemExit(f"Prepare the patched Rise checkout with tools/setup.sh and pass --renderer-source: {source}")
-    # setup.sh applies patches on the first checkout. Also upgrade an already populated third_party/eden.
-    apply = ["git", "-C", str(eden), "apply"]
-    if subprocess.run([*apply, "--reverse", "--check", str(patch)], capture_output=True).returncode:
-        run(*apply, patch)
+    # Eden's shader recompiler is part of the checkout (runtime/eden); setup.sh fetches what it builds with
+    if not (source / "runtime/eden/src/shader_recompiler").is_dir() or not (source / "third_party/sirit").is_dir():
+        raise SystemExit(f"Prepare the Rise checkout with tools/setup.sh and pass --renderer-source: {source}")
 
 
 def build_renderer(source, cmake, android_options, translator=None):

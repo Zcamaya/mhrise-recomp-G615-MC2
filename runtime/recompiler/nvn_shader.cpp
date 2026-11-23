@@ -475,7 +475,7 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         profile.support_vote = usable;
         profile.support_shuffle_relative = (ops & kShuffleRelative) != 0;
         // Quads in pixel shaders: the game's own derivatives (butterflies by 1..3) become quad swaps. They hold on
-        // subgroups of any size, so they stay even where the rest is off (eden-quad-butterfly.patch).
+        // subgroups of any size, so they stay even where the rest is off (runtime/eden: EmitShuffleButterfly).
         profile.support_quad_shuffles = (ops & kQuad) && (options.subgroup_stages & 0x10);
         profile.warp_size_potentially_larger_than_guest = options.subgroup_size > 32;
         profile.max_subgroup_size = options.subgroup_size;
