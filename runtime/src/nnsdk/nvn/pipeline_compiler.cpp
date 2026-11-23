@@ -23,11 +23,20 @@ namespace {
 // and nothing to fix from here. So each build marks its pipeline (the key's hash: the same content gives the same one
 // in every run) in a small file mapped in memory, a page the kernel keeps when the process dies, and clears it after;
 // a mark still there at the next start was a build the driver died in, and that pipeline goes to the skip list
-// (<app files>/pipeline_skip.txt): it isn't built again and its draws are left out. One crash per such pipeline, then
-// the game goes on without that object. <data>/no_pipeline_skip ignores the list.
+// (<app files>/pipeline_skip.txt): it isn't built again and its draws are left out. So is every other pipeline with
+// the same vertex shader reading the same formats: ARM's driver compiles a position-only copy of the vertex shader
+// from just those two, and on the G57 the same one died again under another pass and pixel shader. One crash per such
+// vertex shader, then the game goes on without that object. <data>/no_pipeline_skip ignores the list.
 constexpr int kGuardSlots = 64;
+// After the slots, for each build in progress: its vertex half (vertex_id) and what it reads from its vertex buffers
+constexpr int kGuardNote = 192;
+struct GuardNote {
+    uint64_t vertex;
+    char text[kGuardNote - 8];
+};
 struct Guard {
     std::atomic<uint64_t>* slots = nullptr;  // in the mapped file: the pipeline of each build in progress
+    char* notes = nullptr;
     std::unordered_set<uint64_t> skip;
     std::mutex skip_mutex;
 };
@@ -41,16 +50,23 @@ Guard* guard() {
         const std::string list = std::string(home) + "/pipeline_skip.txt";
         // What the last run died building, before anything is marked again
         int fd = open((std::string(home) + "/pipeline_guard.bin").c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-        if (fd >= 0 && ftruncate(fd, kGuardSlots * sizeof(uint64_t)) == 0) {
-            void* m = mmap(nullptr, kGuardSlots * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        constexpr size_t size = kGuardSlots * (sizeof(uint64_t) + kGuardNote);
+        if (fd >= 0 && ftruncate(fd, size) == 0) {
+            void* m = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             if (m != MAP_FAILED) {
                 g->slots = static_cast<std::atomic<uint64_t>*>(m);
+                g->notes = static_cast<char*>(m) + kGuardSlots * sizeof(uint64_t);
                 if (FILE* f = fopen(list.c_str(), "a")) {
                     for (int i = 0; i < kGuardSlots; i++)
                         if (uint64_t id = g->slots[i].exchange(0)) {
+                            auto* note = reinterpret_cast<GuardNote*>(g->notes + i * kGuardNote);
+                            note->text[sizeof note->text - 1] = 0;
                             fprintf(f, "%016llx\n", static_cast<unsigned long long>(id));
-                            NVN_LOG("pipelines: the driver died building pipeline %016llx last time: skipped from now on\n",
-                                    static_cast<unsigned long long>(id));
+                            if (note->vertex) fprintf(f, "%016llx\n", static_cast<unsigned long long>(note->vertex));
+                            NVN_LOG("pipelines: the driver died building pipeline %016llx last time (%s): skipped from now on, "
+                                    "with every pipeline of its vertex shader and formats (%016llx)\n",
+                                    static_cast<unsigned long long>(id), note->text[0] ? note->text : "no vertex input",
+                                    static_cast<unsigned long long>(note->vertex));
                         }
                     fclose(f);
                 }
@@ -223,9 +239,18 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     uint64_t id = 0xcbf29ce484222325ull;  // (FNV-1a of the key: zero-filled, padding included, as it's saved)
     for (size_t i = 0; i < sizeof key; i++) id = (id ^ reinterpret_cast<const uint8_t*>(&key)[i]) * 0x100000001b3ull;
     id |= 1;
+    // The vertex half: the vertex shader and the format at each location it reads (not offsets or strides)
+    uint64_t vertex = 0;
+    if (const uint64_t vs = key.stages[static_cast<int>(Stage::Vertex)]) {
+        vertex = (0x6a09e667f3bcc909ull ^ vs) * 0x100000001b3ull;
+        for (uint32_t k = 0; k < 16; k++)
+            if (vs_inputs >> k & 1) vertex = (vertex ^ (k << 8 | key.attribs[k].format)) * 0x100000001b3ull;
+        vertex |= 1;
+    }
     if (!g->skip.empty()) {
         std::lock_guard lock(g->skip_mutex);
-        if (g->skip.count(id)) return VK_ERROR_INITIALIZATION_FAILED;  // (its draws are skipped like any failed pipeline)
+        // (their draws are skipped like any failed pipeline's)
+        if (g->skip.count(id) || (vertex && g->skip.count(vertex))) return VK_ERROR_INITIALIZATION_FAILED;
     }
     int slot = -1;
     if (g->slots)
@@ -233,6 +258,20 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
             uint64_t free = 0;
             if (g->slots[i].compare_exchange_strong(free, id)) slot = i;
         }
+    if (slot >= 0) {
+        // Its vertex input, for the log of the next run if the driver dies in here (formats, offset, stream stride)
+        auto* note = reinterpret_cast<GuardNote*>(g->notes + slot * kGuardNote);
+        constexpr int room = sizeof note->text;
+        int n = 0;
+        note->vertex = vertex;
+        note->text[0] = 0;
+        for (uint32_t k = 0; k < 16 && n < room - 40; k++) {
+            if (!(vs_inputs >> k & 1)) continue;
+            const FormatInfo* f = format_info(key.attribs[k].format);
+            n += snprintf(note->text + n, room - n, "%s%u %s+%u/%u", n ? ", " : "", k, f ? f->name : "?",
+                          unsigned(key.attribs[k].offset), unsigned(key.strides[k]));
+        }
+    }
     const VkResult r = create(vk()->device, cache, 1, &pi, nullptr, &p);
     if (slot >= 0) g->slots[slot].store(0, std::memory_order_release);
     return r == VK_INCOMPLETE && p ? VK_SUCCESS : r;
