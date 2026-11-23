@@ -181,6 +181,7 @@ final class SaveFiles {
                 ini.set("steam_id", Long.toString(o.steamId));
                 ini.set("steam_curve", Integer.toString(curve));
             }
+            o.drop();  // (each is parsed again when it's converted: see SaveData.Opened.roots)
             out.put(f.getKey(), o);
         }
         return out;
@@ -233,7 +234,7 @@ final class SaveFiles {
 
     // A Steam file as the Switch's, filled into the port's own save (its layout) when there is one
     private static byte[] toSwitch(File data, SaveData.Opened o, StringBuilder notes) throws IOException {
-        if (ss1(o.name)) return SaveData.switchFile(o.name, SaveData.write(o.roots, SaveData.SWITCH_BASE));
+        if (ss1(o.name)) return SaveData.switchFile(o.name, SaveData.write(o.roots(), SaveData.SWITCH_BASE));
         List<SaveData.Root> template = current(data, o.name);
         // Another release's file left as it is would crash the game: it needs 1.16's layout to fill
         if (template == null && o.foreign)
@@ -242,7 +243,7 @@ final class SaveFiles {
         String none = " No Switch save was here to take the layout from, so only what Steam alone has was left out.";
         if (template == null && notes.indexOf(none) < 0) notes.append(none);
         SaveData.Counts n = new SaveData.Counts();
-        return SaveData.switchFile(o.name, SaveData.write(SaveData.fill(template, o.roots, o.name, true, n), SaveData.SWITCH_BASE));
+        return SaveData.switchFile(o.name, SaveData.write(SaveData.fill(template, o.roots(), o.name, true, n), SaveData.SWITCH_BASE));
     }
 
     // A Switch file as Steam's: filled into the last Steam save brought in, and encrypted for its account if that's known
@@ -253,11 +254,11 @@ final class SaveFiles {
         int curve = curve(ini);
         if (ss1(o.name)) {
             // (photos: nothing in them differs between the two, so no filling; and no encryption on Steam either)
-            if (id != 0 && curve >= 0) return SaveData.steamSs1File(SaveData.write(o.roots, SaveData.STEAM_SS1_BASE), id);
-            return SaveData.plainFile(SaveData.write(o.roots, SaveData.SWITCH_BASE));
+            if (id != 0 && curve >= 0) return SaveData.steamSs1File(SaveData.write(o.roots(), SaveData.STEAM_SS1_BASE), id);
+            return SaveData.plainFile(SaveData.write(o.roots(), SaveData.SWITCH_BASE));
         }
         List<SaveData.Root> template = steamTemplate(data, o.name);
-        List<SaveData.Root> roots = SaveData.fill(template, o.roots, o.name, false, new SaveData.Counts());
+        List<SaveData.Root> roots = SaveData.fill(template, o.roots(), o.name, false, new SaveData.Counts());
         if (id != 0 && curve >= 0) {
             encrypted[0] = true;
             return SaveData.steamFile(SaveData.write(roots, SaveData.STEAM_BASE), id, citrus(c), curve);
@@ -279,7 +280,7 @@ final class SaveFiles {
         if (ss1(o.name)) return;
         File dir = steamDir(data);
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("can't write " + dir);
-        writeFile(new File(dir, o.name + ".steam"), SaveData.write(o.roots, SaveData.STEAM_BASE));
+        writeFile(new File(dir, o.name + ".steam"), SaveData.write(o.roots(), SaveData.STEAM_BASE));
     }
 
     // The Steam account saves are exported for: the one of the last Steam save opened here, if its key is known
@@ -301,6 +302,7 @@ final class SaveFiles {
         for (SaveData.Opened o : opened.values()) {
             if (!o.steam) continue;
             keepSteam(data, o);
+            o.drop();
             kept.add(o.name);
         }
         if (kept.isEmpty()) throw new IOException("that's a Switch save; pick one from the Steam account");
@@ -328,6 +330,7 @@ final class SaveFiles {
                 steam = true;
                 keepSteam(data, o);
             }
+            o.drop();  // (one parsed slot at a time)
         }
         String backup = backup(data);
         File dir = saveDir(data);
@@ -426,6 +429,7 @@ final class SaveFiles {
                 if (!ss1(o.name)) template &= steamTemplate(data, o.name) != null;
                 out.put(o.name, toSteam(c, data, o, encrypted, notes));
             }
+            o.drop();
         }
         Zip z = new Zip();
         z.bytes = zip(out, steam ? "" : "win64_save/");

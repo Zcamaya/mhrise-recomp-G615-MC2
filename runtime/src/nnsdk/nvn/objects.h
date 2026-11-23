@@ -375,6 +375,10 @@ int translate_or_queue(ProgramStage& stage);
 // Precarga (program.cpp): el hilo que traduce los shaders al fijarlos le pasa al ejecutor cada compute traducido, para
 // crear su pipeline antes del primer dispatch (la toma warm_take).
 void prefetch_compute_pipeline(const ProgramStage& stage);
+// A program's shader modules once it's finalized or given new shaders: a pipeline build queued or running on a worker
+// can still be using them, so they're destroyed when none is (destroy_retired_modules, from the executor)
+void retire_shader_module(VkShaderModule module);
+void destroy_retired_modules();
 // What has a range of the game's memory on our side (executor.cpp): for a log line
 std::string describe_memory(const void* p, size_t size);
 

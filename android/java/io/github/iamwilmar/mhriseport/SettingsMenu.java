@@ -528,10 +528,10 @@ final class SettingsMenu {
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.", "省略中间没有任务的连续 GPU 屏障，减少等待与发热。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "tight_barriers", false);
         flag(tr("Fast textures", "快速纹理"),
-                tr("For speed over accuracy: each draw's textures are looked up as in v1.0.85 (by where the game keeps them, "
+                tr("For speed over accuracy: each draw's textures are looked up by where the game keeps them ("
                         + "not what they are now), and textures the CPU rewrites are checked every other frame. Less CPU time "
                         + "in busy places, but old glitches can come back: blood as big patches, magnified particles, a texture "
-                        + "a frame late. Applies at once.", "以准确性换取速度：按 v1.0.85 的方式查找每次绘制的纹理，CPU 改写的纹理隔帧检查。人多的场景 CPU 负担更低，但旧问题可能重现：血迹变成大块、粒子被放大、纹理晚一帧更新。立即生效。"),
+                        + "a frame late. Applies at once.", "以准确性换取速度：按游戏存放纹理的位置查找每次绘制的纹理，CPU 改写的纹理隔帧检查。人多的场景 CPU 负担更低，但旧问题可能重现：血迹变成大块、粒子被放大、纹理晚一帧更新。立即生效。"),
                 "fast_textures", false);
         exclusive(tr("Pipeline worker threads", "管线编译线程数"),
                 tr("Threads available to build GPU pipelines. More can finish shader warm-up sooner. "

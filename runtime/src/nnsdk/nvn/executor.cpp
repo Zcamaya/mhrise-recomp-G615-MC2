@@ -2367,6 +2367,7 @@ private:
     std::condition_variable async_cv_;
     std::deque<PipelineTask> async_queue_;
     std::once_flag pipeline_workers_once_;
+    std::atomic<int> pipeline_jobs_live_{0};  // queued or running on a worker (see destroy_retired_modules)
     PipelineFuture enqueue_pipeline(PipelineTask task, bool first_use);
     bool async_pipelines_ = true;                           // read_flags
     bool serial_pipelines_ = false;                         // init: PowerVR (o single_thread_pipelines), todo en este hilo
@@ -2769,6 +2770,9 @@ void Executor::begin() {
     memset(bound_vb_buf_, 0, sizeof bound_vb_buf_);
     bound_index_ = VK_NULL_HANDLE;
     descriptor_epoch_++;
+    // Shader modules of finalized programs, once no pipeline job can be using them (jobs are queued from this thread,
+    // under the executor lock, so none starts with one of them after this)
+    if (pipeline_jobs_live_.load(std::memory_order_acquire) == 0) destroy_retired_modules();
     graphics_c0_valid_ = 0;
     staging_ = &f.staging;
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -6682,7 +6686,7 @@ VkDescriptorSet Executor::bindless_set(const ProgramStage* const* stages, VkDesc
                          g_texel_writes.load(std::memory_order_acquire) == 0 && !NVN_FLAG("no_bindless_memo");
     uint64_t memo_hash = 0;
     const uint64_t memo_mapping = g_mapping_serial.load(std::memory_order_acquire);
-    // <data>/fast_textures (Settings → Performance → Fast textures, live): the memo as v1.0.85 cached set 1, by where the
+    // <data>/fast_textures (Settings → Performance → Fast textures, live): the memo keys set 1 by where the
     // handles are rather than what they say, kept through texture uploads and for sets with an attachment snapshot.
     // Faster where textures stream in, and the glitches the per-draw resolution fixed (blood as big patches, magnified
     // particles) can come back.
@@ -11375,6 +11379,7 @@ Executor::PipelineFuture Executor::enqueue_pipeline(PipelineTask task, bool firs
         for (int i = 0; i < workers; ++i) std::thread([this] { async_loop(); }).detach();
     });
     auto result = task.get_future().share();
+    pipeline_jobs_live_.fetch_add(1, std::memory_order_acq_rel);
     {
         std::lock_guard lock(async_mutex_);
         if (first_use) async_queue_.push_front(std::move(task));
@@ -11397,6 +11402,7 @@ void Executor::async_loop() {
             async_queue_.pop_front();
         }
         job();
+        pipeline_jobs_live_.fetch_sub(1, std::memory_order_acq_rel);
     }
 }
 

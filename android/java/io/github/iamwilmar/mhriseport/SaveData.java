@@ -80,7 +80,16 @@ final class SaveData {
     static final class Arr {
         int memberType, memberSize, kind;  // kind 1: an array of classes
         int[] hashes;                      // kind 1 only, and only if the file had them (after 0xffeeffee)
-        List<Object> items = new ArrayList<>();  // Cls, or byte[] (a value, or a string's UTF-16)
+        List<Object> items = new ArrayList<>();  // Cls, or byte[] (a string's UTF-16)
+        // An array of fixed-size values: all of them in one block (count of memberSize bytes), not an object each. A
+        // save has arrays of hundreds of thousands of bytes and flags; one byte[] apiece was ~30 bytes of heap per
+        // byte of save, and an import (two saves and a template in memory) ran out of the app's 256 MB.
+        byte[] packed;
+        int count;
+
+        int size() {
+            return packed != null ? count : items.size();
+        }
     }
 
     static final class Str {
@@ -170,6 +179,20 @@ final class SaveData {
                 long len = u32() & 0xffffffffL;
                 a.kind = u32();
                 if (len > b.length - p) throw new Problem("an array longer than the file");
+                if (a.kind != 1 && a.memberType != 0xf) {
+                    long size = a.memberSize & 0xffffffffL;
+                    if (len * size > b.length - p) throw new Problem("an array longer than the file");
+                    a.count = (int) len;
+                    a.packed = new byte[(int) (len * size)];
+                    for (int i = 0; i < len; i++) {
+                        al(a.memberSize);
+                        need(size);
+                        System.arraycopy(b, p, a.packed, (int) (i * size), (int) size);
+                        p += (int) size;
+                    }
+                    al(4);
+                    return a;
+                }
                 if (a.kind == 1) {
                     if (p + 4 <= b.length && u32() == 0xffeeffee) {
                         a.hashes = new int[(int) len];
@@ -262,12 +285,17 @@ final class SaveData {
                 al(4);
                 u32(a.memberType);
                 u32(a.memberSize);
-                u32(a.items.size());
+                u32(a.size());
                 u32(a.kind);
                 if (a.kind == 1 && a.hashes != null) {
                     u32(0xffeeffee);
                     for (Object e : a.items) u32(((Cls) e).hash);
                 }
+                if (a.packed != null)
+                    for (int i = 0; i < a.count; i++) {
+                        al(a.memberSize);
+                        o.write(a.packed, i * a.memberSize, a.memberSize);
+                    }
                 for (Object e : a.items) {
                     if (a.kind == 1) {
                         cls((Cls) e);
@@ -441,6 +469,21 @@ final class SaveData {
         int curve = -1;    // Citrus: the curve the Steam ID's key is on (needed to encrypt again)
         long steamId;      // Citrus: the ID that opened it
         boolean foreign;   // neither Switch's nor Steam's: plain main files from another release (converted too)
+        // What opened it, to read it again: a parsed hunter slot is ~40 MB of objects, so an import keeps only what it
+        // is working on (see drop, roots), not three slots, the system file and their templates at once
+        private byte[] file;
+        private Citrus citrus;
+
+        // The parsed save, read again if it was dropped (by the ID and curve that opened it the first time)
+        List<Root> roots() throws Problem {
+            if (roots == null) roots = open(name, file, steamId != 0 ? new long[] {steamId} : new long[0], citrus, curve).roots;
+            return roots;
+        }
+
+        void drop() {
+            roots = null;
+            body = null;
+        }
     }
 
     static int murmur3(byte[] d, int len) {
@@ -493,6 +536,8 @@ final class SaveData {
             throw new Problem(name + " isn't an MH Rise save");
         Opened o = new Opened();
         o.name = name;
+        o.file = d;
+        o.citrus = citrus;
         o.flags = le32(d, 8);
         int end = d.length - 4;
         if (o.flags == 0) {

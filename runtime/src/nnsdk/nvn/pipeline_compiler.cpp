@@ -2,9 +2,76 @@
 #include "nnsdk/nvn/flags.h"
 #include "nnsdk/nvn/formats.h"
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
+#include <mutex>
+#include <string>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <unordered_set>
 
 namespace nvn {
 using nvnshader::Stage;
+
+namespace {
+
+// Pipelines that crash the driver. Some drivers kill the whole game inside vkCreateGraphicsPipelines: ARM's older ones
+// (a Dimensity 720's Mali-G57) abort on some vertex shaders ("LLVM ERROR: Cannot select" in __start__position_shader)
+// whose SPIR-V has nothing unusual, Qualcomm's segfaulted on a pipeline worker (an Adreno 732). There's nothing to catch
+// and nothing to fix from here. So each build marks its pipeline (the key's hash: the same content gives the same one
+// in every run) in a small file mapped in memory, a page the kernel keeps when the process dies, and clears it after;
+// a mark still there at the next start was a build the driver died in, and that pipeline goes to the skip list
+// (<app files>/pipeline_skip.txt): it isn't built again and its draws are left out. One crash per such pipeline, then
+// the game goes on without that object. <data>/no_pipeline_skip ignores the list.
+constexpr int kGuardSlots = 64;
+struct Guard {
+    std::atomic<uint64_t>* slots = nullptr;  // in the mapped file: the pipeline of each build in progress
+    std::unordered_set<uint64_t> skip;
+    std::mutex skip_mutex;
+};
+
+Guard* guard() {
+    static Guard* g = [] {
+        auto* g = new Guard;
+        VkContext* c = vk();
+        const char* home = getenv("NIER_INTERNO");
+        if (!c || !home) return g;
+        const std::string list = std::string(home) + "/pipeline_skip.txt";
+        // What the last run died building, before anything is marked again
+        int fd = open((std::string(home) + "/pipeline_guard.bin").c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        if (fd >= 0 && ftruncate(fd, kGuardSlots * sizeof(uint64_t)) == 0) {
+            void* m = mmap(nullptr, kGuardSlots * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (m != MAP_FAILED) {
+                g->slots = static_cast<std::atomic<uint64_t>*>(m);
+                if (FILE* f = fopen(list.c_str(), "a")) {
+                    for (int i = 0; i < kGuardSlots; i++)
+                        if (uint64_t id = g->slots[i].exchange(0)) {
+                            fprintf(f, "%016llx\n", static_cast<unsigned long long>(id));
+                            NVN_LOG("pipelines: the driver died building pipeline %016llx last time: skipped from now on\n",
+                                    static_cast<unsigned long long>(id));
+                        }
+                    fclose(f);
+                }
+            }
+        }
+        if (fd >= 0) close(fd);
+        if (!NVN_FLAG("no_pipeline_skip"))
+            if (FILE* f = fopen(list.c_str(), "r")) {
+                unsigned long long id;
+                while (fscanf(f, "%llx", &id) == 1) g->skip.insert(id);
+                fclose(f);
+            }
+        if (!g->skip.empty())
+            NVN_LOG("pipelines: %zu that crashed this driver are skipped (%s; delete it to try them again)\n",
+                    g->skip.size(), list.c_str());
+        return g;
+    }();
+    return g;
+}
+
+}  // namespace
 
 static VertexFetch fetch_type(uint8_t format) {
     const FormatInfo* info = format_info(format);
@@ -152,7 +219,22 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     pi.renderPass = rp;
     // VK_INCOMPLETE con la pipeline hecha: fuera de la especificación, pero así contestan los drivers de las Adreno 5xx y
     // algunas Mali (lo mismo hace Eden): vale.
+    Guard* g = guard();
+    uint64_t id = 0xcbf29ce484222325ull;  // (FNV-1a of the key: zero-filled, padding included, as it's saved)
+    for (size_t i = 0; i < sizeof key; i++) id = (id ^ reinterpret_cast<const uint8_t*>(&key)[i]) * 0x100000001b3ull;
+    id |= 1;
+    if (!g->skip.empty()) {
+        std::lock_guard lock(g->skip_mutex);
+        if (g->skip.count(id)) return VK_ERROR_INITIALIZATION_FAILED;  // (its draws are skipped like any failed pipeline)
+    }
+    int slot = -1;
+    if (g->slots)
+        for (int i = 0; i < kGuardSlots && slot < 0; i++) {
+            uint64_t free = 0;
+            if (g->slots[i].compare_exchange_strong(free, id)) slot = i;
+        }
     const VkResult r = create(vk()->device, cache, 1, &pi, nullptr, &p);
+    if (slot >= 0) g->slots[slot].store(0, std::memory_order_release);
     return r == VK_INCOMPLETE && p ? VK_SUCCESS : r;
 }
 

@@ -1168,10 +1168,30 @@ void nvn::dump_stage_code(const ProgramStage& stage, const std::string& name) {
     if (stage.control) dump_code(reinterpret_cast<uint64_t>(stage.control), name + "_ctrl");
 }
 
+namespace {
+std::mutex g_retired_mutex;
+std::vector<VkShaderModule> g_retired;
+}  // namespace
+
+void nvn::retire_shader_module(VkShaderModule module) {
+    if (!module) return;
+    std::lock_guard lock(g_retired_mutex);
+    g_retired.push_back(module);
+}
+
+void nvn::destroy_retired_modules() {
+    std::vector<VkShaderModule> modules;
+    {
+        std::lock_guard lock(g_retired_mutex);
+        modules.swap(g_retired);
+    }
+    for (VkShaderModule m : modules) vkDestroyShaderModule(vk()->device, m, nullptr);
+}
+
+// (Since the merge these went straight to vkDestroyShaderModule, with a pipeline worker possibly compiling from them:
+// a use-after-free in the driver, which on an Adreno 732 segfaulted inside Qualcomm's compiler on PipelinesAsync)
 static void release_program_stages(nvn::Program& program) {
-    auto release = [](VkShaderModule module) {
-        if (module) vkDestroyShaderModule(nvn::vk()->device, module, nullptr);
-    };
+    auto release = [](VkShaderModule module) { nvn::retire_shader_module(module); };
     for (const auto& stage : program.stages) {
         release(stage.module);
         release(stage.stripped_module);
