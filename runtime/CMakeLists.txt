@@ -191,7 +191,7 @@ if(MHRISE_LUA_DEBUG)
   target_sources(loader_core PRIVATE src/loader/tdb_lua.cpp src/loader/lua_mod_hooks.cpp src/loader/live_read.cpp
     src/loader/application_lua.cpp src/loader/lua_frame_gc.cpp src/loader/lua_values.cpp src/loader/mod_ui.cpp src/loader/lua_data.cpp
     src/loader/lua_native_hooks.cpp src/loader/lua_explorer.cpp src/loader/native_hook.cpp src/loader/native_hook.S)
-  target_link_libraries(loader_core PUBLIC rise_lua rise_imgui_ui nlohmann_json::nlohmann_json log)
+  target_link_libraries(loader_core PUBLIC rise_lua rise_imgui_ui nlohmann_json::nlohmann_json log jnigraphics)  # (jnigraphics: d2d images)
 endif()
 
 # nier_loader: desde la terminal de la Flip, sin ventana.

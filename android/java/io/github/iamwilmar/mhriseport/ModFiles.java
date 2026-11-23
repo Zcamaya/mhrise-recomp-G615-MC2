@@ -252,7 +252,7 @@ final class ModFiles {
 
     private static int stageFramework(Map<String, File> files, File staged) throws IOException {
         boolean explicit =
-                files.keySet().stream().anyMatch(p -> p.matches("(?i)(?:.*/)?reframework/(autorun|data)/.+"));
+                files.keySet().stream().anyMatch(p -> p.matches("(?i)(?:.*/)?reframework/(autorun|data|images|fonts)/.+"));
         String wrapper = null;
         if (!explicit) {
             java.util.regex.Pattern autorun = java.util.regex.Pattern.compile("(?i)^((?:.*/)?)autorun/.+");
@@ -281,7 +281,7 @@ final class ModFiles {
         }
         String prefixPattern = explicit ? "(?:(.*)/)?reframework/" : java.util.regex.Pattern.quote(wrapper);
         java.util.regex.Pattern layout =
-                java.util.regex.Pattern.compile("(?i)^" + prefixPattern + "(autorun|data)/(.+)$");
+                java.util.regex.Pattern.compile("(?i)^" + prefixPattern + "(autorun|data|images|fonts)/(.+)$");
         java.util.Set<String> paths = new java.util.HashSet<>();
         String root = null;
         for (Map.Entry<String, File> entry : files.entrySet()) {

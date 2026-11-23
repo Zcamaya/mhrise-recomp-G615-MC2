@@ -3,8 +3,16 @@
 #include "loader/lua_values.h"
 #include "loader/screen_projection.h"
 #include "loader/application_lua.h"
+#include "loader/lua_data.h"
 #include <algorithm>
 #include <GLES3/gl3.h>
+#include <android/imagedecoder.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <unordered_map>
 #include <android/log.h>
 #include <atomic>
 #include <cfloat>
@@ -884,6 +892,354 @@ int primitive(lua_State *L) {
   else list->AddRect(a, {a.x+b.x, a.y+b.y}, color);
   return 0;
 }
+
+// ---- d2d: the Lua API of cursey's reframework-d2d plugin (MIT), on the MOD UI's overlay ----------------------------
+// PC overlay mods draw with it; its DLL draws through Direct2D, which Android doesn't have, so this is the same API
+// written again on ImGui's background draw list, the one `draw` uses. Fonts are the MOD UI's own at the size asked
+// (a font file a mod brings isn't loaded), bold drawn twice a pixel apart. Images (PNG, JPEG, WebP) come from a
+// reframework/images folder of an enabled mod or the app's own, decoded by Android, and become GL textures on the
+// overlay's thread before the frame that uses them is drawn. Colours are ARGB, as Direct2D's.
+
+ImU32 d2d_color(lua_State *L, int i) {
+  auto c = static_cast<uint32_t>(luaL_checkinteger(L, i));
+  return IM_COL32((c >> 16) & 255, (c >> 8) & 255, c & 255, c >> 24);
+}
+float num(lua_State *L, int i) { return static_cast<float>(luaL_checknumber(L, i)); }
+
+struct D2dImage {
+  int w = 0, h = 0;
+  std::vector<uint8_t> rgba;
+  GLuint tex = 0;  // made on the overlay's thread (0: not yet, or its GL context went away)
+};
+std::vector<std::unique_ptr<D2dImage>> d2d_images;          // (kept for the session: a mod makes a few)
+std::unordered_map<uintptr_t, D2dImage *> d2d_image_ids;    // the ids draw commands carry until the GL thread swaps them
+double d2d_rate = 60;                                       // (detail.set_max_updaterate: kept, every frame is drawn)
+char d2d_image_key, d2d_font_key;
+
+ImTextureID texture_id(uintptr_t v) { return (ImTextureID)v; }
+
+bool decode_image(const std::filesystem::path &path, D2dImage &out) {
+  int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return false;
+  AImageDecoder *decoder = nullptr;
+  bool ok = AImageDecoder_createFromFd(fd, &decoder) == ANDROID_IMAGE_DECODER_SUCCESS;
+  if (ok) {
+    AImageDecoder_setAndroidBitmapFormat(decoder, ANDROID_BITMAP_FORMAT_RGBA_8888);
+    AImageDecoder_setUnpremultipliedRequired(decoder, true);
+    const AImageDecoderHeaderInfo *info = AImageDecoder_getHeaderInfo(decoder);
+    out.w = AImageDecoderHeaderInfo_getWidth(info);
+    out.h = AImageDecoderHeaderInfo_getHeight(info);
+    size_t stride = AImageDecoder_getMinimumStride(decoder);
+    std::vector<uint8_t> rows(stride * out.h);
+    ok = out.w > 0 && out.h > 0 &&
+         AImageDecoder_decodeImage(decoder, rows.data(), stride, rows.size()) == ANDROID_IMAGE_DECODER_SUCCESS;
+    if (ok) {
+      out.rgba.resize(size_t(out.w) * out.h * 4);
+      for (int y = 0; y < out.h; y++) memcpy(&out.rgba[size_t(y) * out.w * 4], &rows[y * stride], size_t(out.w) * 4);
+    }
+    AImageDecoder_delete(decoder);
+  }
+  close(fd);
+  return ok;
+}
+
+// d2d.Image.new(file): reframework/images/<file> of the first root that has it (as the plugin: nil when there's none)
+int d2d_image_new(lua_State *L) {
+  const char *file = luaL_checkstring(L, lua_istable(L, 1) ? 2 : 1);  // (Image.new or Image:new)
+  const char *home = getenv("NIER_INTERNO");
+  std::filesystem::path found;
+  for (auto &root : mod_lua::framework_roots(std::filesystem::path(home ? home : ".") / "reframework")) {
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(root / "images" / file, ec)) {
+      found = root / "images" / file;
+      break;
+    }
+  }
+  auto image = std::make_unique<D2dImage>();
+  if (found.empty() || !decode_image(found, *image)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  *static_cast<D2dImage **>(lua_newuserdatauv(L, sizeof(D2dImage *), 0)) = image.get();
+  d2d_image_ids[reinterpret_cast<uintptr_t>(image.get())] = image.get();
+  d2d_images.push_back(std::move(image));
+  lua_rawgetp(L, LUA_REGISTRYINDEX, &d2d_image_key);
+  lua_setmetatable(L, -2);
+  return 1;
+}
+D2dImage *check_image(lua_State *L, int i) {
+  void *p = lua_touserdata(L, i);
+  bool ours = false;
+  if (p && lua_getmetatable(L, i)) {
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &d2d_image_key);
+    ours = lua_rawequal(L, -1, -2);
+    lua_pop(L, 2);
+  }
+  if (!ours) luaL_typeerror(L, i, "d2d image");
+  return *static_cast<D2dImage **>(p);
+}
+int d2d_image_size(lua_State *L) {
+  D2dImage *image = check_image(L, 1);
+  lua_pushnumber(L, image->w);
+  lua_pushnumber(L, image->h);
+  return 2;
+}
+
+// A font: a table {size, bold} with the font metatable (measure). Font.new(name, size[, bold[, italic]]) or, for a
+// font file, Font.new(file, family, size, ...); create_font(name, size, bold, italic).
+int d2d_font_new(lua_State *L) {
+  int at = lua_type(L, 2) == LUA_TSTRING ? 3 : 2;  // (a font file's family name before the size)
+  lua_createtable(L, 0, 2);
+  lua_pushnumber(L, luaL_optnumber(L, at, 24));
+  lua_setfield(L, -2, "size");
+  lua_pushboolean(L, lua_toboolean(L, at + 1));
+  lua_setfield(L, -2, "bold");
+  lua_rawgetp(L, LUA_REGISTRYINDEX, &d2d_font_key);
+  lua_setmetatable(L, -2);
+  return 1;
+}
+void font_of(lua_State *L, int i, float &size, bool &bold) {
+  size = 24;
+  bold = false;
+  if (!lua_istable(L, i)) return;  // (a font the plugin couldn't make is nil: drawn at its default)
+  lua_getfield(L, i, "size");
+  size = lua_isnumber(L, -1) ? float(lua_tonumber(L, -1)) : 24;
+  lua_getfield(L, i, "bold");
+  bold = lua_toboolean(L, -1);
+  lua_pop(L, 2);
+}
+ImFont *overlay_font() {
+  auto &io = ImGui::GetIO();
+  return io.Fonts->Fonts.empty() ? nullptr : io.Fonts->Fonts[0];
+}
+int d2d_measure(lua_State *L) {  // font:measure(text) and d2d.measure_text(font, text)
+  float size;
+  bool bold;
+  font_of(L, 1, size, bold);
+  ImFont *font = ui ? overlay_font() : nullptr;
+  ImVec2 extent = font ? font->CalcTextSizeA(size, FLT_MAX, 0, visible_text(luaL_checkstring(L, 2))) : ImVec2{};
+  lua_pushnumber(L, extent.x + (bold ? 1 : 0));
+  lua_pushnumber(L, extent.y);
+  return 2;
+}
+
+// Points of an arc as Direct2D draws them: degrees from +x, clockwise on screen unless told otherwise
+void arc_points(ImVec2 c, float rx, float ry, float start, float sweep, bool clockwise, std::vector<ImVec2> &out) {
+  if (start < 0) start += 360;
+  int n = std::max(8, int(std::fabs(sweep) / 6));
+  float a0 = start * float(M_PI) / 180, span = sweep * float(M_PI) / 180 * (clockwise ? 1 : -1);
+  for (int k = 0; k <= n; k++) {
+    float a = a0 + span * k / n;
+    out.push_back({c.x + rx * std::cos(a), c.y + ry * std::sin(a)});
+  }
+}
+
+enum class D2d { Text, FillRect, OutlineRect, RoundedRect, FillRoundedRect, Quad, FillQuad, Line, Image, FillOval,
+                 Oval, Pie, OutlinePie, Ring, OutlineRing, SurfaceSize };
+int d2d_draw(lua_State *L) {
+  auto kind = static_cast<D2d>(lua_tointeger(L, lua_upvalueindex(1)));
+  if (kind == D2d::SurfaceSize) {
+    ImVec2 size = ui ? ImGui::GetIO().DisplaySize : ImVec2{};
+    lua_pushnumber(L, size.x);
+    lua_pushnumber(L, size.y);
+    return 2;
+  }
+  if (!drawing) return 0;  // (between frames: nothing to draw on, as when the plugin skips a frame)
+  auto *list = ImGui::GetBackgroundDrawList();
+  switch (kind) {
+  case D2d::Text: {
+    float size;
+    bool bold;
+    font_of(L, 1, size, bold);
+    const char *text = visible_text(luaL_checkstring(L, 2));
+    ImVec2 at{num(L, 3), num(L, 4)};
+    ImU32 color = d2d_color(L, 5);
+    list->AddText(overlay_font(), size, at, color, text);
+    if (bold) list->AddText(overlay_font(), size, {at.x + 1, at.y}, color, text);
+    break;
+  }
+  case D2d::FillRect:
+    list->AddRectFilled({num(L, 1), num(L, 2)}, {num(L, 1) + num(L, 3), num(L, 2) + num(L, 4)}, d2d_color(L, 5));
+    break;
+  case D2d::OutlineRect:
+    list->AddRect({num(L, 1), num(L, 2)}, {num(L, 1) + num(L, 3), num(L, 2) + num(L, 4)}, d2d_color(L, 6), 0, 0, num(L, 5));
+    break;
+  case D2d::RoundedRect:
+  case D2d::FillRoundedRect: {
+    float w = num(L, 3), h = num(L, 4);
+    float round = std::min({num(L, 5), num(L, 6), w / 2, h / 2});  // (one radius: the smaller of the two)
+    ImVec2 a{num(L, 1), num(L, 2)}, b{a.x + w, a.y + h};
+    if (kind == D2d::FillRoundedRect) list->AddRectFilled(a, b, d2d_color(L, 7), round);
+    else list->AddRect(a, b, d2d_color(L, 8), round, 0, num(L, 7));
+    break;
+  }
+  case D2d::Quad:
+  case D2d::FillQuad: {
+    ImVec2 p[4] = {{num(L, 1), num(L, 2)}, {num(L, 3), num(L, 4)}, {num(L, 5), num(L, 6)}, {num(L, 7), num(L, 8)}};
+    if (kind == D2d::FillQuad) list->AddQuadFilled(p[0], p[1], p[2], p[3], d2d_color(L, 9));
+    else list->AddQuad(p[0], p[1], p[2], p[3], d2d_color(L, 10), num(L, 9));
+    break;
+  }
+  case D2d::Line:
+    list->AddLine({num(L, 1), num(L, 2)}, {num(L, 3), num(L, 4)}, d2d_color(L, 6), num(L, 5));
+    break;
+  case D2d::Image: {
+    D2dImage *image = check_image(L, 1);
+    float x = num(L, 2), y = num(L, 3);
+    float w = lua_isnumber(L, 4) ? num(L, 4) : image->w, h = lua_isnumber(L, 5) ? num(L, 5) : image->h;
+    float alpha = lua_isnumber(L, 6) ? std::clamp(num(L, 6), 0.f, 1.f) : 1.f;
+    list->AddImage(texture_id(reinterpret_cast<uintptr_t>(image)), {x, y}, {x + w, y + h}, {0, 0}, {1, 1},
+                   IM_COL32(255, 255, 255, int(alpha * 255)));
+    break;
+  }
+  case D2d::FillOval:
+  case D2d::Oval: {
+    // fill_circle(x, y, r, c), circle(x, y, r, t, c), fill_oval(x, y, rx, ry, c), oval(x, y, rx, ry, t, c)
+    bool circle = lua_toboolean(L, lua_upvalueindex(2));
+    float rx = num(L, 3), ry = circle ? rx : num(L, 4);
+    int next = circle ? 4 : 5;
+    std::vector<ImVec2> pts;
+    arc_points({num(L, 1), num(L, 2)}, rx, ry, 0, 360, true, pts);
+    pts.pop_back();  // (the last is the first again)
+    if (kind == D2d::FillOval) list->AddConvexPolyFilled(pts.data(), int(pts.size()), d2d_color(L, next));
+    else list->AddPolyline(pts.data(), int(pts.size()), d2d_color(L, next + 1), ImDrawFlags_Closed, num(L, next));
+    break;
+  }
+  case D2d::Pie:
+  case D2d::OutlinePie: {
+    // pie(x, y, r, start, sweep, c[, clockwise]); outline_pie(..., thickness, c[, clockwise])
+    ImVec2 c{num(L, 1), num(L, 2)};
+    bool outline = kind == D2d::OutlinePie;
+    int col = outline ? 7 : 6;
+    std::vector<ImVec2> pts;
+    arc_points(c, num(L, 3), num(L, 3), num(L, 4), std::clamp(num(L, 5), 0.f, 360.f),
+               lua_isnone(L, col + 1) || lua_toboolean(L, col + 1), pts);
+    if (outline) {
+      pts.insert(pts.begin(), c);
+      list->AddPolyline(pts.data(), int(pts.size()), d2d_color(L, col), ImDrawFlags_Closed, num(L, 6));
+    } else {
+      for (size_t k = 0; k + 1 < pts.size(); k++) list->AddTriangleFilled(c, pts[k], pts[k + 1], d2d_color(L, col));
+    }
+    break;
+  }
+  case D2d::Ring:
+  case D2d::OutlineRing: {
+    // ring(x, y, outer, inner, start, sweep, c[, clockwise]); outline_ring(..., thickness, c[, clockwise])
+    ImVec2 c{num(L, 1), num(L, 2)};
+    bool outline = kind == D2d::OutlineRing;
+    int col = outline ? 8 : 7;
+    bool cw = lua_isnone(L, col + 1) || lua_toboolean(L, col + 1);
+    float sweep = std::clamp(num(L, 6), 0.f, 360.f);
+    std::vector<ImVec2> outer, inner;
+    arc_points(c, num(L, 3), num(L, 3), num(L, 5), sweep, cw, outer);
+    arc_points(c, num(L, 4), num(L, 4), num(L, 5), sweep, cw, inner);
+    if (outline) {
+      std::vector<ImVec2> pts(outer);
+      pts.insert(pts.end(), inner.rbegin(), inner.rend());
+      list->AddPolyline(pts.data(), int(pts.size()), d2d_color(L, col), ImDrawFlags_Closed, num(L, 7));
+    } else {
+      for (size_t k = 0; k + 1 < outer.size(); k++)
+        list->AddQuadFilled(outer[k], outer[k + 1], inner[k + 1], inner[k], d2d_color(L, col));
+    }
+    break;
+  }
+  default:
+    break;
+  }
+  return 0;
+}
+
+void open_d2d(lua_State *L) {
+  lua_newtable(L);  // the image metatable
+  lua_newtable(L);
+  lua_pushcfunction(L, d2d_image_size);
+  lua_setfield(L, -2, "size");
+  lua_setfield(L, -2, "__index");
+  lua_rawsetp(L, LUA_REGISTRYINDEX, &d2d_image_key);
+  lua_newtable(L);  // the font metatable
+  lua_newtable(L);
+  lua_pushcfunction(L, d2d_measure);
+  lua_setfield(L, -2, "measure");
+  lua_setfield(L, -2, "__index");
+  lua_rawsetp(L, LUA_REGISTRYINDEX, &d2d_font_key);
+
+  lua_newtable(L);
+  struct Entry { const char *name; D2d kind; bool circle; };
+  for (Entry e : {Entry{"text", D2d::Text, false}, {"fill_rect", D2d::FillRect, false}, {"filled_rect", D2d::FillRect, false},
+                  {"outline_rect", D2d::OutlineRect, false}, {"rounded_rect", D2d::RoundedRect, false},
+                  {"fill_rounded_rect", D2d::FillRoundedRect, false}, {"quad", D2d::Quad, false},
+                  {"fill_quad", D2d::FillQuad, false}, {"line", D2d::Line, false}, {"image", D2d::Image, false},
+                  {"fill_circle", D2d::FillOval, true}, {"circle", D2d::Oval, true}, {"fill_oval", D2d::FillOval, false},
+                  {"oval", D2d::Oval, false}, {"pie", D2d::Pie, false}, {"outline_pie", D2d::OutlinePie, false},
+                  {"ring", D2d::Ring, false}, {"outline_ring", D2d::OutlineRing, false},
+                  {"surface_size", D2d::SurfaceSize, false}}) {
+    lua_pushinteger(L, static_cast<int>(e.kind));
+    lua_pushboolean(L, e.circle);
+    lua_pushcclosure(L, d2d_draw, 2);
+    lua_setfield(L, -2, e.name);
+  }
+  lua_pushcfunction(L, d2d_measure);
+  lua_setfield(L, -2, "measure_text");
+  lua_pushcfunction(L, d2d_font_new);
+  lua_setfield(L, -2, "create_font");
+  lua_newtable(L);  // d2d.Font
+  lua_pushcfunction(L, d2d_font_new);
+  lua_setfield(L, -2, "new");
+  lua_setfield(L, -2, "Font");
+  lua_newtable(L);  // d2d.Image
+  lua_pushcfunction(L, d2d_image_new);
+  lua_setfield(L, -2, "new");
+  lua_setfield(L, -2, "Image");
+  lua_newtable(L);  // d2d.detail
+  lua_pushcfunction(L, [](lua_State *s) {
+    lua_pushnumber(s, d2d_rate);
+    return 1;
+  });
+  lua_setfield(L, -2, "get_max_updaterate");
+  lua_pushcfunction(L, [](lua_State *s) {
+    d2d_rate = luaL_checknumber(s, 1);
+    return 0;
+  });
+  lua_setfield(L, -2, "set_max_updaterate");
+  lua_pushcfunction(L, [](lua_State *s) {
+    lua_pushliteral(s, "");  // (a draw function's errors are in the MOD UI's Script errors)
+    return 1;
+  });
+  lua_setfield(L, -2, "get_last_error");
+  lua_setfield(L, -2, "detail");
+  lua_setglobal(L, "d2d");
+  // register(init, draw): init once before the first draw, draw every frame; an on_frame callback of the script that
+  // registers, so its errors, reload and removal go with the script's other callbacks
+  luaL_dostring(L, "function d2d.register(init, draw)\n"
+                   "  local ready = false\n"
+                   "  re.on_frame(function()\n"
+                   "    if not ready then ready = true; if init then init() end end\n"
+                   "    if draw then draw() end\n"
+                   "  end)\n"
+                   "end");
+}
+
+// On the overlay's thread, before drawing: textures for the images this frame uses, and their ids in the commands
+void bind_d2d_images(ImDrawData *data) {
+  if (d2d_image_ids.empty()) return;
+  for (ImDrawList *list : data->CmdLists)
+    for (ImDrawCmd &cmd : list->CmdBuffer) {
+      auto it = d2d_image_ids.find((uintptr_t)cmd.TextureId);
+      if (it == d2d_image_ids.end()) continue;
+      D2dImage &image = *it->second;
+      if (!image.tex) {
+        glGenTextures(1, &image.tex);
+        glBindTexture(GL_TEXTURE_2D, image.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.w, image.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.rgba.data());
+      }
+      cmd.TextureId = texture_id(image.tex);
+    }
+}
 } // namespace
 void mod_lua::script_error(const std::string &message) {
   std::lock_guard lock(errors_mutex);
@@ -1077,6 +1433,7 @@ void mod_lua::open_imgui(lua_State *L) {
     lua_setfield(L, -2, name);
   }
   lua_setglobal(L, "draw");
+  open_d2d(L);
 }
 extern "C" JNIEXPORT void JNICALL
 Java_io_github_iamwilmar_mhriseport_ModUi_nativeCreate(JNIEnv *, jclass,
@@ -1169,8 +1526,10 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeFrame(JNIEnv *, jclass, jint w,
     return 0;
   ImGui::SetCurrentContext(ui);
   auto &io = ImGui::GetIO();
-  if (auto *data = ImGui::GetDrawData())
+  if (auto *data = ImGui::GetDrawData()) {
+    bind_d2d_images(data);
     ImGui_ImplOpenGL3_RenderDrawData(data);
+  }
   if (glyphs) {
     if (!io.Fonts->IsBuilt()) return 0;
     auto update = glyphs->update(*io.Fonts, max_texture_size);
@@ -1228,6 +1587,7 @@ Java_io_github_iamwilmar_mhriseport_ModUi_nativeClose(JNIEnv *, jclass) {
     return;
   ImGui::SetCurrentContext(ui);
   ImGui_ImplOpenGL3_Shutdown();
+  for (auto &image : d2d_images) image->tex = 0;  // (they go with this GL context; made again in the next one)
   ImGui::DestroyContext(ui);
   glyphs.reset();
   ui = nullptr;

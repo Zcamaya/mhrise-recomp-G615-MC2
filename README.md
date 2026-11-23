@@ -406,6 +406,12 @@ and line: that list is what to add next. Debug → **Object Explorer** (`object_
 explorer to the MOD UI, for writing scripts: search the game's types by name, see their fields (with offsets) and
 methods, open a manager's instance and read its fields live, and call its getters.
 
+Overlay mods made for **REFramework D2D** (cursey's [reframework-d2d](https://github.com/cursey/reframework-d2d) plugin,
+MIT) work too: its `d2d` Lua API (`register`, text and `Font`/`measure`, rectangles, rounded rectangles, quads,
+lines, circles and ovals, pies and rings, `Image` from a mod's `reframework/images`, `surface_size`) is written again
+here on the MOD UI's overlay, so the plugin's Windows DLL isn't needed (an import skips it). Text uses the MOD UI's
+font at the size asked; a font file a mod brings isn't loaded.
+
 ### Cheats
 
 Atmosphere cheats, the same files Eden and Yuzu read: `<data folder>/mods/<mod name>/cheats/<build id>.txt`. The menu
