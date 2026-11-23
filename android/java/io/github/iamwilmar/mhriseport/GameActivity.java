@@ -49,6 +49,39 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
 
     // The MOD UI draws the Lua scripts' windows: with no script running there's nothing to draw, and the button seemed
     // to do nothing. Says why instead.
+    // ---- Mods changed while the game runs ----
+    // Scripts reload in place: the Lua runtime reads the mods folder again (a request file it looks for each frame).
+    // Game files only load when the game starts, so those wait for a restart, offered by the settings menu. Returns
+    // whether this change needs one.
+    boolean restartPending;
+    boolean modsChanged(boolean gameFiles, boolean scripts) {
+        if (scripts && !reloadScripts()) gameFiles = true;
+        if (gameFiles) restartPending = true;
+        if (pad != null) pad.setModsAvailable(luaScripts());
+        return gameFiles;
+    }
+
+    private boolean reloadScripts() {
+        if (!luaBuild(this) || ModUi.runtime() == 0) return false;  // (no runtime: only a start loads them)
+        File dir = new File(getFilesDir(), "reframework");
+        try {
+            if (!dir.isDirectory() && !dir.mkdirs()) return false;
+            File request = new File(dir, "reload.request");
+            return request.exists() || request.createNewFile();
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    // Closes the game and opens it again (the launcher's activity, in a new task, started as this process ends)
+    void restartGame() {
+        Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (launch != null && launch.getComponent() != null)
+            startActivity(Intent.makeRestartActivityTask(launch.getComponent()));
+        finishAffinity();
+        android.os.Process.killProcess(android.os.Process.myPid());
+    }
+
     private boolean luaAtLaunch;  // (the runtime only reads the scripts when the game starts)
     private boolean modUiReady() {
         String why;
@@ -496,17 +529,27 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         new Thread(() -> {
             String done;
             try {
-                if (request == IMPORT_MOD) done = "Mod added: " + ModFiles.importArchive(getContentResolver(), uri, data);
+                if (request == IMPORT_MOD) {
+                    ModFiles.lastImported = null;
+                    done = "Mod added: " + ModFiles.importArchive(getContentResolver(), uri, data);
+                }
                 else if (request == IMPORT_CHEATS) done = "Cheats added: " + ModFiles.importCheats(getContentResolver(), uri, data);
                 else if (request == IMPORT_DRIVER) done = "Driver added: " + Drivers.unpack(this, uri) + ". Choose it in the list to use it.";
                 else done = "Lossless.dll imported (" + Drivers.importDll(this, uri, data) + "). It's used from the next start.";
             } catch (java.io.IOException | RuntimeException e) {
                 done = "Couldn't add it: " + e.getMessage();
             }
+            final File made = ModFiles.lastImported;
+            final File added = request == IMPORT_MOD && made != null && made.isDirectory() ? made : null;
             final String msg = done;
             runOnUiThread(() -> {
-                Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
-                if (!isFinishing()) new SettingsMenu(this, controls).show();
+                boolean restart = added != null && modsChanged(ModFiles.gameFiles(added), ModFiles.scripts(added));
+                Toast.makeText(this, msg + (added != null && ModFiles.scripts(added) && !restart ? ". Its scripts load without a restart." : "."),
+                        Toast.LENGTH_LONG).show();
+                if (isFinishing()) return;
+                SettingsMenu menu = new SettingsMenu(this, controls);
+                menu.show();
+                if (restart) menu.askRestart();
             });
         }, "ModImport").start();
     }

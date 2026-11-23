@@ -72,6 +72,15 @@ final class ModFiles {
         return true;
     }
 
+    // What a change to this mod needs: game files only load when the game starts; scripts reload in place
+    static boolean gameFiles(File dir) {
+        return new File(dir, "romfs").isDirectory() || new File(dir, "exefs").isDirectory();
+    }
+
+    static boolean scripts(File dir) {
+        return new File(dir, "reframework").isDirectory();
+    }
+
     static synchronized boolean delete(Mod m) {
         return deleteTree(m.dir);
     }
@@ -201,8 +210,11 @@ final class ModFiles {
         }
     }
 
+    static volatile File lastImported;  // (what the last import made: GameActivity says whether it needs a restart)
+
     static String installUnpacked(Map<String, File> files, String filename, File data, File work) throws IOException {
         File dest = freeDir(data, folderName(filename, "Mod"));
+        lastImported = dest;
         File staged = new File(work, "ready");
         Files.createDirectory(staged.toPath());
         Map<String, File> pc = PcLooseMod.select(files);
@@ -234,7 +246,6 @@ final class ModFiles {
                         Long.toString(PcLooseMod.nextOrder(data)).getBytes(StandardCharsets.UTF_8));
             description += (description.isEmpty() ? "" : ", ") + scripts + " Lua/data files";
         }
-        description += ". Restart the game";
         Files.move(staged.toPath(), dest.toPath());
         return "\"" + dest.getName() + "\": " + description;
     }

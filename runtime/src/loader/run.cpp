@@ -124,11 +124,10 @@ int nier_run(const RunConfig& cfg) {
 #ifdef MHRISE_LUA_DEBUG
     if (const char* priv = getenv("NIER_INTERNO")) {
         const auto scripts = std::filesystem::path(priv) / "reframework" / "autorun";
-        // The Lua runtime only starts with a script folder: the Object Explorer runs in it, so it makes one
-        if (nnsdk::ini::on("object_explorer")) {
-            std::error_code ignored;
-            std::filesystem::create_directories(scripts, ignored);
-        }
+        // The Lua runtime only starts with a script folder, so there's always one: a script mod added while the game
+        // runs then loads in place (the settings menu asks for a reload) instead of waiting for the next start
+        std::error_code ignored;
+        std::filesystem::create_directories(scripts, ignored);
         run_tdb_autorun(g_main, scripts);
     }
 #endif

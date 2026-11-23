@@ -781,6 +781,24 @@ final class SettingsMenu {
         d.show();
     }
 
+    private void modChanged(File dir) {
+        modChanged(ModFiles.gameFiles(dir), ModFiles.scripts(dir));
+    }
+
+    private void modChanged(boolean gameFiles, boolean scripts) {
+        if (!activity.modsChanged(gameFiles, scripts) && scripts)
+            android.widget.Toast.makeText(activity, tr("Lua scripts reloaded.", "Lua 脚本已重新加载。"), android.widget.Toast.LENGTH_SHORT).show();
+    }
+
+    // Game files changed: restart now (losing what isn't saved), or later from Mods & cheats
+    void askRestart() {
+        dropDown(tr("Restart to load the mod's game files? Progress since your last save is lost.",
+                        "重启以加载 MOD 的游戏资源？上次存档之后的进度将会丢失。"),
+                new String[] {tr("Later", "稍后"), tr("Restart now", "立即重启")}, -1, k -> {
+                    if (k == 1) activity.restartGame();
+                });
+    }
+
     private void buildDebug() {
         if (GameActivity.luaBuild(activity)) {
             action("Lua / TDB", tr("View startup script results.", "查看启动时脚本的运行结果。"), this::showLuaReport);
@@ -1731,9 +1749,13 @@ final class SettingsMenu {
             return;
         }
         List<ModFiles.Mod> mods = ModFiles.list(folder);
+        if (activity.restartPending)
+            action(tr("Restart to apply your changes", "重启以应用更改"),
+                    tr("Mods with game files were added, removed, or turned on or off: those load when the game starts.",
+                            "已添加、移除或启停含游戏资源的 MOD，这些资源在游戏启动时加载。"), this::askRestart);
         note(tr("Each mod is a folder in ", "每个 MOD 的目录位于 ") + ModFiles.modsDir(folder) + tr(", laid out as for Eden: romfs/ with the game files it "
-                + "replaces, cheats/ with its cheat files. Adding a mod or turning one on or off applies the next time the "
-                + "game starts.", "。目录结构与 Eden 相同：romfs/ 放替换的游戏资源，cheats/ 放金手指。新增或启停 MOD 后需重启游戏。"));
+                + "replaces, cheats/ with its cheat files. Scripts and cheats apply right away; game files the next time the "
+                + "game starts.", "。目录结构与 Eden 相同：romfs/ 放替换的游戏资源，cheats/ 放金手指。脚本和金手指立即生效，游戏资源需重启游戏。"));
         action(tr("Add a mod archive", "添加 MOD 压缩包"),
                 tr("ZIP, 7z, RAR or TAR. Import game resources, REFramework scripts and their data. Restart to apply.", "支持 ZIP、7z、RAR 和 TAR。可导入游戏资源、REFramework 脚本及数据。重启游戏生效。"),
                 () -> {
@@ -1749,6 +1771,7 @@ final class SettingsMenu {
             toggle(m.name, what + tr(". In ", "。目录：") + m.dir.getName() + ".", () -> m.on ? 1 : 0, v -> {
                 if (!ModFiles.setOn(m, v != 0)) android.widget.Toast.makeText(activity, tr("Couldn't rename ", "无法重命名 ") + m.dir.getName(),
                         android.widget.Toast.LENGTH_LONG).show();
+                else modChanged(m.dir);
                 build();
             });
         }
@@ -1757,7 +1780,10 @@ final class SettingsMenu {
             for (int i = 0; i < names.length; i++) names[i] = mods.get(i).name;
             action(tr("Remove a mod", "移除 MOD"), tr("Deletes the mod's folder and everything in it.", "删除该 MOD 的目录及其中所有文件。"), () -> dropDown(tr("Remove a mod", "移除 MOD"), names, -1,
                     i -> dropDown(tr("Delete ", "删除 ") + names[i] + "?", new String[] {tr("Keep it", "保留"), tr("Delete it", "删除")}, -1, k -> {
-                        if (k == 1) ModFiles.delete(mods.get(i));
+                        if (k == 1) {
+                            boolean game = ModFiles.gameFiles(mods.get(i).dir), lua = ModFiles.scripts(mods.get(i).dir);
+                            if (ModFiles.delete(mods.get(i))) modChanged(game, lua);
+                        }
                         build();
                     })));
         }
