@@ -533,10 +533,11 @@ final class SettingsMenu {
                         + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.", "省略中间没有任务的连续 GPU 屏障，减少等待与发热。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "tight_barriers", false);
-        flag(tr("Skip cache-only GPU barriers", "跳过仅刷新缓存的 GPU 屏障"),
-                tr("Some of the game's GPU stops only ask to refresh caches that don't exist on a phone's GPU, and order "
-                        + "nothing. On: those are skipped. Off by default: if graphics glitch with it on, turn it off. "
-                        + "Applies at once.", "游戏的部分 GPU 屏障只要求刷新手机 GPU 上不存在的缓存，并不保证顺序。开启后跳过这些屏障。默认关闭，若开启后画面异常可关闭。立即生效。"),
+        flag(tr("Lighter GPU barriers", "更轻的 GPU 屏障"),
+                tr("Many of the game's GPU stops in a hunt only ask the GPU to finish drawing pixels before drawing more. "
+                        + "On: those wait for the pixel work only instead of the whole GPU (less waiting, a little "
+                        + "less heat). Off by default: if graphics glitch with it on, turn it off. Applies at once.",
+                        "狩猎中游戏的许多 GPU 屏障只要求先画完像素。开启后这些屏障只等待像素部分，而不是整个 GPU（等待更少，发热略低）。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "barrier_bits", false);
         flag(tr("Fast textures", "快速纹理"),
                 tr("For speed over accuracy: each draw's textures are looked up by where the game keeps them ("

@@ -1133,8 +1133,8 @@ private:
     bool patch_image(Texture& t, const std::vector<Texture::TexelWrite>& writes);
     bool copy_texel_box(Texture& t, const Texture::TexelWrite& w);
     bool apply_mapping_changes(Texture& t);
-    void barrier();
-    void full_barrier();
+    void barrier(bool fragments_only = false);
+    void full_barrier(bool fragments_only = false);
     void nvn_barrier(int bits);
     // full_area: renderArea entero aunque la mirada adelante diga otra cosa (borrados dentro del pase).
     bool ensure_render_pass(bool full_area = false, const cmd::SetRenderTargets* planned = nullptr);
@@ -1757,6 +1757,9 @@ private:
     uint64_t prof_barrier_bits_[256] = {};  // perfil: barreras de NVN por sus bits
     uint64_t prof_barriers_no_order_ = 0;   // perfil: barreras de NVN sin bits de orden (saltadas con barrier_bits)
     bool skip_unordered_barriers_ = false;  // <datos>/barrier_bits
+    bool pending_fragments_only_ = false;   // la barrera aplazada solo ordena fragmentos
+    bool fragments_barrier_open_ = false;   // hubo una solo de fragmentos después de la última completa
+    uint64_t prof_barriers_fragments_ = 0;  // perfil: barreras que solo ordenaron fragmentos (barrier_bits)
     uint64_t prof_split_storage_ = 0, prof_split_sample_ = 0;  // perfil: por qué se cortó (escribe storage, lee un adjunto)
     // Perfil de cortes (con registro): por qué se cerró cada pase y qué tiene que ver con él el siguiente. Lo dice quien
     // cierra el pase por su cuenta (split_why_: espejo, textura, barrera, unión de overlays…); si nadie lo dijo, el comando
@@ -3690,9 +3693,11 @@ void Executor::read_flags() {
     // Off by default (Settings → Performance → Skip empty GPU barriers: <datos>/tight_barriers).
     skip_redundant_barriers_ = pass_end_is_barrier_ || NVN_FLAG("tight_barriers");
     // NVN's barrier takes bits: 0x1-0x8 order work (primitives, fragments, fragments of the same tile, indirect data),
-    // 0x10-0x80 only invalidate the GPU's caches (textures, shader code, texture descriptors, ZCull). A barrier with
-    // none of the first four orders nothing, and the caches it names don't exist here as such: our uploads and
-    // descriptor writes bring their own barriers. Off by default: <datos>/barrier_bits drops those.
+    // 0x10-0x80 only invalidate the GPU's caches (textures, shader code, texture descriptors, ZCull). With
+    // <datos>/barrier_bits (off by default) they count: one that orders nothing is dropped (the caches it names don't
+    // exist here as such; our uploads and descriptor writes bring their own barriers), and one that only orders
+    // fragments (0x2/0x4, without 0x1 or 0x8) waits for the fragment stages and not for everything. On Turnip that's
+    // the difference between a cache flush and a wait for idle. In a hunt that's over half of the ~200 a frame.
     skip_unordered_barriers_ = NVN_FLAG("barrier_bits");
     recycle_overlays_ = !NVN_FLAG("no_overlay_gaps");
     patch_overlays_ = !NVN_FLAG("no_patch_overlays");
@@ -5702,11 +5707,11 @@ void Executor::end_render_pass() {
     if (crumbs_passes_) crumb_end();
     if (pending_barrier_) {  // la barrera de NVN aplazada (nvn_barrier)
         pending_barrier_ = false;
-        full_barrier();
+        full_barrier(pending_fragments_only_);
     }
 }
 
-void Executor::full_barrier() {
+void Executor::full_barrier(bool fragments_only) {
     storage_since_barrier_ = false;
     // Perfil y tight_barriers (ver gpu_work_): sin nada grabado desde la última, o (_pase) desde el final de un pase.
     prof_full_barriers_++;
@@ -5718,20 +5723,34 @@ void Executor::full_barrier() {
         gpu_work_ = work_after_pass_ = false;
         return;
     }
-    gpu_work_ = work_after_pass_ = false;
     VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    if (fragments_only) {
+        // Solo lo de fragmentos: lo de antes sigue sin ordenar con vértices, compute o copias. Por eso gpu_work_ se
+        // queda como está: una barrera completa justo detrás no cuenta como vacía para tight_barriers.
+        prof_barriers_fragments_++;
+        fragments_barrier_open_ = true;
+        constexpr VkPipelineStageFlags kFragments =
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        vkCmdPipelineBarrier(cmd_, kFragments, kFragments, 0, 1, &b, 0, nullptr, 0, nullptr);
+        return;
+    }
+    gpu_work_ = work_after_pass_ = false;
+    fragments_barrier_open_ = false;
     vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &b, 0,
                          nullptr, 0, nullptr);
 }
 
-void Executor::barrier() {
-    pending_barrier_ = false;  // esta la cubre
+void Executor::barrier(bool fragments_only) {
+    // La aplazada va en esta: solo de fragmentos si las dos lo son
+    if (pending_barrier_) fragments_only = fragments_only && pending_fragments_only_;
+    pending_barrier_ = false;
     if (!split_why_) split_why_ = "barrera";
     end_render_pass();
     targets_changed_ = true;
-    full_barrier();
+    full_barrier(fragments_only);
 }
 
 // Barrera de NVN. Todo lo de antes del pase abierto ya va ordenado con él por su dependencia externa: dentro del pase
@@ -5747,6 +5766,7 @@ void Executor::nvn_barrier(int bits) {
             return;
         }
     }
+    const bool fragments_only = skip_unordered_barriers_ && !(bits & 0x9);
     const bool lazy = opt_.barrera_perezosa && in_render_pass_ && !targets_changed_ && !storage_since_barrier_;
     if (frame_ == trace_frame_) NVN_LOG("F barrera 0x%x%s\n", bits, lazy ? " aplazada" : "");
     if (!lazy) {
@@ -5755,9 +5775,10 @@ void Executor::nvn_barrier(int bits) {
             split_why_ = !opt_.barrera_perezosa ? "barrera (no_lazy_barrier)"
                          : targets_changed_         ? "barrera con targets nuevos"
                                                 : "barrera tras escribir storage en el pase";
-        barrier();
+        barrier(fragments_only);
         return;
     }
+    pending_fragments_only_ = pending_barrier_ ? pending_fragments_only_ && fragments_only : fragments_only;
     pending_barrier_ = true;
     prof_barriers_deferred_++;
 }
@@ -10761,6 +10782,9 @@ void Executor::dispatch(const cmd::Dispatch& v) {
             if (b.tex) fprintf(loading_log_, "  compute_source binding=%u kind=%u write=%u serial=%llu\n",
                                b.r->binding,unsigned(b.r->kind),unsigned(b.r->is_written),(unsigned long long)b.tex->serial);
     }
+    // Un compute tras una barrera que solo ordenó fragmentos: lo dibujado antes puede no haber acabado todavía. No
+    // sabemos si el juego cuenta con eso para un compute; por si acaso, la completa.
+    if (fragments_barrier_open_) full_barrier();
     if (gpu_groups)
         vkCmdDispatchIndirect(cmd_, gpu_groups, gpu_groups_offset);
     else
@@ -12039,10 +12063,11 @@ void Executor::profile_frame() {
                 snprintf(b, sizeof b, " 0x%x %.1f;", by_bits[k].second, by_bits[k].first / double(period));
                 kinds += b;
             }
-            NVN_LOG("perfil barreras de NVN (por frame, por bits):%s %.1f sin bits de orden%s\n", kinds.c_str(),
-                    prof_barriers_no_order_ / double(period), skip_unordered_barriers_ ? " (saltadas, barrier_bits)" : "");
+            NVN_LOG("perfil barreras de NVN (por frame, por bits):%s %.1f sin bits de orden%s; %.1f solo de fragmentos\n",
+                    kinds.c_str(), prof_barriers_no_order_ / double(period),
+                    skip_unordered_barriers_ ? " (saltadas, barrier_bits)" : "", prof_barriers_fragments_ / double(period));
             std::fill(std::begin(prof_barrier_bits_), std::end(prof_barrier_bits_), 0);
-            prof_barriers_no_order_ = 0;
+            prof_barriers_no_order_ = prof_barriers_fragments_ = 0;
         }
         NVN_LOG("perfil merged_passes (por frame): %.1f pases con adjuntos de más, %.1f cambios de targets sin cortar%s\n",
                 prof_passes_merged_ / double(period), prof_rt_merged_ / double(period), merge_passes_ ? "" : " (apagado)");
