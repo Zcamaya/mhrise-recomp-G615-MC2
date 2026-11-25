@@ -122,7 +122,7 @@ static_assert(kGraphicsStorageStride == kMaxStorage * 16 &&
 // se reparten por orden (la de offset menor, la primera ranura enlazada…). resolve_image registra lo que decide.
 constexpr uint32_t kImageHandleBase = 0x128;
 constexpr VkDeviceSize kStagingChunk = 16 << 20;  // también lo más grande que cabe en una reserva
-constexpr VkDeviceSize kFreeStagingBytes = 128 << 20;  // trozos de staging sueltos que se guardan para reutilizar
+constexpr VkDeviceSize kFreeStagingBytes = 128 << 20;  // trozos de staging sueltos que se guardan para reutilizar (256 MB empujó RSS a ~3.8 GB en Amatsu -> lmkd)
 // Entra en modo de memoria baja si queda menos de 1,5 GB disponibles; sale por encima de 2 GB. En ese modo se limitan a
 // la mitad las reservas reutilizables y los espejos de buffers; <data>/low_memory lo fuerza manualmente.
 bool low_memory() {
@@ -606,10 +606,14 @@ private:
         {
             FreeChunks& f = free_chunks();
             std::lock_guard lock(f.m);
+            size_t best = SIZE_MAX;
             for (size_t k = 0; k < f.chunks.size(); k++) {
-                if (f.chunks[k].size != bi.size || f.chunks[k].readback != readback_) continue;
-                Chunk reused = f.chunks[k];
-                f.chunks.erase(f.chunks.begin() + static_cast<ptrdiff_t>(k));
+                if (f.chunks[k].readback != readback_ || f.chunks[k].size < bi.size) continue;
+                if (best == SIZE_MAX || f.chunks[k].size < f.chunks[best].size) best = k;
+            }
+            if (best != SIZE_MAX) {
+                Chunk reused = f.chunks[best];
+                f.chunks.erase(f.chunks.begin() + static_cast<ptrdiff_t>(best));
                 f.bytes -= reused.size;
                 reused.used = 0;
                 chunks_.push_back(reused);
@@ -2518,7 +2522,7 @@ private:
         uint64_t hash = 0, epoch = 0, events = 0, mapping = 0;
         VkDescriptorSet set = VK_NULL_HANDLE;
     };
-    std::array<BindlessMemo, 256> bindless_memo_{};
+    std::array<BindlessMemo, 1024> bindless_memo_{};
     uint64_t texture_events_ = 0;
     uint64_t prof_bindless_memo_ = 0;
     // Perfil fino (con registro, en los frames medidos como prof_mark; por frame medido en "perfil fino"): lo que los tramos
@@ -2577,13 +2581,14 @@ private:
     // periodo ("perfil cargas").
     enum LoadKind {
         kLdUpload, kLdDeswizzle, kLdGpuUnswizzle, kLdImage, kLdView, kLdMirrorNew, kLdMirrorCheck, kLdMirrorCopy, kLdShader,
-        kLdPipeline, kLdWarm, kLdBindless, kLdOverlay, kLdFramebuffer, kLdSampler, kLdReap, kLdGpuWait, kLdSubmit, kLdKinds
+        kLdPipeline, kLdWarm, kLdBindless, kLdOverlay, kLdFramebuffer, kLdSampler, kLdReap, kLdGpuWait, kLdSubmit,
+        kLdCmds, kLdMisc, kLdKinds
     };
     static constexpr const char* kLoadNames[kLdKinds] = {
         "subidas de texturas (sin el deswizzle)", "deswizzle", "deswizzle en GPU", "imágenes nuevas", "vistas nuevas",
         "espejos nuevos", "revisión de espejos", "copia a espejos", "shaders traducidos", "pipelines del driver",
         "precalentado (tomar)", "bindless", "overlays", "framebuffers", "samplers", "liberar lo retirado",
-        "espera a la GPU", "vkQueueSubmit"};
+        "espera a la GPU", "vkQueueSubmit", "comandos grabados", "setup/finish"};
     static constexpr double kSlowRunMs = 50;
     struct LoadProf {
         uint64_t ns[kLdKinds] = {}, n[kLdKinds] = {}, bytes[kLdKinds] = {};
@@ -2782,7 +2787,7 @@ void Executor::begin() {
     }
     const size_t used_chunks = f.staging.used_chunks();
     f.staging.reset();
-    f.staging.trim(std::max<size_t>(used_chunks, 1), kStagingChunk);
+    f.staging.trim(std::max<size_t>(used_chunks, 1), 4 * kStagingChunk);
     f.texel_readback.reset();
     f.texel_readback.trim(f.texel_readback.bytes() > kStagingChunk ? 0 : 1);
     // El tope de staging es por envío: los demás contextos guardaban su pico hasta reutilizarse (6 x 128 MB).
@@ -3671,18 +3676,27 @@ bool Executor::run(const std::vector<const CommandList*>& lists) {
     if (prof_timing_ && prof_timed_frame_ != frame_) prof_timed_frame_ = frame_, prof_timed_frames_++;
     buffer_cache_.prof = prof_timing_ ? &fine_.vtx : nullptr;
     read_flags();
-    begin();
-    apply_astc_results();
-    if (!NVN_FLAG("no_mirrors_at_start")) preload_mirrors();
+    {
+        LoadTimer _setup(*this, kLdMisc);
+        begin();
+        apply_astc_results();
+        if (!NVN_FLAG("no_mirrors_at_start")) preload_mirrors();
+    }
     run_lists_ = &lists;  // la mirada adelante de los render passes (scan_pass) recorre lo que queda
     run_serial_++;
-    for (cur_list_ = 0; cur_list_ < lists.size(); cur_list_++)
-        for (cur_index_ = 0; cur_index_ < lists[cur_list_]->commands.size(); cur_index_++)
-            apply(lists[cur_list_]->commands[cur_index_]);
+    {
+        LoadTimer _cmds(*this, kLdCmds);
+        for (cur_list_ = 0; cur_list_ < lists.size(); cur_list_++)
+            for (cur_index_ = 0; cur_index_ < lists[cur_list_]->commands.size(); cur_index_++)
+                apply(lists[cur_list_]->commands[cur_index_]);
+    }
     run_lists_ = nullptr;
-    if (!virtual_writes_.empty() && !publish_virtual_pool(nullptr, nullptr, Visibility::Submission)) cpu_publication_ok_ = false;
-    finish();
-    if (!linear_written_.empty()) return_linear_textures();
+    {
+        LoadTimer _post(*this, kLdMisc);
+        if (!virtual_writes_.empty() && !publish_virtual_pool(nullptr, nullptr, Visibility::Submission)) cpu_publication_ok_ = false;
+        finish();
+        if (!linear_written_.empty()) return_linear_textures();
+    }
     const uint64_t run_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     prof_run_us_ += run_ns / 1000;
     frame_run_ns_ += run_ns;

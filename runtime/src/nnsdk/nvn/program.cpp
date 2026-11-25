@@ -466,6 +466,15 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
     if (safe >= 1) options.nonuniform_indexing = false;
     if (safe >= 2) options.optimize_stages = 0x3F;
     if (safe >= 3) options.subgroup_operations = 0;
+    // Los BRX (switch) grandes se optimizan con spirv-opt; en compute eso puede parar el juego segundos (4831 ms / 6
+    // shaders en NvnSubmit). Si la etapa es candidata a diferir BRX, la primera traducción va sin spirv-opt: luego, si
+    // tiene BRX, se difiere o se optimiza por el camino BRX; si no, se aplica spirv-opt normal (con clave/caché propia).
+    // Así el diferido funciona también cuando spirv_opt_stages ya incluía la etapa (compute por defecto en Mali/Adreno).
+    const uint32_t stage_bit_early = 1u << static_cast<uint32_t>(nvnshader::Stage::Compute);
+    const bool defer_brx_candidate = !NVN_FLAG("sync_spirv_opt") && !NVN_FLAG("no_spirv_opt_brx") && out.control;
+    const uint32_t wanted_opt_stages = options.optimize_stages;
+    if ((wanted_opt_stages & stage_bit_early) && defer_brx_candidate)
+        options.optimize_stages &= ~stage_bit_early;
     // Barreras de grupo dentro de un if o un bucle: Eden las quita (una barrera que no todos alcanzan cuelga la GPU),
     // pero sin ellas la memoria compartida queda en carrera. Se dejan en las de kUniformBarrierShaders (bucles uniformes)
     // y en las de <data>/keep_barrier (huellas o "*"). De las primeras también se guarda la traducción sin ellas
@@ -558,8 +567,14 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
         // game for seconds (a 200000-word one, 3.1 s on an A725 with Turnip; 6.7 s in one submit with the rest), and an
         // online hunt took that for a lost connection and closed the session. The first dispatches use the flag-based
         // flow the driver may get wrong (see spirv_opt_stages), for a moment. <data>/sync_spirv_opt (live): as before.
-        const bool defer = !got && out.shader.stage == nvnshader::Stage::Compute && !t_prefetch && opt_cacheable &&
-                           (out.cache_key.a | out.cache_key.b) != 0 && barrier_entry < 0 && !NVN_FLAG("sync_spirv_opt");
+        // Graphics BRX: same defer behind <data>/defer_brx_graphics (opt-in, Mali-G615 risk: unoptimized BRX can
+        // misrender or, for some pixel shaders, abort the driver). Fragment is kept synchronous by default.
+        const bool defer_graphics = NVN_FLAG("defer_brx_graphics") &&
+                                    out.shader.stage != nvnshader::Stage::Compute &&
+                                    out.shader.stage != nvnshader::Stage::Fragment;
+        const bool defer = !got && (out.shader.stage == nvnshader::Stage::Compute || defer_graphics) && !t_prefetch &&
+                           opt_cacheable && (out.cache_key.a | out.cache_key.b) != 0 && barrier_entry < 0 &&
+                           !NVN_FLAG("sync_spirv_opt");
         if (defer) {
             queue_optimized(out, opt_key);
             out.optimize_pending = true;
@@ -577,6 +592,25 @@ bool translate_stage(nvn::ProgramStage& out, uint64_t previous_stores = ~0ull, i
             if (logged++ < 16)
                 NVN_LOG("shader %016llx (%s) with BRX: run through spirv-opt\n", static_cast<unsigned long long>(print),
                         nvnshader::stage_name(out.shader.stage));
+        }
+    } else if (ok && !out.shader.has_brx && (wanted_opt_stages & stage_bit)) {
+        // Non-BRX shader: we pre-cleared opt for BRX-deferral; apply normal spirv-opt now.
+        nvnshader::Options opt = options;
+        opt.optimize_stages = wanted_opt_stages;
+        nvn::spirv_cache::Key opt_key;
+        const bool opt_cacheable = cacheable && translation_key(out, bound, opt, barriers_kept && keep, opt_key);
+        nvnshader::Translated optimized;
+        bool got = opt_cacheable && nvn::spirv_cache::global().find(opt_key, optimized);
+        if (!got) {
+            got = nvnshader::translate(reinterpret_cast<const uint8_t*>(out.code), bound, opt, optimized);
+            if (got) {
+                note_spirv_opt(print, optimized);
+                if (opt_cacheable) nvn::spirv_cache::global().insert(opt_key, optimized);
+            }
+        }
+        if (got && optimized.resources.size() == out.shader.resources.size()) {
+            out.shader = std::move(optimized);
+            out.cache_key = opt_cacheable ? opt_key : nvn::spirv_cache::Key{};
         }
     }
     // Reemplazo: <data>/spirv_reemplazo/<huella>.spv, el mismo SPIR-V (mismos recursos y bindings) pasado por spirv-opt
@@ -1012,8 +1046,8 @@ void nvn::take_optimized(ProgramStage& stage) {
     stage.cache_key = opt_key;
     stage.spirv_id = nvn::spirv_identity(stage.shader);
     if (g_optimized_late++ < 16)
-        NVN_LOG("shader %016llx (compute): spirv-opt done in the background, swapped in\n",
-                static_cast<unsigned long long>(stage.print));
+        NVN_LOG("shader %016llx (%s): spirv-opt done in the background, swapped in\n",
+                static_cast<unsigned long long>(stage.print), nvnshader::stage_name(stage.shader.stage));
 }
 
 bool nvn::use_stripped_module(const ProgramStage& stage) {
