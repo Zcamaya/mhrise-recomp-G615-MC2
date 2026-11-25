@@ -548,6 +548,7 @@ public:
         }
         current_ = std::min(current_, chunks_.empty() ? size_t{0} : chunks_.size() - 1);
     }
+    static void trim_free_cache_to(VkDeviceSize max_bytes) { trim_free_cache(max_bytes); }
 
 private:
     struct Chunk {
@@ -805,11 +806,10 @@ public:
     bool watch = false;
     // RAM: el Adreno no tiene memoria propia. Tiene que caber lo que se dibuja en un frame: con 128 MB, en la
     // fábrica se vaciaba decenas de veces por frame (todo se volvía a copiar: 1 fps).
-    static constexpr VkDeviceSize kArenaLimit = 384ull << 20;  // sin generaciones
-    // Con generaciones hay dos arenas que se turnan, de 256 MB: como mucho 512 MB (antes 384 fijos) y sin
-    // reservar ni soltar memoria en cada cambio (cada arena guarda sus trozos para su siguiente turno). El viejo
-    // solo espera a la GPU unos pocos envíos (nada nuevo lo enlaza), así que dos bastan.
-    static constexpr VkDeviceSize kGenerationLimit = 256ull << 20;
+    static constexpr VkDeviceSize kArenaLimit = 256ull << 20;  // sin generaciones
+    // Con generaciones hay dos arenas que se turnan, de 160 MB: como mucho 320 MB. 256 MB/512 MB empujaba el RSS
+    // hasta ~3.8 GB en cargas pesadas (Amatsu) y lmkd mataba el proceso; 160 MB baja el pico con más re-copias.
+    static constexpr VkDeviceSize kGenerationLimit = 160ull << 20;
     // Lleno, lo nuevo se copia en cada draw (al staging) hasta el cambio de generación (o el vaciado): como mucho
     // uno cada tantos frames, para que lo que no cabe no tire en cada frame lo que sí cabe. Sin generaciones el
     // vaciado solo puede hacerse con la GPU parada: el envío en curso se parte (al cargar la fábrica un solo envío
@@ -868,7 +868,8 @@ public:
         const size_t out = index_type == 0 ? size * 2 : size;
         // Sin sitio (hasta el siguiente vaciado copia cada draw): la copia vieja ya no vale para este envío.
         Generation& g = gens_[active_];
-        Staging::Alloc a = g.used + out <= limit_ ? g.arena.alloc(out, 16) : Staging::Alloc{};
+        const VkDeviceSize cap = effective_limit();
+        Staging::Alloc a = g.used + out <= cap ? g.arena.alloc(out, 16) : Staging::Alloc{};
         if (!a.data) {
             full_ = true;
             e.buffer = VK_NULL_HANDLE;
@@ -887,6 +888,7 @@ public:
     }
     bool needs_reset(uint64_t frame) const { return full_ && frame >= reset_frame_ + kResetEvery; }
     VkDeviceSize bytes() const { return gens_[0].arena.bytes() + gens_[1].arena.bytes(); }  // perfil
+    VkDeviceSize effective_limit() const { return low_memory() ? std::max<VkDeviceSize>(limit_ / 2, 64ull << 20) : limit_; }
     void set_generations(bool on) { limit_ = on ? kGenerationLimit : kArenaLimit; }
     // Con generaciones, entre draws (nadie guarda punteros a entradas): si toca, lo de ahora se queda para la GPU
     // hasta el envío `last_submit` (el que se está grabando) y se sigue en la otra generación, vacía. Las entradas
@@ -920,7 +922,7 @@ public:
         if (other.in_flight && other.last_submit <= completed) {
             other.in_flight = false;
             other.arena.reset();
-            other.arena.trim(~size_t{0}, limit_ + 2 * kStagingChunk);  // lo de más, de cuando no había generaciones
+            other.arena.trim(~size_t{0}, effective_limit() + 2 * kStagingChunk);  // lo de más, de cuando no había generaciones
             other.used = 0;
         }
         if (!generations && !other.in_flight && other.arena.bytes()) other.arena.trim(0);
@@ -11875,6 +11877,17 @@ void Executor::profile_frame() {
             if (fscanf(f, "%ld %ld", &pages, &resident) != 2) resident = 0;
             fclose(f);
         }
+        long rss_anon_kb = 0, rss_file_kb = 0, rss_shmem_kb = 0, vm_swap_kb = 0;
+        if (FILE* f = fopen("/proc/self/status", "r")) {
+            char line[128];
+            while (fgets(line, sizeof line, f)) {
+                if (sscanf(line, "RssAnon: %ld kB", &rss_anon_kb) == 1) continue;
+                if (sscanf(line, "RssFile: %ld kB", &rss_file_kb) == 1) continue;
+                if (sscanf(line, "RssShmem: %ld kB", &rss_shmem_kb) == 1) continue;
+                sscanf(line, "VmSwap: %ld kB", &vm_swap_kb);
+            }
+            fclose(f);
+        }
         long available_kb = 0;
         if (FILE* f = fopen("/proc/meminfo", "r")) {
             char line[128];
@@ -11882,11 +11895,16 @@ void Executor::profile_frame() {
                 if (sscanf(line, "MemAvailable: %ld kB", &available_kb) == 1) break;
             fclose(f);
         }
-        NVN_LOG("perfil RAM: proceso %ld MB, GPU %ld MB, disponible en el sistema %ld MB; míos: staging %llu MB, caché de vértices %llu MB, "
-                "overlays %llu MB, texturas %llu MB en bloques\n",
-                resident * 4096 / (1 << 20), kgsl_process_mb(), available_kb / 1024, (unsigned long long)(staging >> 20),
+        NVN_LOG("perfil RAM: proceso %ld MB (anon %ld, file %ld, shmem %ld, swap %ld MB), GPU %ld MB, disponible %ld MB; "
+                "míos: staging %llu MB, caché de vértices %llu MB, overlays %llu MB, texturas %llu MB en bloques, espejos %llu MB\n",
+                resident * 4096 / (1 << 20), rss_anon_kb / 1024, rss_file_kb / 1024, rss_shmem_kb / 1024, vm_swap_kb / 1024,
+                kgsl_process_mb(), available_kb / 1024, (unsigned long long)(staging >> 20),
                 (unsigned long long)(buffer_cache_.bytes() >> 20), (unsigned long long)(overlay_arena_.bytes() >> 20),
-                (unsigned long long)(block_bytes >> 20));
+                (unsigned long long)(block_bytes >> 20), (unsigned long long)(mirror_bytes_ >> 20));
+        if (low_memory()) {
+            Staging::trim_free_cache_to(0);
+            NVN_LOG("perfil RAM: memoria baja activa; caché libre de staging soltada\n");
+        }
     }
     NVN_LOG("perfil memoria: %llu texturas en la GPU (%llu MB; %zu bloques de %llu MB y %zu reservas propias), %zu vistas, "
             "%zu framebuffers, %zu overlays\n",

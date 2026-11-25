@@ -92,6 +92,14 @@ advance. On a Snapdragon 7+ Gen 2, `AMediaExtractor` found no tracks at all; an 
 **Audio cutting out.** Wwise closes and reopens its output many times; the old queue threw away audio that was already
 mixed each time. It's now one continuous queue (`audio_cola.h`).
 
+**LMK kill entering the Amatsu quest** (Mali-G615 MC2, 8 GB RAM). Android `lmkd` killed the foreground game with
+`LOW_MEMORY`/RSS ~3.8 GB before the quest loaded; tracked NVN caches were only ~1.2 GB, with most RSS in
+untracked `file/shmem` (driver/graphics/shared mappings). The fix is conservative: vertex-cache limits reduced
+(160 MB per generation / 320 MB max, 256 MB no-generations), halved again while `low_memory()` is active, old
+arenas trimmed to the effective limit on reap, free staging cache dropped to 0 in low-memory profile passes, and
+`perfil RAM` now reports `anon/file/shmem/swap` and mirror bytes. On the Amatsu retest this removed the LMK kill
+(peak ~3.96 GB RSS / ~453 MB available, settled ~3.83 GB / ~569 MB), but headroom is still tight for long hunts.
+
 ## Performance
 
 - **First-use freezes on Turnip:** every compute shader went through spirv-opt, which took 4.3 s for 4 new shaders the
