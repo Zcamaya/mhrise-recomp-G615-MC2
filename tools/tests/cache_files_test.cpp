@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Prueba en el Mac de los ficheros de caché de la capa NVN: la caché de SPIR-V (nnsdk/nvn/spirv_cache, <datos>/spirv.bin)
-// y los registros del precalentado de pipelines (nnsdk/nvn/records_file.h, <datos>/pipelines_estado.bin). Ida y vuelta,
+// Prueba en el Mac de los ficheros de caché de la capa NVN: la caché de SPIR-V (nnsdk/nvn/spirv_cache, <data>/spirv.bin)
+// y los registros del precalentado de pipelines (nnsdk/nvn/records_file.h, <data>/pipelines_estado.bin). Ida y loop,
 // final a medias, registro roto, otra cabecera / otro traductor.
 //
 //   clang++ -std=c++20 -I runtime/src -I runtime/recompiler tools/tests/cache_files_test.cpp \

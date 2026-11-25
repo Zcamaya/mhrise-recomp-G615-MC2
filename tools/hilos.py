@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resume la última instantánea de hilos de un log del runtime (<datos>/hilos o el watchdog): por hilo, pc, lr y
+"""Resume la última instantánea de hilos de un log del runtime (<data>/hilos o el watchdog): por hilo, pc, lr y
 los primeros frames de la cadena de x29, en una línea.
 
 Uso: python3 tools/hilos.py <log.txt> [filtro]

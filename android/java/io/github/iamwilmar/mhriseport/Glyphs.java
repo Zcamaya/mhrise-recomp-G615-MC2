@@ -6,7 +6,7 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 
-// Los dibujos de los controles táctiles, hechos con trazos (sin imágenes): en los colores del menú del juego, vino oscuro
+// Los dibujos de los controles táctiles, hechos con trazos (sin imágenes): en los colores del menú del game, vino oscuro
 // con borde de bronce y letras doradas; un control pulsado se llena de oro con las letras en vino. alpha (0..255) es la
 // opacidad de todo el control.
 final class Glyphs {

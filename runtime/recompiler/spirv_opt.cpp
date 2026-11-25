@@ -5,12 +5,12 @@
 // en comparaciones y variables bool de función). En el skinning de la cara del cazador (793657b4f1e65631) tomaba el caso
 // que pone los pesos a cero (1/0 → NaN y la cabeza no se dibuja); el mismo módulo pasado por spirv-opt -O en el Mac
 // (banderas a SSA y plegadas, ramas muertas fuera, un único return) sale bien, y el intérprete de SPIR-V da lo mismo bit a
-// bit que el original. Eso se hizo primero con un fichero por shader (<datos>/spirv_reemplazo); esto lo hace con todos.
+// bit que el original. Eso se hizo primero con un fichero por shader (<data>/spirv_reemplazo); esto lo hace con todos.
 //
 // La lista de pases es la de -O tal cual (Optimizer::RegisterPerformancePasses de esta versión) con dos cambios para que
 // el ejecutor no note nada: el ADCE con preserve_interface (sin él quita de la interfaz las entradas que no se leen) y
 // preserve_bindings (sin él quita los descriptores sin usar). Además, después se comprueba que la interfaz y los recursos
-// son los mismos (interface_summary) y que el resultado valida; si algo falla queda el SPIR-V de Eden, sin tocar.
+// son los mismos (interface_summary) y que el resultado valida; si algo falla queda el SPIR-V de Eden, not touching.
 
 #include <algorithm>
 #include <exception>

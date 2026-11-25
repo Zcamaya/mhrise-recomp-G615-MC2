@@ -158,13 +158,13 @@ with adb); changing that setting in the menu moves it into the ini.
 | `sync_astc` | On Mali (BC textures stored as ASTC), a big texture level that isn't in the ASTC cache yet is encoded by a background thread instead of inside the frame, and drawn from its next smaller mip until it's ready (a moment of blur instead of a freeze, the first time a monster's or effect's textures load). This switch encodes them in the frame, as before. Live. |
 | `no_robust` | On Mali, robust buffer access is on by default: a shader reading past the end of a buffer gets 0 instead of a GPU page fault (`GROUP_ERROR_FATAL` in the log), which on Mali drops the whole batch of work and leaves black or magenta screens. This turns it off (Settings → Debug → Driver workarounds). `robusto` turns it on on other GPUs. At start-up. |
 | `cutout` | Expand into the cutout (Settings → Display): the game's window also covers the strip beside the camera cutout, as Eden and Azahar can. Next start. |
-| `gpu_unswizzle` | GPU texture unswizzle (Settings → Performance, off by default): textures go to the GPU in the console's tiled order, one straight copy, and a compute shader puts them in rows there instead of the CPU, like Eden's option. Less stutter when areas and monsters load. Not for textures decoded or re-encoded on the CPU. Applies at once. |
+| `gpu_unswizzle` | GPU texture unswizzle (Settings → Performance, off by default except in the Mali-G615 MC2 profile): textures go to the GPU in the console's tiled order, one straight copy, and a compute shader puts them in rows there instead of the CPU, like Eden's option. Less stutter when areas and monsters load; may increase GPU load. Not for textures decoded or re-encoded on the CPU. Applies at once. |
 | `pipeline_threads_1`, `pipeline_threads_3`, `pipeline_threads_4` | Pipeline worker threads (Settings → Performance, 2 by default): how many background threads build pipelines, like Eden's setting. Next start. |
 | `async_present` | Asynchronous presentation (Settings → Performance, off by default): the frame is put on screen (swapchain image, frame generation, present) by a thread of its own, so NvnSubmit goes on with the next frame's command lists. At most one frame behind. Applies at once. |
 | `system_bars` | Show Android's bars (Settings → Display): keeps the status and navigation bars on screen. By default both are hidden while playing (a swipe in from the edge shows them for a moment), so three-button navigation no longer sits over the game. |
 | `touch_gpu` | Draw controls with the GPU (Settings → Display): the touch controls and the capture button drawn by the GPU through Android's RenderThread (`1`), or by the CPU (`0`). Mali's GLES driver crashed on that thread while hunting (the game itself runs on Vulkan and was fine), so without it they're drawn by the CPU on MediaTek and Exynos chips and by the GPU elsewhere. Next start. |
 | `tight_barriers` | Skip empty GPU barriers (Settings → Performance, off by default): the full barriers with nothing recorded since the previous one (about half of the ~250 a frame) are skipped; each still drained the GPU on Turnip. Live. |
-| `barrier_bits` | Lighter GPU barriers (Settings → Performance, off by default). NVN's barrier carries bits: four order work (0x1 primitives, 0x2 fragments, 0x4 fragments of the same tile, 0x8 indirect data) and four only invalidate caches (textures, shader code, texture descriptors, ZCull). With this on, a barrier that orders only fragments (0x2/0x4 without 0x1 or 0x8) waits for the fragment stages instead of everything (on Turnip, a cache flush instead of a wait for idle), with a full one before the next compute dispatch to be safe; one that orders nothing is dropped (MH Rise sends none). In a hunt about half of the ~200 a frame are fragment-only. The performance profile's `perfil barreras de NVN` line counts the game's barriers by their bits and how many went fragment-only. Live. |
+| `barrier_bits` | Skip cache-only GPU barriers (Settings → Performance, off by default). NVN's barrier carries bits: four order work (primitives, fragments, fragments of the same tile, indirect data) and four only invalidate caches (textures, shader code, texture descriptors, ZCull). A barrier with none of the ordering bits orders nothing, and those caches aren't there under Vulkan (the port's uploads and descriptor writes bring their own barriers), so it's dropped instead of becoming a full one. The performance profile's `perfil barreras de NVN` line counts the game's barriers by their bits either way. Live. |
 | `fast_textures` | Speed over accuracy (Settings → Performance → Fast textures, off by default): set 1's textures cached by where the game keeps their handles, through texture uploads; CPU-rewritten textures checked every other frame. Blood as big patches, magnified particles or a texture a frame late can come back. Live. |
 | `dynamic_state`, `vertex_input_state` | Extended dynamic state and vertex input dynamic state (Settings → Graphics → Extensions, shown only where the driver has `VK_EXT_extended_dynamic_state` / `VK_EXT_vertex_input_dynamic_state`; off by default). The first sets cull mode, front face, depth test/write/compare and the stencil test and ops per draw; the second the vertex attributes' formats and the streams' strides and step rates. Either way, far fewer pipelines to build and switch. At start-up. |
 | `no_adpf` | No Android performance hints (Android 13+: the frame's threads report their work each frame so the system raises the clocks in time). Live. |
@@ -175,6 +175,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `fast_depth` | The colour pass draws with GEQUAL instead of EQUAL against the depth pre-pass (MH Rise uses reversed Z), which keeps Adreno's LRZ early rejection on. Meshes the pre-pass drew with a pixel shader (cut-outs: grass, leaves) keep EQUAL, or they would show as whole cards. Graphics → Fast depth test. Live. |
 | `no_dynamic_shadows` | No shadows from things that move (the Renderer's DynamicShadowEnable, set through the game's own setter): the PC's Dynamic Shadows off. Graphics → Dynamic shadows. Live. |
 | `no_foliage_sway` | Grass and leaves stop swaying (SwingEnable and SwingOnShadowEnable off): the PC's Foliage Sway off. Graphics → Foliage sway. Live. |
+| `adaptive_shadows` | Graphics → Adaptive shadow quality: uses recent GPU timestamps and executor frame times to lower shadow maps from game default to half, then quarter, and finally disable shadows from moving objects when either stays over budget. Restores one step only after 90 measured frames with both under 72% of budget. Overrides manual shadow quality downward while active; no effect if GPU timestamps are unavailable. MH Rise 16.0.1 only. |
 | `effects_lower`, `effects_lowest` | Experimental. The Renderer's ReducedTransparentBuffer one or two steps above the game's 2 (up to 4): particles and other see-through effects drawn into a smaller buffer. Graphics → Effects resolution. Live. |
 | `no_ao` | Experimental. The Renderer's GeometryAOQuality at 0 (the game uses 1). Graphics → Ambient occlusion. Live. |
 | `shadow_half`, `shadow_quarter` | Shadow maps at half or a quarter of the game's own size (never below 256), through the game's own shadow setting (the PC version's shadow quality). Blurrier edges, much less GPU work. Live. MH Rise 16.0.1 only. |
@@ -196,6 +197,7 @@ with adb); changing that setting in the menu moves it into the ini.
 | `no_split_overlays` | When the game writes a GPU range that only partly overlaps one the GPU wrote before (it carves the same memory differently from frame to frame), the old one is split: the overlapping part goes into the new one and the parts outside stay as they were. Before, the old one was thrown away and its outside parts came back from the game's stale memory, and whatever was drawn from there blew up for a frame (big black triangles flashing on the Adreno 830). This goes back to throwing them away. Live. |
 | `no_warp_barriers` | On GPUs with subgroups smaller than the Switch's warp of 32 (Mali: 16), the compute shaders of a single warp get a workgroup barrier after their shared memory writes, since they count on the warp running in lockstep (without it a Mali hung while mining or attacking). This switch leaves them as before. Read when shaders are translated (start-up). |
 | `no_async_shaders` | Translates every shader where it's first used, as before, instead of translating graphics shaders missing from the cache on a background thread (meanwhile the draws that need them are skipped for a few frames). Memory and shaders → Async shaders. Live. |
+| `shader_preload` | Experimental compute-shader preloading (Memory and shaders → Preload compute shaders, off by default): after the game loads a compute shader, a low-priority worker translates it and builds its pipeline before first use. May reduce attack/effect freezes, but long sessions can grow shader and pipeline caches and increase storage I/O or memory pressure. Live. |
 | `no_gpu_occlusion`, `gpu_occlusion` | The game's GPU occlusion culling (UseGpuOcclusionCulling) off or on. By default it's off on Mali: the test's compute shaders use the Switch's 32-lane warps, which Mali's 16-lane subgroups don't match (Eden's translator only handles larger ones), and grass and trees popped in and out with ARM's driver and PanVK alike. Off, nothing is hidden for being behind something else. Graphics → GPU occlusion culling. Live. |
 | `count_check`, `no_count_check` | On by default on drivers without `VK_KHR_draw_indirect_count` (ARM's on a Dimensity 720), each GPU-counted multi-draw is still drawn up to its maximum, but the vertex shader reads the count the game's culling wrote and drops the draws past it (`nvn/count_check.h`): it reads it as the draw runs, so nothing is copied or fixed before the pass. Removes the stretched triangles of drawing them all. `no_count_check` turns it off. Graphics → Exact draw counts (Mali). |
 | `no_count_fallback` | On drivers without `VK_KHR_draw_indirect_count` (old Vulkan 1.1 ones, such as ARM's on a Dimensity 720), skips the game's GPU-counted multi-draws as before instead of drawing them all. Without the fallback the world is missing there. |
@@ -269,18 +271,24 @@ touches, what each GPU and driver needs, every fix with its cause, and the debug
 
 ## Building
 
-Requirements (macOS or Linux): Android SDK with **NDK 28.2.13676358**, build-tools 35.0.0 and platform android-33; a JDK
-(17 or newer); CMake ≥ 3.22; Python 3; git, curl and zip.
+Requirements (macOS, Linux, or Windows with Git Bash): Android SDK with **NDK 28.2.13676358**, build-tools 35.0.0 and
+platform android-33; a JDK (17 or newer); CMake ≥ 3.22; Python 3; git and curl.
 
 ```bash
 tools/setup.sh       # once: fetches the pinned third-party sources (Eden's shader recompiler, sirit, fmt, Boost…)
-tools/build_apk.sh   # builds build/mhriseport.apk
+tools/build_apk.sh   # builds with io.github.iamwilmar.mhriseport.camon50ultra
 adb install -r build/mhriseport.apk
 ```
 
+The command above uses a distinct package, so it installs alongside the official `io.github.iamwilmar.mhriseport` app
+with separate data and settings. The `tools/apk.sh` development loop uses this Camon package by default too. To build
+with the official package instead, set `PACKAGE=io.github.iamwilmar.mhriseport LABEL="MH Rise port"`. CI and release
+workflows set the official ID explicitly.
+
 `LUA_LAB=1 tools/build_apk.sh` adds the Lua runtime for mods (CMake fetches Lua, Dear ImGui, FreeType and JSON for
 Modern C++, and the build fetches libarchive-android for rar/7z archives); the CI builds and the releases are made that
-way. `tools/build_ffmpeg.sh` first gives it FFmpeg's MP4 demuxer for some of the cutscenes.
+way. The optional `tools/build_ffmpeg.sh` adds FFmpeg's MP4 demuxer fallback for cutscenes when Android's extractor
+finds no tracks; it can also be run from Git Bash on Windows.
 
 `ANDROID_HOME` selects the SDK (default `~/Library/Android/sdk`). The APK is signed with the Android debug key unless you
 pass `KEYSTORE=… KS_PASS=…`. `RELEASE=1` makes the build for players: `-O3` without debug info, unused code and duplicate
@@ -359,21 +367,21 @@ components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY
 
 ## En español
 
-Port nativo para Android de la versión de consola de **Monster Hunter Rise**. El código ARM64 del juego corre directo en la
+Port nativo para Android de la versión de consola de **Monster Hunter Rise**. El código ARM64 del game corre directo en la
 CPU y este proyecto reimplementa el SDK de la consola y la API gráfica NVN sobre Vulkan.
 
-- **Necesitas tu propia copia del juego**, versión 16.0.1, con el ExeFS y la RomFS ya extraídos en tu consola, como
+- **Necesitas tu propia copia del game**, versión 16.0.1, con el ExeFS y la RomFS ya extraídos en tu consola, como
   carpetas normales. Salen de tu propia copia: si tu consola tiene firmware modificado, sus herramientas homebrew los
   extraen. La app solo lee esas carpetas y te dice qué falta si algo no está. Este repositorio no tiene código ni
-  archivos del juego.
+  archivos del game.
 - Descarga la APK de [Releases](https://github.com/klark231/mhrise-recomp/releases/latest) e instálala. Copia esas carpetas al
-  dispositivo, abre la app, dale el permiso de archivos, elige la carpeta y pulsa *Iniciar juego*.
+  dispositivo, abre la app, dale el permiso de archivos, elige la carpeta y pulsa *Iniciar game*.
   Las partidas y la caché de shaders se guardan en esa misma carpeta.
 - Funciona en móviles en general: Adreno (driver de Qualcomm o Turnip), Mali (driver de ARM o PanVK), Xclipse y
   PowerVR. Empezó como el port de IamWilmar para la Retroid Pocket 5 y la Flip 2.
 - Los mandos se leen por posición, por USB o Bluetooth, y hay controles táctiles con editor. Deslizando un dedo desde el borde derecho de
-  la pantalla sale un panel de ajustes, con el interruptor del contador de FPS y el de volver a elegir la
-  carpeta. Con la carpeta ya elegida, la app abre el juego directamente.
+  la screen sale un panel de ajustes, con el interruptor del contador de FPS y el de volver a elegir la
+  carpeta. Con la carpeta ya elegida, la app abre el game directamente.
 - Proyecto de fans, gratis (las donaciones son opcionales y no desbloquean nada), sin relación con el fabricante de la consola ni
   con Capcom.
 

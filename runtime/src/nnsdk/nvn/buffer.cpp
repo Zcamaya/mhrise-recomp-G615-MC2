@@ -1,4 +1,4 @@
-// nvnBuffer*: una ventana (offset, tamaño) sobre un memory pool. Dirección de GPU = de CPU.
+// nvnBuffer*: una window (offset, tamaño) sobre un memory pool. Dirección de GPU = de CPU.
 
 #include <cstring>
 

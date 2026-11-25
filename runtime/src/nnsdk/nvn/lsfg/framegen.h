@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
-// Generación de frames LSFG 2x (Lossless Scaling, con la DLL del jugador) en el presentador. El juego sigue
-// presentando 30 frames reales por segundo; entre cada par se presenta uno generado y la pantalla de 60 Hz
-// muestra 60. Apagado por defecto: <datos>/lsfg lo enciende en vivo y quitarlo lo apaga.
+// Generación de frames LSFG 2x (Lossless Scaling, con la DLL del jugador) en el presentador. El game sigue
+// presentando 30 frames reales por segundo; entre cada par se presenta uno generado y la screen de 60 Hz
+// muestra 60. Apagado por defecto: <data>/lsfg lo enciende live y quitarlo lo apaga.
 
 #include <cstdint>
 
@@ -19,14 +19,14 @@ struct Window;
 namespace lsfg {
 
 // Imágenes del swapchain: 4 si hay una Lossless.dll (el generado y el real van seguidos a FIFO y el segundo
-// no debe esperar a que la pantalla suelte una), 3 si no (como siempre).
+// no debe esperar a que la screen suelte una), 3 si no (como siempre).
 uint32_t swapchain_images(const VkSurfaceCapabilitiesKHR& caps);
 
 // nvn::present, tras el ritmo de 33 ms y antes de presentar el frame real: si LSFG está encendido y listo,
-// copia la textura de la ventana, calcula el frame intermedio entre el real anterior y este y lo presenta.
+// copia la textura de la window, calcula el frame intermedio entre el real anterior y este y lo presenta.
 // El real lo presenta después window.cpp como siempre. Toma executor_mutex() y vk_queue_mutex(), en ese orden, por su cuenta.
 // Tiempo de GPU que hay que reservarle a LSFG en cada frame real (ns; 0 si está apagado): executor.cpp se lo suma al
-// tiempo de GPU que mide la resolución dinámica del juego, para que esta deje sitio al frame generado.
+// tiempo de GPU que mide la resolución dinámica del game, para que esta deje sitio al frame generado.
 int64_t reserved_ns();
 // How far apart the pictures of one real frame go on screen (a refresh, or more with a target below the refresh rate):
 // window.cpp presents the real frame this long after the last generated one.

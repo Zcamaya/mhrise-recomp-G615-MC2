@@ -1,5 +1,5 @@
 #pragma once
-// Tabla de símbolos del sistema que se enlazan directo al juego (la usa host_symbols.c, en C).
+// Tabla de símbolos del sistema que se enlazan directo al game (la usa host_symbols.c, en C).
 
 #include <stddef.h>
 

@@ -1,11 +1,11 @@
-// nn::image: decodificadores PNG y JPEG del SDK. No hay ninguno aquí y el juego no los necesita para jugar:
-// - PngDecoder: carga la imagen de copyright que la consola estampa en las capturas (main+0x6bb98ac, antes de
-//   oe::SetCopyrightImage). Analyze devuelve 1, el error que da el SDK cuando libpng no arranca; el juego trata 1 y 2
-//   como fallo, libera y sigue sin imagen de copyright.
+// nn::image: decodificadores PNG y JPEG del SDK. No hay ninguno aquí y el game no los necesita para jugar:
+// - PngDecoder: carga la image de copyright que la consola estampa en las capturas (main+0x6bb98ac, antes de
+//   oe::SetCopyrightImage). Analyze devuelve 1, el error que da el SDK cuando libpng no arranca; el game trata 1 y 2
+//   como fallo, libera y sigue sin image de copyright.
 // - JpegDecoder: crea una textura desde los bytes de un JPEG que le pasa un script (main+0x6f3ac40: imágenes de
-//   perfil o descargadas). Analyze devuelve JpegStatus_UnsupportedFormat; el juego entonces da la textura nula.
-// Los objetos son del juego (en su pila); se respeta el layout del SDK en los campos que se tocan y no se escribe
-// más allá. La vtable (offset 0) no se usa: el juego llama a los métodos directamente.
+//   perfil o descargadas). Analyze devuelve JpegStatus_UnsupportedFormat; el game entonces da la textura nula.
+// Los objetos son del game (en su pila); se respeta el layout del SDK en los campos que se tocan y no se escribe
+// más allá. La vtable (offset 0) no se usa: el game llama a los métodos directamente.
 
 #include <cstdint>
 #include <cstdio>
@@ -48,7 +48,7 @@ public:
 
 private:
     [[maybe_unused]] void* vtable_;
-    int state_;  // 0 creado, 1 con allocator, 2 con datos, 3 analizado, 4 decodificado
+    int state_;  // 0 created, 1 con allocator, 2 con datos, 3 analizado, 4 decodificado
     const void* data_;
     size_t size_;
     PixelFormat format_;
@@ -113,7 +113,7 @@ private:
 };
 static_assert(sizeof(JpegDecoder) == 0x38);
 
-// Como el SDK: denominador 1 y formato 14 (el que pide el juego) por defecto.
+// Como el SDK: denominador 1 y formato 14 (el que pide el game) por defecto.
 JpegDecoder::JpegDecoder()
     : vtable_(nullptr), state_(0), data_(nullptr), size_(0), denominator_(1), format_(static_cast<PixelFormat>(14)),
       dimension_{}, work_size_(0) {}

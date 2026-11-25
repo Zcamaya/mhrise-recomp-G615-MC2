@@ -1,7 +1,7 @@
-// nn::web: el navegador del sistema (applet). El juego lo abre desde un script (main+0x6c9de18): una página web o un
+// nn::web: el navegador del sistema (applet). El game lo abre desde un script (main+0x6c9de18): una página web o un
 // documento HTML de la propia aplicación (el manual), y le devuelve al script el Result. No hay applet: se responde con
-// el único error que el SDK devuelve en vez de abortar (módulo 210, desc 1: el applet terminó sin datos de vuelta), y
-// el valor de vuelta se queda como lo dejó su constructor.
+// el único error que el SDK devuelve en vez de abortar (módulo 210, desc 1: el applet terminó sin datos de loop), y
+// el valor de loop se queda como lo dejó su constructor.
 
 #include <cstdint>
 #include <cstdio>

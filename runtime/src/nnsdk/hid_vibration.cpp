@@ -1,14 +1,14 @@
-// nn::hid: el grafo de vibración del SDK (VibrationNode y sus derivados). El juego crea los nodos en su propia memoria,
+// nn::hid: el grafo de vibración del SDK (VibrationNode y sus derivados). El game crea los nodos en su propia memoria,
 // muchos dentro de objetos suyos (un VibrationPlayer en +0x40 y su siguiente campo en +0x110, main+0x6f8994c), y los
 // conecta con VibrationNodeConnection: reproductores de .bnvib y escritores de valores sueltos que pasan por
 // mezcladores hasta un VibrationTarget por actuador. Un hilo suyo llama a VibrationNode::Update() cada
-// DefaultVibrationSampleInterval (5 ms, main+0x6f8ba28), y desde el juego se lee de vuelta GetCurrentVibration,
+// DefaultVibrationSampleInterval (5 ms, main+0x6f8ba28), y desde el game se lee de loop GetCurrentVibration,
 // IsPlaying y GetCurrentPosition para saber cuánto queda de cada vibración. Por eso el grafo se calcula entero como en
 // el SDK; lo único que no existe es el motor: VibrationTarget no manda el valor a ningún mando.
 //
 // Las clases tienen la disposición del SDK (0x40, 0x48, 0x50, 0xd0 y 0x38 bytes, vtable con los destructores y
-// OnNextSampleRequired) porque el juego las reserva con esos tamaños. Un solo mutex recursivo guarda todo el grafo: el
-// SDK usa varios, pero aquí nada llama al juego mientras se tiene.
+// OnNextSampleRequired) porque el game las reserva con esos tamaños. Un solo mutex recursivo guarda todo el grafo: el
+// SDK usa varios, pero aquí nada llama al game mientras se tiene.
 
 #include <cmath>
 #include <cstdint>
@@ -38,7 +38,7 @@ enum VibrationMixMode : int {
     VibrationMixMode_AmplitudeSum = 3,            // suma de amplitudes, frecuencia media ponderada
 };
 
-// Cabecera de un .bnvib tal como la devuelve GetFileInfo (el juego lee sampleLength y samplingRate, main+0x6f89a34).
+// Cabecera de un .bnvib tal como la devuelve GetFileInfo (el game lee sampleLength y samplingRate, main+0x6f89a34).
 struct VibrationFileInfo {
     uint32_t meta_data_size;
     uint16_t format_id;
@@ -68,7 +68,7 @@ class VibrationNode : public detail::ListNode {
 public:
     static void Update();
     VibrationValue GetCurrentVibration() const;
-    // Por si el juego borra uno con delete a través de la vtable: la memoria es de su allocator.
+    // Por si el game borra uno con delete a través de la vtable: la memoria es de su allocator.
     HIDDEN static void operator delete(void* p) { nnsdk::host().game_delete(p); }
 
 protected:
@@ -174,7 +174,7 @@ private:
     bool playing_;
     bool loop_;
     int32_t position_;     // muestra que suena ahora
-    int32_t next_;         // la siguiente; negativa durante la pausa entre vueltas del bucle
+    int32_t next_;         // la siguiente; negativa durante la pausa entre loops del bucle
     int32_t loop_start_;
     int32_t loop_end_;
     int32_t loop_interval_;
@@ -248,7 +248,7 @@ uint32_t read32(const uint8_t* p) {
 }
 
 // El formato .bnvib igual que nn::hid::detail::ParseVibrationFile: tamaño de la metainformación (4, 12 o 16),
-// formato 3, 200 muestras por segundo, inicio y fin del bucle y pausa entre vueltas si los hay, y luego el tamaño de
+// formato 3, 200 muestras por segundo, inicio y fin del bucle y pausa entre loops si los hay, y luego el tamaño de
 // los datos y las muestras de 4 bytes.
 Result parse_vibration_file(VibrationFileInfo* info, const uint8_t** data, int32_t* count, const uint8_t* file,
                             size_t size) {
@@ -302,7 +302,7 @@ VibrationNode::VibrationNode() : detail::ListNode{this, this}, value_(kSilence),
     link_back(all_nodes(), *this);
 }
 
-// Como el SDK, solo sale de la lista global: las conexiones que lo usen son cosa del juego (las desconecta antes).
+// Como el SDK, solo sale de la lista global: las conexiones que lo usen son cosa del game (las desconecta antes).
 VibrationNode::~VibrationNode() {
     std::lock_guard lock(graph_mutex());
     if (next != this) unlink(*this);
@@ -460,7 +460,7 @@ void VibrationTarget::OnNextSampleRequired(VibrationValue* value, detail::ListNo
     if (handle_set_) VibrationMixer::OnNextSampleRequired(value, inputs);
 }
 
-// --- VibrationWriter: el valor que escribe el juego, tal cual ---
+// --- VibrationWriter: el valor que escribe el game, tal cual ---
 
 VibrationWriter::VibrationWriter() = default;
 VibrationWriter::~VibrationWriter() = default;

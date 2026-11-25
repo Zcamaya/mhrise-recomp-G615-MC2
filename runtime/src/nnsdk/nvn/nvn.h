@@ -1,9 +1,9 @@
 #pragma once
-// Infraestructura de la capa NVN: cada archivo registra sus funciones con NVN_PROC y el juego
+// Infraestructura de la capa NVN: cada archivo registra sus funciones con NVN_PROC y el game
 // las obtiene por nombre (nvnBootstrapLoader / nvnDeviceGetProcAddress).
 //
 // No hay cabeceras ni driver de referencia (el driver no viene en el volcado): los objetos NVN
-// del juego son opacos, se asocian por dirección a objetos nuestros, y los enums y tamaños se
+// del game son opacos, se asocian por dirección a objetos nuestros, y los enums y tamaños se
 // deducen del uso que hace NieR. Cada valor deducido lleva un comentario con la evidencia.
 
 #include <atomic>
@@ -24,7 +24,7 @@ struct ProcRegistrar {
     ProcRegistrar(const char* name, void* fn) { register_proc(name, fn); }
 };
 
-// Objeto del juego (por dirección) -> objeto nuestro.
+// Objeto del game (por dirección) -> objeto nuestro.
 template <typename T>
 class Objects {
 public:

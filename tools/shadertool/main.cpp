@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
     options.bindless_arrays = !getenv("SIN_BINDLESS");
     options.nonuniform_indexing = !getenv("SIN_NONUNIFORM");
     // CON_BARRERA=1: deja las barreras de grupo dentro de ifs y bucles, como program.cpp con las huellas de
-    // kUniformBarrierShaders o de <datos>/keep_barrier (para comparar y validar ese SPIR-V).
+    // kUniformBarrierShaders o de <data>/keep_barrier (para comparar y validar ese SPIR-V).
     options.keep_conditional_barriers = getenv("CON_BARRERA") != nullptr;
     // SIN_COMPARTIDA_PRIVADA=1: la memoria compartida privada de cada invocación se queda en Workgroup (como antes).
     options.shared_to_local = !getenv("SIN_COMPARTIDA_PRIVADA");
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
     if (t.shared_to_local) std::printf("memoria compartida privada de cada invocación -> local: %d accesos\n", t.shared_to_local);
     if (t.spirv_opt > 0) std::printf("spirv-opt: %u → %zu palabras, %.1f ms\n", t.spirv_opt_from, t.spirv.size(), t.spirv_opt_us / 1000.0);
     if (t.spirv_opt < 0) std::printf("spirv-opt no pudo: %s (%.1f ms)\n", t.spirv_opt_error.c_str(), t.spirv_opt_us / 1000.0);
-    static const char* kKinds[] = {"ubo", "ssbo", "texbuf", "imgbuf", "textura", "imagen"};
+    static const char* kKinds[] = {"ubo", "ssbo", "texbuf", "imgbuf", "textura", "image"};
     std::printf("%s: %s, %zu palabras de SPIR-V, entradas 0x%llx, colores 0x%x\n", argv[1],
                 nvnshader::stage_name(t.stage), t.spirv.size(), static_cast<unsigned long long>(t.input_generics),
                 t.color_outputs);
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
                         r.count > 1 || r.handle_and_mask != ~0u || r.handle_or
                             ? [&] {
                                   char b[96];
-                                  snprintf(b, sizeof b, " x%u paso %u (& 0x%x | 0x%x) tipo %u%s", r.count, 1u << r.size_shift,
+                                  snprintf(b, sizeof b, " x%u step %u (& 0x%x | 0x%x) tipo %u%s", r.count, 1u << r.size_shift,
                                            r.handle_and_mask, r.handle_or, r.texture_type, r.is_depth ? " comparación" : "");
                                   return std::string(b);
                               }().c_str()

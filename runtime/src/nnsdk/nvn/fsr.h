@@ -1,7 +1,7 @@
 #pragma once
-// Escalado de la imagen del juego a la pantalla con FSR 1 de AMD (EASU reconstruye de 1280x720 a 1920x1080, RCAS añade
+// Escalado de la image del game a la screen con FSR 1 de AMD (EASU reconstruye de 1280x720 a 1920x1080, RCAS adds
 // nitidez), en vez del blit lineal: el mismo coste que un efecto de posproceso pequeño (~1 ms) y bastante más nítido.
-// <datos>/no_fsr vuelve al blit de siempre en vivo.
+// <data>/no_fsr vuelve al blit de siempre live.
 
 #include "nnsdk/nvn/vk.h"
 
@@ -9,7 +9,7 @@ namespace nvn::fsr {
 
 void release_if_resized(VkExtent2D output);
 
-// Escala src (vista muestreable, en GENERAL, de tamaño src_extent) a dst, una imagen del swapchain en
+// Escala src (vista muestreable, en GENERAL, de tamaño src_extent) a dst, una image del swapchain en
 // TRANSFER_DST_OPTIMAL (dst_extent, formato dst_format). false si no puede (formato, recursos, push descriptors): quien
 // llama hace el blit de siempre.
 // viewport: la zona de src (desde 0,0) que se escala; src_extent, el tamaño de la textura entera.

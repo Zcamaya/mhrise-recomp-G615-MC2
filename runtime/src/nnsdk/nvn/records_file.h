@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-// Ficheros de registros de tamaño fijo con cabecera (el del precalentado de pipelines, <datos>/pipelines_estado.bin): se
-// leen enteros al arrancar y después solo se añade al final, desde otro hilo y sin fsync. Un registro a medias (el proceso
+// Ficheros de registros de tamaño fijo con cabecera (el del precalentado de pipelines, <data>/pipelines_estado.bin): se
+// leen enteros al arrancar y después solo se adds al final, desde otro hilo y sin fsync. Un registro a medias (el proceso
 // murió escribiendo) o roto acaba la lectura: se corta ahí para que lo que se añada después se pueda leer. Con otra
 // cabecera (otro formato, otro traductor) se vacía. Sin dependencias del resto de la capa: lo prueba
 // tools/tests/cache_files_test.cpp en el Mac.

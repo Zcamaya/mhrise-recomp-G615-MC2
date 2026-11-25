@@ -33,7 +33,7 @@ double elapsed() {
 
 std::atomic<uint64_t> g_watch_page{0};  // DEPURACIÓN: página vigilada por watch_writes
 
-// SIGUSR2 = instantánea del watchdog: se vuelca y el juego sigue. Una escritura vigilada también se
+// SIGUSR2 = instantánea del watchdog: se vuelca y el game sigue. Una escritura vigilada también se
 // vuelca y sigue (se desprotege la página y la instrucción se repite). El resto, crash: se vuelca y se sale.
 void on_crash(int sig, siginfo_t* info, void* ctx) {
     auto& mc = static_cast<ucontext_t*>(ctx)->uc_mcontext;

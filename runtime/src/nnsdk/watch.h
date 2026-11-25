@@ -1,11 +1,11 @@
 #pragma once
-// Vigilancia de escrituras de la CPU en la memoria del juego (el memfd del heap y sus alias en los pools virtuales de
+// Vigilancia de escrituras de la CPU en la memoria del game (el memfd del heap y sus alias en los pools virtuales de
 // NVN), para los espejos de buffers del executor (nvn/executor.cpp): en vez de revisar megas por hash en cada envío,
 // sus páginas se dejan de solo lectura y la primera escritura de cada una salta (SIGSEGV), sube su versión y la vuelve
-// a abrir. Quien copia vuelve a cerrar las páginas abiertas antes de leerlas, así ninguna escritura se pierde.
+// a abrir. Quien copia vuelve a cerrar las páginas abiertas antes de leerlas, así no escritura se pierde.
 //
 // Lo que escribe el kernel (pread, recv…) en memoria vigilada no salta: falla con EFAULT. Quien haga eso en memoria
-// del juego llama antes a before_kernel_write. <datos>/no_write_watch lo apaga (los espejos vuelven al hash).
+// del game llama antes a before_kernel_write. <data>/no_write_watch lo apaga (los espejos vuelven al hash).
 
 #include <cstddef>
 #include <cstdint>

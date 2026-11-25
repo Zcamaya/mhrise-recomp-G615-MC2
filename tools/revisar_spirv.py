@@ -2,8 +2,8 @@
 """Revisa los shaders traducidos contra lo que admite una GPU, sin la GPU: para saber qué puede fallar en una Mali (los
 MediaTek, los Exynos) o en el driver propio de Qualcomm antes de tener el teléfono en la mano.
 
-Lee la caché de SPIR-V del juego (<datos>/spirv.bin, la del teléfono que da problemas: sus traducciones llevan las
-opciones de su GPU), la carpeta <datos>/pipelines_fallidas o ficheros .spv sueltos, y por cada shader dice lo que usa
+Lee la caché de SPIR-V del game (<data>/spirv.bin, la del teléfono que da problemas: sus translations llevan las
+opciones de su GPU), la carpeta <data>/pipelines_fallidas o ficheros .spv sueltos, y por cada shader dice lo que usa
 de lo que suele romper:
   - operaciones de subgrupo (votos, ballot, shuffle), con el tamaño de subgrupo de la GPU por debajo del warp de 32
   - escrituras o atómicos en buffers desde vertex / geometry (la Mali-G615 no tiene vertexPipelineStoresAndAtomics)

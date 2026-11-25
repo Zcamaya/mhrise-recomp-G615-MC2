@@ -61,12 +61,12 @@ TextureLayout compute_layout(uint32_t width, uint32_t height, uint32_t depth, ui
     }
 
     // 3D: como mucho 16 GOBs por bloque, primero en profundidad. Medido en un LUT de color de MH Rise de 32x32x32
-    // RGBA8: 1 GOB de alto y 16 de fondo (con 4x32, los cortes se mezclaban y la imagen salía psicodélica).
+    // RGBA8: 1 GOB de alto y 16 de fondo (con 4x32, los cortes se mezclaban y la image salía psicodélica).
     uint32_t base_bd = is_3d ? std::min<uint32_t>(16, pow2_ceil(depth)) : 1;
     // Texturas empaquetadas (las sparse del streaming de MH Rise traen "03 04 00 00 07 00 01 00"): bloque de 8 GOBs de
     // alto y pitch alineado a 16 GOBs, o sea tiles de 16x8 GOBs = 64 KB, la página sparse. Con el alto calculado (16 en
     // 1024x1024) los niveles 0 y 1 salían revueltos (bandas repetidas y columnas de GOBs cambiadas): las manchas negras
-    // y los parches de las caras al acercarse. Medido sobre la memoria del juego: con 8 GOBs la cara de Hinoa (BC1), su
+    // y los parches de las caras al acercarse. Medido sobre la memoria del game: con 8 GOBs la cara de Hinoa (BC1), su
     // mapa de normales (BC7) y las pestañas (BC4) salen limpias; el kimono en ASTC 6x6 necesita además el pitch de 48
     // GOBs en el nivel 0 (43 usados + 5 de relleno, se ve en las páginas a cero) y de 32 en el 1.
     const uint32_t height_blocks = div_ceil(height, block_h);
@@ -127,7 +127,7 @@ struct Swizzle {
         return size_t{z / bd} * slice_size + size_t{y / (kGobHeight * bh)} * block_row_size +
                (size_t{z % bd} * bh + (y / kGobHeight) % bh) * kGobSize + (in_y / 2) * 64 + (in_y % 2) * 16;
     }
-    // Lo que añade el byte x (múltiplo de 16) a su fila: su GOB en x y su sector (fórmula de la Tegra para in_x).
+    // Lo que adds el byte x (múltiplo de 16) a su fila: su GOB en x y su sector (fórmula de la Tegra para in_x).
     size_t column(uint32_t x) const {
         const uint32_t in_x = x % kGobWidth;
         return size_t{x / kGobWidth} * block_size + (in_x / 32) * 256 + ((in_x % 32) / 16) * 32;
@@ -224,7 +224,7 @@ size_t count_zero_chunks(const uint8_t* p, size_t size) {
 }
 
 // Por GOBs enteros: cada fila de 64 bytes de un GOB son sus 4 sectores de 16 en +0, +32, +256 y +288 (column() con
-// in_x = 0, 16, 32, 48), cuatro copias fijas de 16 bytes; solo la cola de la fila (menos de un GOB) va trozo a trozo.
+// in_x = 0, 16, 32, 48), cuatro copias fixeds de 16 bytes; solo la cola de la fila (menos de un GOB) va trozo a trozo.
 // Antes cada trozo de 16 bytes era un memcpy de tamaño variable (una llamada) con su column(): al cargar el selector de
 // personaje se subían 47 MB de texturas en un envío (3 millones de llamadas).
 void deswizzle_level(const LevelLayout& level, uint32_t bpb, const uint8_t* src, uint8_t* dst, size_t* zero_chunks) {

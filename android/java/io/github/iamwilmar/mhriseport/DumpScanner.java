@@ -15,8 +15,8 @@ import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-// Busca en una carpeta los archivos del juego que el usuario extrajo de su propia consola: el ExeFS y la RomFS del juego
-// con la actualización aplicada y, si el juego los tiene, la RomFS de cada DLC; y comprueba que son de este juego y de la
+// Busca en una carpeta los archivos del game que el usuario extrajo de su propia consola: el ExeFS y la RomFS del game
+// con la actualización aplicada y, si el game los tiene, la RomFS de cada DLC; y comprueba que son de este game y de la
 // versión del port. No descifra nada ni abre NSP/XCI/NCA: solo lee carpetas con archivos ya extraídos. Lo que encuentra
 // va a <carpeta>/rutas.txt, que lee el runtime (rutas.h). Sin nada de Android, para probarlo en un PC:
 // java ... DumpScanner <carpeta>.
@@ -39,7 +39,7 @@ final class DumpScanner {
         String exefs, romfs;
         final TreeMap<Integer, String> dlc = new TreeMap<>();  // índice del DLC -> su RomFS
         Problem exefsProblem, romfsProblem;  // por qué no vale lo que se encontró (null: no había nada)
-        int unknownDlc;  // RomFS de DLC sin su id de título en el nombre de ninguna carpeta
+        int unknownDlc;  // RomFS de DLC sin su id de título en el nombre de no carpeta
 
         boolean ready() {
             return exefs != null && romfs != null;
@@ -67,7 +67,7 @@ final class DumpScanner {
         return names.contains(marker.substring(0, slash)) && new File(dir, marker).isFile();
     }
 
-    // tid: el id de título del nombre de esta carpeta o de la más cercana de encima que tenga uno (-1: ninguna).
+    // tid: el id de título del nombre de esta carpeta o de la más cercana de encima que tenga uno (-1: no).
     private void visit(File dir, int depth, long tid) {
         if (depth > MAX_DEPTH || ++visited > MAX_DIRS) return;
         String[] names = dir.list();
@@ -129,7 +129,7 @@ final class DumpScanner {
         }
     }
 
-    // El índice del DLC es su id menos el del juego con 0x1000 sumado (aoc.cpp). Sin id en el nombre vale también una
+    // El índice del DLC es su id menos el del game con 0x1000 sumado (aoc.cpp). Sin id en el nombre vale también una
     // carpeta aoc/<índice>.
     private void addDlc(File dir, long tid) {
         long index = tid >= 0 ? tid - Game.APP_ID - 0x1000 : -1;

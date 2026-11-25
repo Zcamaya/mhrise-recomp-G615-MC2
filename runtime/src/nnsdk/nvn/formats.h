@@ -1,7 +1,7 @@
 #pragma once
 // NVNformat -> VkFormat y bytes por bloque. El orden del enum es el de NVN (estilo OpenGL);
-// lo confirman los dos formatos que NieR registra para borrado rápido: 0x25 (RGBA8, el de
-// la ventana de 1280x720) y 0x3f (R11G11B10F, el del buffer HDR).
+// lo confirman los dos formatos que NieR registra para clear rápido: 0x25 (RGBA8, el de
+// la window de 1280x720) y 0x3f (R11G11B10F, el del buffer HDR).
 
 #include <cstdint>
 

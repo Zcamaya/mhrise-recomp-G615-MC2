@@ -1,13 +1,13 @@
 // nn::bcat: la caché de entregas (BCAT), por donde Capcom manda las misiones de evento y las noticias.
 // Responde como una consola sin conexión que nunca llegó a descargar nada: el almacenamiento se monta y
-// está vacío (EnumerateDeliveryCacheDirectory da 0 carpetas: el juego se salta el bucle, main+0x6c17780),
+// está vacío (EnumerateDeliveryCacheDirectory da 0 carpetas: el game se salta el bucle, main+0x6c17780),
 // abrir cualquier archivo o carpeta da "no existe", y sincronizar falla antes de empezar con el error
 // que da el SDK cuando nifm no tiene internet.
 //
-// Los objetos los reserva el juego. DeliveryCacheFile/Directory son en el SDK un puntero al objeto IPC
+// Los objetos los reserva el game. DeliveryCacheFile/Directory son en el SDK un puntero al objeto IPC
 // (nulo = cerrado): aquí se quedan siempre en nulo y responden como cerrados. DeliveryCacheProgress
 // (0x258 bytes) guarda en +0x58 el estado que lee GetStatus y detrás el resto del progreso: se mantiene
-// ese layout para que el juego vea lo mismo por los accesores o leyendo el objeto.
+// ese layout para que el game vea lo mismo por los accesores o leyendo el objeto.
 
 #include <atomic>
 #include <cstdint>
@@ -30,7 +30,7 @@ enum DeliveryCacheProgressStatus {
 namespace {
 
 // Módulo bcat (122), con los mismos códigos que pone el SDK en el lado del cliente: 1 nombre no válido,
-// 4 ya montado, 5 sin montar, 6 ya abierto, 7 sin abrir, 8 ninguna petición de internet aceptada.
+// 4 ya montado, 5 sin montar, 6 ya abierto, 7 sin abrir, 8 no petición de internet aceptada.
 // 2 es el "no existe" del servicio.
 constexpr Result kResultInvalidArgument{122 | (1 << 9)};
 constexpr Result kResultNotFound{122 | (2 << 9)};
@@ -105,8 +105,8 @@ Result EnumerateDeliveryCacheDirectory(int* count, DirectoryName*, int) {
     return ResultSuccess;
 }
 
-// El SDK mira nifm antes de pedir nada y devuelve 8 sin tocar el progreso. Aquí además el progreso
-// queda terminado con ese error, por si el juego lo consultara igualmente: nunca se queda esperando.
+// El SDK mira nifm antes de pedir nada y devuelve 8 not touching el progreso. Aquí además el progreso
+// queda terminado con ese error, por si el game lo consultara igualmente: nunca se queda esperando.
 Result RequestSyncDeliveryCache(DeliveryCacheProgress* progress) {
     progress->status_ = DeliveryCacheProgressStatus_Done;
     progress->result_ = kResultInternetRequestNotAccepted.value;
@@ -138,7 +138,7 @@ Result DeliveryCacheFile::Read(size_t* read, int64_t, void*, size_t) {
     return kResultNotOpen;
 }
 
-// El SDK aborta si no está abierto; el juego solo la llama tras abrir con éxito (main+0x6c3eb1c).
+// El SDK aborta si no está abierto; el game solo la llama tras abrir con éxito (main+0x6c3eb1c).
 int64_t DeliveryCacheFile::GetSize() { return 0; }
 
 void DeliveryCacheFile::Close() { handle_ = nullptr; }

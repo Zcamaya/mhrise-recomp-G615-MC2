@@ -3,12 +3,12 @@
 // en otro hilo distinto del que la empezó, así que el contexto vive en la fibra y el estado por hilo (fibra actual,
 // fibra que representa al hilo) en thread_local.
 //
-// Layout del FiberType del SDK 11.4 (InitializeFiber, SwitchToFiber), que se respeta porque es memoria del juego:
+// Layout del FiberType del SDK 11.4 (InitializeFiber, SwitchToFiber), que se respeta porque es memoria del game:
 //   +0x20 u8 estado (0 sin inicializar, 1 lista, 2 corriendo, 4 terminada)   +0x21 u8 pila con alias
 //   +0x28 función   +0x30 argumento   +0x38 pila original   +0x40 pila   +0x48 tamaño   +0x50 sp guardado
 // Igual que FiberImplByHorizon, el contexto (registros que conserva la llamada) se guarda en la propia pila de la
 // fibra y en +0x50 solo queda el sp. La pila no se reubica con guarda (el SDK lo hace si no se pide
-// FiberFlag_NoStackGuard): se usa la del juego tal cual.
+// FiberFlag_NoStackGuard): se usa la del game tal cual.
 
 #include <pthread.h>
 
@@ -146,7 +146,7 @@ FiberType* GetCurrentFiber() { return fibers().current; }
 
 [[clang::no_stack_protector]] void SwitchToFiber(FiberType* target) {
     ThreadFibers& tf = fibers();
-    if (!target) target = tf.thread_fiber;  // nullptr: de vuelta al hilo
+    if (!target) target = tf.thread_fiber;  // nullptr: de loop al hilo
     if (!target || state_of(target) != Ready) fatal("SwitchToFiber a una fibra que no está lista", target);
     if (FiberType* current = tf.current) {
         state_of(current) = Ready;
@@ -171,7 +171,7 @@ FiberType* GetCurrentFiber() { return fibers().current; }
 }
 
 // La pila en la que se está: la de la fibra si corre una, si no la del hilo (la que reservó bionic para un hilo de
-// nn::os, de su mismo tamaño). El juego la apunta al empezar cada worker.
+// nn::os, de su mismo tamaño). El game la apunta al empezar cada worker.
 void GetCurrentStackInfo(uintptr_t* out_stack, size_t* out_size) {
     uintptr_t stack = 0;
     size_t size = 0;

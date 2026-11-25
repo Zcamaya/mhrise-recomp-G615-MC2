@@ -1,5 +1,5 @@
 // Las primitivas de nn::os que el SDK implementa dentro de la memoria del propio objeto, sin tabla aparte: el
-// juego las declara con inicializadores constexpr (todo a 0 ya es válido), las crea a millares y nunca las
+// game las declara con inicializadores constexpr (todo a 0 ya es válido), las crea a millares y nunca las
 // finaliza (SdkMutex no tiene Finalize). Se respeta el layout del SDK 11.4 y el estado vive en el objeto:
 //   SdkMutexType           u32 cs                       (InternalCriticalSection)
 //   SdkRecursiveMutexType  u32 cs; u32 count

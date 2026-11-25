@@ -18,12 +18,12 @@ namespace {
 
 struct Stub {
     std::string pretty;
-    uint64_t ret = 0;  // lo que devuelve al juego
+    uint64_t ret = 0;  // lo que devuelve al game
     std::atomic<uint64_t> calls{0};
 };
 
 // Cada stub es un thunk de 24 bytes que carga su índice en x17 y salta a nier_stub_dispatch.
-// Se generan todos al arrancar: crear un stub luego solo le pone nombre, sin tocar código.
+// Se generan todos al arrancar: crear un stub luego solo le pone nombre, not touching código.
 constexpr size_t kThunkSize = 24, kMaxThunks = 8192;
 constexpr uint32_t kRing = 64;
 constexpr uint64_t kLoggedCalls = 3;

@@ -1,8 +1,8 @@
-// nn::fs sobre carpetas de la Flip. Cada punto de montaje del juego ("rom:", "save:"…) se
+// nn::fs sobre carpetas de la Flip. Cada punto de montaje del game ("rom:", "save:"…) se
 // traduce a una carpeta bajo NIER_DATA (por defecto /sdcard/NieR):
-//   rom:   -> romfs/      (RomFS del juego con el update aplicado; solo lectura)
+//   rom:   -> romfs/      (RomFS del game con el update aplicado; solo lectura)
 //   aoc:   -> aoc/<n>/    (DLC; solo lectura)
-// salvo que <datos>/rutas.txt diga otra cosa para rom: y aoc: (rutas.h).
+// salvo que <data>/rutas.txt diga otra cosa para rom: y aoc: (rutas.h).
 //   save:  -> save/       (partidas)
 //   cache: -> cache/      (cache storage de la aplicación)
 //
@@ -63,7 +63,7 @@ struct DirectoryEntry {
 struct WriteOption {
     int flags;
 };
-// El juego monta rom: con un FsContext propio (main+0x236eb88) para recibir el error en vez de abortar: un
+// El game monta rom: con un FsContext propio (main+0x236eb88) para recibir el error en vez de abortar: un
 // puntero a su función de decisión. Aquí ningún error aborta; solo se guarda cuál está puesto en cada hilo.
 struct FsContext {
     void* handler;
@@ -135,7 +135,7 @@ void mount(const char* name, const std::string& dir, bool read_only = false, boo
     printf("[fs] %s: -> %s%s\n", name, dir.c_str(), read_only ? " (solo lectura)" : "");
 }
 
-// Mods, as LayeredFS does on a Switch: <datos>/mods/<any name>/romfs/... holds files that take the place of the game's
+// Mods, as LayeredFS does on a Switch: <data>/mods/<any name>/romfs/... holds files that take the place of the game's
 // (or are added to it: the game's patch paks, re_chunk_000.pak.patch_00N.pak, are found by name). Several mods: the
 // first by folder name wins for a file both have. A folder whose name starts with '.' or '#' is switched off. Read
 // once, when rom: is first used: added or switched mods count from the next start.
@@ -189,8 +189,8 @@ std::string host_path(const char* path, Mount* out = nullptr) {
 
 std::string backup_dir() { return data_dir() + "/save.bak"; }
 
-// Copia a save.bak/ la versión confirmada de un archivo de la partida antes de que el juego lo cambie (abrirlo
-// para escribir o borrarlo; RenameFile no pisa destinos). Una vez por archivo y ciclo de commit. Si el juego se cerró
+// Copia a save.bak/ la versión confirmada de un archivo de la partida antes de que el game lo cambie (abrirlo
+// para escribir o borrarlo; RenameFile no pisa destinos). Una vez por archivo y ciclo de commit. Si el game se cerró
 // a mitad de un ciclo (queda la marca .pendiente), las copias que ya hay son las buenas: no se pisan con el
 // archivo quizá a medias. La copia se escribe aparte y se renombra: nunca queda una copia a medias.
 void backup(const Mount& m, const std::string& host) {
@@ -276,7 +276,7 @@ bool IsSaveDataExisting(const account::Uid&) {
     struct stat st;
     return stat((data_dir() + "/save").c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
-// MH Rise busca también las partidas de otros juegos suyos (bonificaciones): aquí no hay ninguna.
+// MH Rise busca también las partidas de otros games suyos (bonificaciones): aquí no hay no.
 bool IsSaveDataExisting(ApplicationId app, const account::Uid& uid) {
     return app.value == kProgramId && IsSaveDataExisting(uid);
 }
@@ -291,7 +291,7 @@ Result MountSaveDataReadOnly(const char* name, ApplicationId app, const account:
     return ResultSuccess;
 }
 
-// El tamaño de la partida solo crece (el juego lo amplía si lo que va a escribir no cabe: main+0x796a454).
+// El tamaño de la partida solo crece (el game lo amplía si lo que va a escribir no cabe: main+0x796a454).
 Result GetSaveDataSize(int64_t* size, int64_t* journal, const account::Uid&) {
     std::lock_guard lock(g_save_m);
     *size = g_save_size;
@@ -307,7 +307,7 @@ Result ExtendSaveData(const account::Uid&, int64_t size, int64_t journal) {
     return ResultSuccess;
 }
 
-// El espacio libre real de la tarjeta; en la partida, como mucho su tamaño (el juego calcula lo ocupado como
+// El espacio libre real de la tarjeta; en la partida, como mucho su tamaño (el game calcula lo ocupado como
 // tamaño - libre).
 Result GetFreeSpaceSize(int64_t* out, const char* path) {
     Mount m;
@@ -381,7 +381,7 @@ Result ReadFile(size_t* out, FileHandle h, int64_t offset, void* buffer, size_t 
         done += n;
     }
     if (out) *out = done;
-    // DEPURACIÓN: <datos>/fs_trace registra las primeras lecturas (ruta, offset, tamaño, leído y un hash del
+    // DEPURACIÓN: <data>/fs_trace registra las primeras lecturas (ruta, offset, tamaño, leído y un hash del
     // contenido) para compararlas con el archivo de verdad en el Mac.
     static std::atomic<int> traced{0};
     if (NVN_FLAG("fs_trace") && traced++ < 3000) {
@@ -471,7 +471,7 @@ Result CreateDirectory(const char* path) {
     if (p.empty()) return kPathNotFound;
     return mkdir(p.c_str(), 0775) == 0 ? ResultSuccess : from_errno();
 }
-// Solo una carpeta vacía, como en la consola (lo recursivo es otra función, que el juego no usa).
+// Solo una carpeta vacía, como en la consola (lo recursivo es otra función, que el game no usa).
 Result DeleteDirectory(const char* path) {
     Mount m;
     std::string p = host_path(path, &m);
@@ -521,7 +521,7 @@ Result ReadDirectory(int64_t* out, DirectoryEntry* entries, DirectoryHandle h, i
 
 namespace nnsdk {
 
-// Para libc_file.cpp: la libc del juego también abre rutas "montaje:/..." (librerías de terceros).
+// Para libc_file.cpp: la libc del game también abre rutas "montaje:/..." (librerías de terceros).
 std::string fs_host_path(const char* path) { return host_path(path); }
 
 }  // namespace nnsdk

@@ -1,8 +1,8 @@
-// nn::err: los applets de error del sistema. Aquí no hay pantalla del sistema que los enseñe: el error va al
+// nn::err: los applets de error del sistema. Aquí no hay screen del sistema que los enseñe: el error va al
 // log y se vuelve como si el usuario hubiera cerrado el applet. Sin red, los que llegan son casi siempre de
-// servicios en línea que no existen (el juego sigue en modo sin conexión).
+// servicios en línea que no existen (el game sigue en modo sin conexión).
 //
-// ErrorResultVariant es del juego (el sdk lo deja casi todo en línea): +0 el estado y en +4 el Result o el
+// ErrorResultVariant es del game (el sdk lo deja casi todo en línea): +0 el estado y en +4 el Result o el
 // ErrorCode de 8 bytes, sin alinear (sdk+0x15cef0).
 
 #include <cstdint>

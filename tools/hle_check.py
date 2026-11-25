@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Compila un .cpp de runtime/src/nnsdk con las mismas opciones que libnnsdk y comprueba qué imports del juego da.
+"""Compila un .cpp de runtime/src/nnsdk con las mismas opciones que libnnsdk y comprueba qué imports del game da.
 
 Uso: python3 tools/hle_check.py runtime/src/nnsdk/<archivo>.cpp [más .cpp]
 
 Por cada archivo: errores de compilación, cuántos nombres de work/analysis/missing.tsv define (con el mangling exacto
-que pide el juego) y los símbolos nn::/C que exporta sin estar en la lista: casi siempre un tipo de parámetro mal
-declarado (el juego no los encontraría). Necesita build/android/compile_commands.json (tools/apk.sh o cmake lo
+que pide el game) y los símbolos nn::/C que exporta sin estar en la lista: casi siempre un tipo de parámetro mal
+declarado (el game no los encontraría). Necesita build/android/compile_commands.json (tools/apk.sh o cmake lo
 generan con -DCMAKE_EXPORT_COMPILE_COMMANDS=ON).
 """
 from __future__ import annotations

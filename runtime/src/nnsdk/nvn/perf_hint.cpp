@@ -1,4 +1,4 @@
-// Pistas de rendimiento de Android (ADPF, Android 13 en adelante): los hilos críticos (el principal del juego, MainDraw y
+// Pistas de rendimiento de Android (ADPF, Android 13 en adelante): los hilos críticos (el principal del game, MainDraw y
 // NvnSubmit, los de os.cpp) van en una sesión cuyo objetivo es lo que dura un frame (window.cpp, frame_period_ns), y en cada frame
 // se le dice cuánto trabajó el más cargado. Así el sistema sube los relojes (y elige núcleos) para llegar al frame,
 // en vez de bajarlos en cada espera del frame y subirlos tarde, que era lo que hacía el ritmo irregular en teléfonos
@@ -7,7 +7,7 @@
 // tres contaría dos veces lo que se solapa, el más cargado es el que marca el ritmo.
 // Las funciones se buscan en libandroid.so al arrancar (la app empieza en Android 9: sin ellas, nada). La sesión se crea
 // en un hilo aparte (son llamadas al sistema por binder; el frame solo informa, y eso el sistema lo agrupa).
-// <datos>/no_adpf (en vivo): no se informa (el sistema vuelve solo a lo suyo).
+// <data>/no_adpf (live): no se informa (el sistema vuelve solo a lo suyo).
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -107,7 +107,7 @@ void perf_hint_frame(int64_t period_ns) {
     APerformanceHintSession* s = g_session.load();
 
     // Los hilos: la sesión se crea con los que haya; si cambian, se rehace (sin setThreads, Android 13, se queda con los
-    // primeros: los tres críticos viven todo el juego)
+    // primeros: los tres críticos viven todo el game)
     if (!tids.empty() && tids != g_in_session && !g_busy.load() && (!s || a.set_threads)) {
         static int tries = 0;
         if (s || tries++ < 3) {
@@ -142,9 +142,9 @@ void perf_hint_frame(int64_t period_ns) {
 namespace {
 struct AThermalManager;
 std::atomic<float> g_headroom{-1.0f};
-}  // namespace
+std::atomic<uint64_t> g_headroom_serial{0};
 
-float thermal_headroom() {
+void start_thermal_headroom() {
     static const bool started = [] {
         std::thread([] {
             pthread_setname_np(pthread_self(), "Thermal");
@@ -157,7 +157,10 @@ float thermal_headroom() {
             if (!m) return;
             for (;;) {
                 const float h = headroom(m, 0);  // (now, not a forecast: forecasts are less accurate)
-                if (h == h) g_headroom.store(h, std::memory_order_relaxed);  // (NaN: too soon, or not on this phone)
+                if (h == h) {
+                    g_headroom.store(h, std::memory_order_relaxed);  // (NaN: too soon, or not on this phone)
+                    g_headroom_serial.fetch_add(1, std::memory_order_release);
+                }
                 timespec ts{11, 0};
                 nanosleep(&ts, nullptr);
             }
@@ -165,7 +168,22 @@ float thermal_headroom() {
         return true;
     }();
     (void)started;
+}
+
+}  // namespace
+
+float thermal_headroom() {
+    start_thermal_headroom();
     return g_headroom.load(std::memory_order_relaxed);
+}
+
+bool new_thermal_headroom(uint64_t& serial, float& value) {
+    start_thermal_headroom();
+    const uint64_t current = g_headroom_serial.load(std::memory_order_acquire);
+    if (current == 0 || current == serial) return false;
+    value = g_headroom.load(std::memory_order_relaxed);
+    serial = current;
+    return true;
 }
 
 }  // namespace nvn

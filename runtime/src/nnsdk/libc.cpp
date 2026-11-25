@@ -58,12 +58,12 @@ extern "C" int __nnmusl_init_dso(uint64_t, uint64_t, uint64_t tdata, uint64_t td
 extern "C" int* __errno_location() { return &errno; }
 
 extern "C" [[noreturn]] void __assert_fail(const char* expr, const char* file, int line, const char* func) {
-    fprintf(stdout, "assert del juego: %s (%s:%d, %s)\n", expr, file, line, func);
+    fprintf(stdout, "assert del game: %s (%s:%d, %s)\n", expr, file, line, func);
     fflush(stdout);
     abort();
 }
 
-// El juego libera con su propio free: hay que reservar con su malloc.
+// El game libera con su propio free: hay que reservar con su malloc.
 extern "C" char* nngame_strdup(const char* s) {
     size_t n = strlen(s) + 1;
     auto* p = static_cast<char*>(g_host.game_malloc(n));
@@ -129,7 +129,7 @@ extern "C" int nngame_iswspace(wint_t wc) {
 }
 
 // La musl de Nintendo numera los sockets que crea ella como 0x0303xxxx (xxxx = descriptor de nn::socket) y aquí
-// los traduce. El juego no crea ninguno así (no importa socket()): los de nn::socket ya son nativos y pasan.
+// los traduce. El game no crea ninguno así (no importa socket()): los de nn::socket ya son nativos y pasan.
 extern "C" int _nnmusl_socket_TranslateNnmuslFileDescriptorOrPassThrough(int fd) {
     if (fd < 0) return errno = EBADF, -1;
     return fd;

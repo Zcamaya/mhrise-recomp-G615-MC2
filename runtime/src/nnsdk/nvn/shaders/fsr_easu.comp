@@ -1,5 +1,5 @@
 #version 450
-// FSR 1 EASU (AMD FidelityFX, MIT): reconstruye la imagen del juego (1280x720) a la del swapchain (1920x1080).
+// FSR 1 EASU (AMD FidelityFX, MIT): reconstruye la image del game (1280x720) a la del swapchain (1920x1080).
 #extension GL_GOOGLE_include_directive : enable
 layout(local_size_x = 64) in;
 layout(push_constant) uniform Const { uvec4 con0, con1, con2, con3; };

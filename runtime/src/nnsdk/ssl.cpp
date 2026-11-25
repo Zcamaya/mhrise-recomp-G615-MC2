@@ -1,11 +1,11 @@
-// nn::ssl (y su API en C, nnssl*): sin red no hay con quién negociar. Contextos y conexiones se crean (el juego,
+// nn::ssl (y su API en C, nnssl*): sin red no hay con quién negociar. Contextos y conexiones se crean (el game,
 // libcurl y su librería de red los preparan antes de conectar) y la conexión se queda con el socket que le dan,
 // pero el handshake falla con ResultConnectionReset, igual que Read/Write/Peek/Poll. Nunca WouldBlock (204) ni
-// Timeout (205): con esos el juego hace Poll y vuelve a intentarlo.
+// Timeout (205): con esos el game hace Poll y vuelve a intentarlo.
 //
-// Los objetos son del juego y tienen el tamaño del SDK (Context 8 bytes, Connection 0x30); el estado va dentro
-// con la disposición del SDK: un id (0 = sin crear), el contexto, el socket en +0x10 (Destroy lo cierra: tras
-// SetSocketDescriptor el juego deja de ser su dueño y pone su copia a -1) y el último error en +0x2c.
+// Los objetos son del game y tienen el tamaño del SDK (Context 8 bytes, Connection 0x30); el estado va dentro
+// con la disposición del SDK: un id (0 = not created), el contexto, el socket en +0x10 (Destroy lo cierra: tras
+// SetSocketDescriptor el game deja de ser su dueño y pone su copia a -1) y el último error en +0x2c.
 
 #include <atomic>
 #include <cstdint>
@@ -264,7 +264,7 @@ Result Connection::GetConnectionId(unsigned long* id) {
     return ResultSuccess;
 }
 
-// No hay certificados de la consola. Quien los pide (el almacén de CAs de la librería TLS que lleva el juego)
+// No hay certificados de la consola. Quien los pide (el almacén de CAs de la librería TLS que lleva el game)
 // registra el fallo de cada uno y sigue sin ellos; tampoco le harían falta sin red.
 Result BuiltInManager::GetBuiltInCertificateBufSize(unsigned int* size, CaCertificateId* ids, unsigned int) {
     if (!size || !ids) return kResultInvalidPointer;
@@ -284,7 +284,7 @@ Result BuiltInManager::GetBuiltInCertificates(BuiltInCertificateInfo** out, unsi
 using namespace nn;
 using namespace nn::ssl;
 
-// La API en C: los mismos objetos (el juego reserva Context y Connection, Create/Destroy los construyen y
+// La API en C: los mismos objetos (el game reserva Context y Connection, Create/Destroy los construyen y
 // destruyen en su sitio). Un puntero nulo da ResultInvalidPointer.
 extern "C" {
 

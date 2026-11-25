@@ -1,4 +1,4 @@
-// nvnDevice*: el NVNdevice del juego es la puerta al contexto Vulkan (vk.cpp).
+// nvnDevice*: el NVNdevice del game es la puerta al contexto Vulkan (vk.cpp).
 
 #include <chrono>
 #include <cstring>
@@ -8,7 +8,7 @@
 
 namespace {
 
-// NVNdeviceBuilder: opaco y reservado por el juego; solo usamos sus primeros bytes.
+// NVNdeviceBuilder: opaco y reservado por el game; solo usamos sus primeros bytes.
 struct DeviceBuilder {
     int flags;
 };
@@ -32,7 +32,7 @@ int device_info(int id) {
         case 0x11: return 256;      // descriptores de textura reservados al principio del pool
         case 0x12: return 256;      // descriptores de sampler reservados
         case 0x14: return 4096;     // alineación con la que redondea un bloque de 512 KB (main+0x9c5c94)
-        case 0x38: return 32;       // stride mínimo de texturas lineales: el juego usa max(ancho·bpp, esto) (main+0x9c6014)
+        case 0x38: return 32;       // stride mínimo de texturas lineales: el game usa max(ancho·bpp, esto) (main+0x9c6014)
         case 0x4e: return 1024;     // relleno detrás del código de shaders
         default: return 0;          // 0x0d 0x13 0x19 0x1a 0x24 0x25 0x52 0x56: los guarda y no los usa
     }
@@ -79,7 +79,7 @@ int nvnDeviceGetWindowOriginMode(const void*) { return g_window_origin_mode; }
 int nvnDeviceGetDepthMode(const void*) { return g_depth_mode; }
 int nvnDeviceBuilderGetFlags(const DeviceBuilder* b) { return b->flags; }
 
-// Los colores de borrado rápido son una optimización del hardware de la Switch: en Vulkan no aplican.
+// Los colores de clear rápido son una optimización del hardware de la Switch: en Vulkan no aplican.
 nvn::Boolean nvnDeviceRegisterFastClearColor(void*, const float*, int) { return 1; }
 nvn::Boolean nvnDeviceRegisterFastClearColori(void*, const int*, int) { return 1; }
 nvn::Boolean nvnDeviceRegisterFastClearColorui(void*, const uint32_t*, int) { return 1; }

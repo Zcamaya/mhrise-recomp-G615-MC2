@@ -108,9 +108,15 @@ mixed each time. It's now one continuous queue (`audio_cola.h`).
   The warm-up starts with the pipelines the last session used (`pipelines_recent.bin`), and any pipeline already
   recorded is made right away in NvnSubmit (up to 8 ms a frame) instead of skipping its draws while a background
   thread builds it: no more objects blinking in after loading a save. From IamWilmar's upstream v1.5.0.
+  The experimental `shader_preload` option also translates newly loaded compute shaders and prebuilds their pipelines
+  on a low-priority worker; a short Mali-G615 MC2 test reduced first-use attack freezes. It stays off by default because
+  long sessions can grow the shader/pipeline caches and saturate storage I/O.
+- **Background BRX compute spirv-opt deferral** (1.0.121-inspired, Mali-G615 MC2 / TECNO CAMON 50 Ultra testing): BRX compute shaders use the plain translation immediately and queue spirv-opt on a background worker; `BindProgram` swaps in the optimized shader when ready. This avoids blocking first-use/attack compute paths on synchronous spirv-opt while preserving the BRX workaround for drivers that need it.
+- **Input-triggered vertex-readback stalls on Mali-G615 MC2**: during combat/input, `read_vertex_stream` could miss overlay/gather/mirror/buffer-cache paths and fall back to per-draw staging snapshots, growing command staging by gigabytes over a few hundred submits and causing ~800 ms GPU waits. Large vertex ranges at the staging-chunk boundary now qualify for mirroring; dynamic/uncached known ranges below the staging-chunk size but above the mirror minimum try a GPU mirror before snapshotting. When mirror budget is exhausted, the mirror allocator makes a second eviction pass for the oldest mirror not used in the current frame before giving up. Temporary staging diagnostics confirmed the `[read_vertex_stream]` churn and were used to validate the fix.
 - **Mirrors and write watching** instead of hashing or copying megabytes per submit.
 - **Tiler options** (see [gpus-and-drivers.md](gpus-and-drivers.md)) to keep render passes whole on Adreno.
 - **Dynamic resolution** through the game's own `ImageQualityRate`, only when the GPU is the limit.
+- **Adaptive shadows** (`adaptive_shadows`, opt-in, MH Rise 16.0.1): recent GPU timestamps and executor times lower shadow-map resolution under sustained overload, then disable moving-object shadows if needed; one quality step returns only after 90 frames with sustained headroom.
 - **Frame rate:** the game's own limiter reads MaxFps, so 60 fps sets `MaxFps` in `via.Application`. The game measures
   each frame, so lower limits keep normal speed.
 - **Where CPU time goes:** in a clean log (no Detailed log, no breadcrumbs) on an A725, the port spends 25–32 ms per

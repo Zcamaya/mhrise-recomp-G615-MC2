@@ -1,17 +1,17 @@
-// La libc++ de Nintendo (std::__1) que importa el juego, salvo locale/iostreams/regex (cxx_ios.cpp). El layout es
+// La libc++ de Nintendo (std::__1) que importa el game, salvo locale/iostreams/regex (cxx_ios.cpp). El layout es
 // el de libc++ ABI v1, igual que en el NDK, pero se implementan a mano: la memoria de los strings tiene que salir del
-// operator new del juego, que es quien la libera después. Se definen con su nombre mangleado porque std::__1 no
+// operator new del game, que es quien la libera después. Se definen con su nombre mangleado porque std::__1 no
 // existe en el NDK (usa std::__ndk1); lo que necesita vtable o typeinfo (shared_ptr) se declara como clase de verdad.
 //
 // Lo que está fuera de std::__1 (std::exception, logic_error, sus typeinfo/vtables, std::nothrow, __cxa_throw y
 // compañía, _Unwind_*) no se puede definir aquí: la libc++abi/libunwind estática de libnnsdk ya define esos nombres
 // (el enlazado daría "duplicate symbol") y --exclude-libs los oculta. Los tiene que dar el loader (host_symbols.c),
-// que es la misma copia de libc++abi que ya le da al juego __cxa_begin_catch, la personality y las vtables de
-// __cxxabiv1: el juego tiene que lanzar, capturar y comparar typeinfo con una sola copia.
+// que es la misma copia de libc++abi que ya le da al game __cxa_begin_catch, la personality y las vtables de
+// __cxxabiv1: el game tiene que lanzar, capturar y comparar typeinfo con una sola copia.
 //
 // Las excepciones que en la Switch lanzaría la propia libc++ (out_of_range, length_error, stoul sin número…) aquí
-// terminan el proceso con un mensaje: una excepción de nuestra copia no llegaría al juego (nuestra libunwind no ve sus
-// FDE y él captura con la copia del loader), y el juego no tiene catch con tipo (sus 14 catch son catch (...), casi
+// terminan el proceso con un mensaje: una excepción de nuestra copia no llegaría al game (nuestra libunwind no ve sus
+// FDE y él captura con la copia del loader), y el game no tiene catch con tipo (sus 14 catch son catch (...), casi
 // todos de limpiar y relanzar), así que en la consola acabaría igual en terminate.
 
 #include <errno.h>
@@ -89,7 +89,7 @@ void set_chars(String* str, const char* p, size_t n, bool fresh) {
     if (old) nnsdk::host().game_delete(old);
 }
 
-// Fija el tamaño (y el 0 final) sin tocar el buffer.
+// Fija el tamaño (y el 0 final) not touching el buffer.
 void set_length(String* str, size_t n) {
     if (str->is_long())
         str->l.size = n;
@@ -98,7 +98,7 @@ void set_length(String* str, size_t n) {
     str->chars()[n] = 0;
 }
 
-// Pasa el contenido a un buffer del juego con sitio para n caracteres (redondeado a 16 como __recommend de libc++).
+// Pasa el contenido a un buffer del game con sitio para n caracteres (redondeado a 16 como __recommend de libc++).
 void grow(String* str, size_t n) {
     const size_t len = str->length(), alloc = (n + 16) & ~size_t{15};
     auto* d = static_cast<char*>(nnsdk::host().game_new(alloc));
@@ -178,7 +178,7 @@ String from_number(const char* fmt, ...) {
 pthread_mutex_t g_once_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_once_cond = PTHREAD_COND_INITIALIZER;
 
-// Los 16 mutex de los shared_ptr atómicos (atomic_load(&sp)…). __sp_mut es opaco para el juego: solo recibe la
+// Los 16 mutex de los shared_ptr atómicos (atomic_load(&sp)…). __sp_mut es opaco para el game: solo recibe la
 // referencia y llama lock/unlock, así que aquí el __sp_mut es directamente el pthread_mutex_t (a cero = el
 // PTHREAD_MUTEX_INITIALIZER de bionic).
 pthread_mutex_t g_sp_mutex[16] = {};
@@ -303,7 +303,7 @@ String _ZNSt3__19to_stringEj(unsigned v) { return from_number("%u", v); }
 String _ZNSt3__19to_stringEl(long v) { return from_number("%ld", v); }
 String _ZNSt3__19to_stringEm(unsigned long v) { return from_number("%lu", v); }
 
-// unsigned long stoul(const string&, size_t* idx, int base): strtoul conservando el errno del juego.
+// unsigned long stoul(const string&, size_t* idx, int base): strtoul conservando el errno del game.
 unsigned long _ZNSt3__15stoulERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPmi(const String* str,
                                                                                               size_t* idx, int base) {
     const char* p = str->chars();
@@ -344,11 +344,11 @@ void _ZNSt3__111this_thread9sleep_forERKNS_6chrono8durationIxNS_5ratioILl1ELl100
     }
 }
 
-// this_thread::get_id(): basta con que sea distinto de 0 y único por hilo vivo (el juego no crea std::thread).
+// this_thread::get_id(): basta con que sea distinto de 0 y único por hilo vivo (el game no crea std::thread).
 pthread_t _ZNSt3__130__libcpp_thread_get_current_idEv() { return pthread_self(); }
 
-// call_once: el juego mira en línea si la flag ya es ~0 (hecho) y solo llama aquí si no; 1 = otro hilo la está
-// ejecutando. La función corre sin el mutex, como en libc++. Si lanza, la excepción (del juego) atraviesa este
+// call_once: el game mira en línea si la flag ya es ~0 (hecho) y solo llama aquí si no; 1 = otro hilo la está
+// ejecutando. La función corre sin el mutex, como en libc++. Si lanza, la excepción (del game) atraviesa este
 // marco y la flag se queda en 1, donde libc++ la volvería a 0: no hay catch aquí para que la unwind de la copia del
 // loader no tenga que pasar por la personality de la nuestra.
 void _ZNSt3__111__call_onceERVmPvPFvS2_E(volatile unsigned long* flag, void* arg, void (*func)(void*)) {
@@ -376,7 +376,7 @@ void _ZNSt3__18__sp_mut6unlockEv(pthread_mutex_t* m) { pthread_mutex_unlock(m); 
 
 // random_device: en la Switch es un mt19937 con la semilla por defecto (5489), sin entropía: da la misma secuencia en
 // cada arranque. Se hace igual, con el mersenne_twister del NDK sobre el mismo objeto: mismo layout (624 palabras de
-// 32 bits + índice), que son los 0x9c8 bytes que el juego reserva. El token se ignora, como allí.
+// 32 bits + índice), que son los 0x9c8 bytes que el game reserva. El token se ignora, como allí.
 void _ZNSt3__113random_deviceC1ERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE(void* self,
                                                                                             const String*) {
     new (self) Mt19937();
@@ -403,7 +403,7 @@ void _ZNSt3__118condition_variable15__do_timed_waitERNS_11unique_lockINS_5mutexE
 
 }  // extern "C"
 
-// shared_ptr: el bloque de control lo instancia el juego (__shared_ptr_pointer<…>, __shared_ptr_emplace<…>) y sube y
+// shared_ptr: el bloque de control lo instancia el game (__shared_ptr_pointer<…>, __shared_ptr_emplace<…>) y sube y
 // baja sus cuentas en línea con atómicos; aquí va la parte fuera de línea y la typeinfo de la base, con los mismos
 // campos y el mismo orden de virtuales que libc++ (__release_weak llama __on_zero_shared_weak, slot 4).
 namespace std {
@@ -418,7 +418,7 @@ class __shared_count {
     virtual void __on_zero_shared() noexcept = 0;
 
   public:
-    // Los D0 liberan objetos del juego.
+    // Los D0 liberan objetos del game.
     static void operator delete(void* p) noexcept { nnsdk::host().game_delete(p); }
 };
 
@@ -458,10 +458,10 @@ __shared_weak_count* __shared_weak_count::lock() noexcept {
     return nullptr;
 }
 
-// La base no tiene deleter; lo sobrescribe __shared_ptr_pointer en el juego.
+// La base no tiene deleter; lo sobrescribe __shared_ptr_pointer en el game.
 const void* __shared_weak_count::__get_deleter(const type_info&) const noexcept { return nullptr; }
 
-// bad_weak_ptr: lo lanza el juego en línea (shared_ptr(weak_ptr) caducado) con __cxa_throw y esta typeinfo/vtable;
+// bad_weak_ptr: lo lanza el game en línea (shared_ptr(weak_ptr) caducado) con __cxa_throw y esta typeinfo/vtable;
 // what() lo usa el terminate de la libc++abi.
 class bad_weak_ptr : public exception {
   public:

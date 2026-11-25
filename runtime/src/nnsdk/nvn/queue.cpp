@@ -1,6 +1,6 @@
 // nvnQueue* y nvnSync*. Enviar comandos los graba y envía a Vulkan al momento (executor.cpp), sin
 // esperar a la GPU; un NVNsync recuerda el último envío al hacer FenceSync y esperar el sync es esperar
-// a ese envío. Adquirir textura de la ventana es rotar.
+// a ese envío. Adquirir textura de la window es rotar.
 
 #include <chrono>
 #include <cstring>
@@ -71,7 +71,7 @@ nvn::Boolean nvnQueueWaitSync(void*, const void*) { return 1; }
 
 void nvnQueuePresentTexture(void*, void* window, int index) {
     nnsdk::activity_state().checkpoint();
-    // El hilo principal del juego lo crea el loader, no nn::os, y no tiene nombre del juego: se le reconoce por
+    // El hilo principal del game lo crea el loader, no nn::os, y no tiene nombre del game: se le reconoce por
     // ser el que presenta (y envía los comandos). Es crítico como MainDraw y NvnSubmit.
     thread_local bool pinned = false;
     if (!pinned) {
@@ -90,7 +90,7 @@ nvn::Boolean nvnSyncInitialize(void* sync, void*) {
     return 1;
 }
 void nvnSyncFinalize(void* sync) { g_syncs.destroy(sync); }
-// DEPURACIÓN (con <datos>/verbose_log): cuánto espera el juego a sus syncs por segundo y cuántas esperas caducan.
+// DEPURACIÓN (con <data>/verbose_log): cuánto espera el game a sus syncs por segundo y cuántas esperas caducan.
 void count_wait(int64_t ns, bool timed_out, uint64_t timeout_ns) {
     static std::mutex m;
     static int64_t window_start = 0, waited = 0;
@@ -134,7 +134,7 @@ int nvnWindowAcquireTexture(void* window, void*, int* index) {
     return kWindowAcquireSuccess;
 }
 
-// NVNqueueGetErrorResult: 0 = GPU_NO_ERROR (los errores de Vulkan van al log, no al juego).
+// NVNqueueGetErrorResult: 0 = GPU_NO_ERROR (los errores de Vulkan van al log, no al game).
 int nvnQueueGetError(void*, void*) { return 0; }
 void nvnQueueSetDebugLabel(void*, const char*) {}
 void nvnSyncSetDebugLabel(void*, const char*) {}

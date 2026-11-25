@@ -1,7 +1,7 @@
 #pragma once
 #include <atomic>
 // Objetos NVN inicializados que comparten varios archivos (pools, texturas, samplers, programas,
-// ventana). Los objetos del juego son opacos: se asocian por dirección a estos.
+// window). Los objetos del game son opacos: se asocian por dirección a estos.
 
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +26,7 @@ namespace nvn {
 constexpr int kStages = static_cast<int>(nvnshader::Stage::Compute) + 1;
 
 struct MemoryPool {
-    uint8_t* storage = nullptr;  // memoria del juego; también es la "dirección de GPU"
+    uint8_t* storage = nullptr;  // memoria del game; también es la "dirección de GPU"
     size_t size = 0;
     int flags = 0;
     // Pool virtual (memory.cpp): sin memoria propia; storage es una reserva nuestra donde MapVirtual hace aparecer las
@@ -54,7 +54,7 @@ constexpr int kPoolFlagCpuNoAccess = 0x1;
 // class identifies storage owned by a VkImage; raw requests retain the guest layout.
 constexpr int kStorageClassPitch = 0, kStorageClassNativeImage = 0xfd, kStorageClassBlockLinear = 0xfe;
 
-// Estado de un NVNtextureBuilder; vive dentro del builder del juego (≤ 96 bytes).
+// Estado de un NVNtextureBuilder; vive dentro del builder del game (≤ 96 bytes).
 struct TextureDesc {
     void* device;
     int target, flags, format;
@@ -76,7 +76,7 @@ constexpr int kTarget1D = 0, kTarget2D = 1, kTarget3D = 2, kTarget1DArray = 3, k
               kTarget2DMultisample = 5, kTarget2DMultisampleArray = 6, kTargetRectangle = 7, kTargetCube = 8,
               kTargetCubeArray = 9, kTargetBuffer = 10;
 
-// NVNtextureView: vive dentro del struct del juego (≤ 40 bytes). flags dice qué campos valen.
+// NVNtextureView: vive dentro del struct del game (≤ 40 bytes). flags dice qué campos valen.
 struct TextureViewDesc {
     uint16_t flags;
     uint8_t depth_stencil_mode, pad;
@@ -106,13 +106,13 @@ struct Texture {
     uint64_t serial = 0;
     TextureDesc desc{};
     TextureLayout layout;
-    uint8_t* storage = nullptr;  // memoria del juego donde están sus texels (si los sube la CPU)
+    uint8_t* storage = nullptr;  // memoria del game donde están sus texels (si los sube la CPU)
     bool virtual_storage = false;
     bool gpu_only_virtual = false;
     bool raw_alias = false; // atomic after registration; another resource may use the raw storage
     uint64_t buffer_epoch = 0;
     bool buffer_overlap = false;
-    // Vulkan, creado cuando hace falta:
+    // Vulkan, created cuando hace falta:
     VkImage image = VK_NULL_HANDLE;
     GpuAllocation memory;  // dentro de un bloque compartido o propia (gpu_memory.h)
     uint64_t gpu_bytes = 0;
@@ -122,7 +122,7 @@ struct Texture {
     VkImageAspectFlags aspect = 0;
     uint32_t layers = 1;
     bool vk_failed = false;    // no se pudo crear en Vulkan (formato sin soporte…): no reintentar
-    bool mutable_format = true;  // imagen con MUTABLE_FORMAT: admite vistas con otro formato (ejecutor)
+    bool mutable_format = true;  // image con MUTABLE_FORMAT: admite vistas con otro formato (ejecutor)
     uint64_t retry_frame = 0;  // sin memoria al crearla: no se reintenta antes de este frame
     // Layer-major mip slots whose Vulkan image may contain newer bytes than guest memory.
     // Single-subresource images use only the count.
@@ -140,16 +140,16 @@ struct Texture {
         else --gpu_levels;
     }
     // Último frame del ejecutor en que fue render target, y si también lo fue en uno de los dos anteriores (se redibuja
-    // cada frame: un draw que no se dibuje uno de ellos sale en el siguiente; ver las pipelines en segundo plano).
+    // cada frame: un draw que no se dibuje uno de ellos sale en el siguiente; ver las pipelines en background).
     uint64_t rt_frame = 0;
     uint64_t gpu_write_frame = 0;  // last executor frame the GPU wrote it (any way)
     uint64_t content_version = 1;  // image writes invalidate a sampled attachment snapshot
     uint32_t returned = 0;         // times its level 0 went back to its memory (linear: the CPU reads it, executor.cpp)
     bool rt_recurring = false;
-    bool storage_image = false;  // la imagen se creó con STORAGE: se puede enlazar como imagen (ejecutor)
+    bool storage_image = false;  // la image se creó con STORAGE: se puede enlazar como image (ejecutor)
     bool uploaded = false;
     bool mapping_changed = false;  // Atomic access after registration: MapVirtual can run on the streaming thread.
-    uint64_t content_hash = 0;   // de su memoria al subirla: si cambia, el juego la ha reescrito
+    uint64_t content_hash = 0;   // de su memoria al subirla: si cambia, el game la ha reescrito
     uint64_t checked_frame = ~uint64_t{0};
     float clear_color[4] = {};  // último ClearColor (para presentar antes de tener render real)
     bool cleared = false;
@@ -162,7 +162,7 @@ struct Texture {
     uint64_t full_check_until = 0;
     uint64_t next_full_check = 0;
     MipResidency residency;
-    VkImage level_hash_image = VK_NULL_HANDLE;  // la imagen a la que corresponden (otra imagen: se sube entera)
+    VkImage level_hash_image = VK_NULL_HANDLE;  // la image a la que corresponden (otra image: se sube entera)
     // Full digests of the bytes submitted for each layer and mip. Valid for level_hash_image only.
     std::vector<uint64_t> level_full_hash;
     // Vigilancia de escrituras de la CPU en su memoria (nnsdk/watch.h, como los espejos): las que sube la CPU sin
@@ -177,7 +177,7 @@ struct Texture {
     uint64_t watch_submit = ~uint64_t{0};
     uint64_t view_memo_serial = 0;
     TextureViewDesc view_memo_desc{};
-    // Cajas que la CPU escribió con nvnTextureWriteTexels (texture.cpp) y que la imagen aún no tiene: el ejecutor las
+    // Cajas que la CPU escribió con nvnTextureWriteTexels (texture.cpp) y que la image aún no tiene: el ejecutor las
     // sube al usar la textura. Con texel_writes_mutex(); g_texel_writes cuenta las pendientes de todas las texturas.
     struct TexelWrite {
         uint32_t level, layer, layers;
@@ -199,7 +199,7 @@ extern std::atomic<uint32_t> g_texel_writes;
 // Bumped whenever a texture's guest mapping changes (MapVirtual, any thread): the executor's bindless memo checks it
 extern std::atomic<uint64_t> g_mapping_serial;
 
-// Libera la imagen de Vulkan de una textura (texture.cpp); el objeto sigue siendo válido.
+// Libera la image de Vulkan de una textura (texture.cpp); el objeto sigue siendo válido.
 void release_texture_gpu(Texture& t);
 uint64_t next_texture_serial();
 // Memoria de GPU de las texturas vivas (DEPURACIÓN/perfil).
@@ -216,11 +216,11 @@ static_assert(sizeof(SamplerDesc) <= 96);
 struct Sampler {
     SamplerDesc desc{};
     VkSampler vk = VK_NULL_HANDLE;
-    // El otro anisotrópico (ver Executor::sampler), en vivo. En los de comparación (sombras): el de antes, con el mínimo de
-    // 4x forzado (<datos>/af_compare). En los demás: sin ese mínimo, el que pide el juego (<datos>/game_af).
+    // El otro anisotrópico (ver Executor::sampler), live. En los de comparación (sombras): el de antes, con el mínimo de
+    // 4x forzado (<data>/af_compare). En los demás: sin ese mínimo, el que pide el game (<data>/game_af).
     // Se retira con vk.
     VkSampler vk_af = VK_NULL_HANDLE;
-    // Con las sombras apagadas (<datos>/no_shadows, en vivo; Executor::sampler): el de comparación que siempre pasa. Se
+    // Con las sombras apagadas (<data>/no_shadows, live; Executor::sampler): el de comparación que siempre pasa. Se
     // retira con vk.
     VkSampler vk_lit = VK_NULL_HANDLE;
 };
@@ -280,7 +280,7 @@ struct ProgramStage {
     bool compaction_gs = false;
     uint64_t code = 0;  // dirección del código (NVN solo lo lee al dibujar: se traduce en el executor)
     uint64_t print = 0;  // huella del código (la de los logs), al traducirlo
-    const void* control = nullptr;  // sección de control (memoria de CPU del juego)
+    const void* control = nullptr;  // sección de control (memoria de CPU del game)
     // Constantes del propio shader (su c1): el compilador las deja tras el código, en
     // code + control[0x700] hasta code + control[0x704].
     uint64_t constants = 0;
@@ -289,18 +289,21 @@ struct ProgramStage {
     nvnshader::Translated shader;
     VkShaderModule module = VK_NULL_HANDLE;
     // Compute de kUniformBarrierShaders (program.cpp), a los que se les dejan las barreras de sus bucles: la traducción
-    // sin ellas, para sus interruptores en vivo (use_stripped_module). Los mismos recursos que module (el mismo layout).
+    // sin ellas, para sus interruptores live (use_stripped_module). Los mismos recursos que module (el mismo layout).
     VkShaderModule stripped_module = VK_NULL_HANDLE;
     int8_t uniform_barrier_entry = -1;  // su índice en kUniformBarrierShaders (-1: no es de la lista)
     // Vertex: translated with the draw count check (count_check.h), for GPU-counted multi-draws on old drivers
     bool count_check = false;
-    // Identidad de lo traducido (spirv_identity: el SPIR-V y lo que el layout toma de los recursos). Las pipelines y los
-    // layouts del ejecutor van por ella y no por la dirección de la etapa: el juego crea varios programas con el mismo
-    // código (MH Rise: 2200 etapas de 496 huellas en una partida) y cada uno llevaba sus propias pipelines. 0: sin traducir.
+    // Identity of the translated shader (spirv_identity: SPIR-V plus layout-relevant resource info). Pipelines and
+    // executor layouts are keyed by it, not by stage address: the game creates multiple programs with the same code
+    // (MH Rise: 2200 stages from 496 fingerprints in one session) and each would otherwise carry its own pipelines. 0: untranslated.
     uint64_t spirv_id = 0;
-    // Clave con la que está en la caché de SPIR-V (program.cpp); a cero si no está (sin sección de control, caché
-    // apagada). El ejecutor la apunta con cada pipeline nueva para crearla al arrancar la partida siguiente (precalentado).
+    // Key used in the SPIR-V cache (program.cpp); zero if absent (no control section, cache disabled). The executor
+    // records it with each new pipeline to rebuild it on next startup (warm-up).
     spirv_cache::Key cache_key;
+    // A BRX compute shader whose spirv-opt pass is running in the background: this stage holds the plain translation
+    // until take_optimized swaps in the optimized one.
+    bool optimize_pending = false;
     // Variantes: geometry por (genéricos que escribe el vertex shader, topología de entrada); pixel por los genéricos que
     // le llegan (los que no escribe la etapa anterior no se declaran); vertex por los tipos de sus atributos.
     struct Variant {
@@ -329,7 +332,7 @@ struct Window {
     VkResult queue_image(uint32_t index, const VkPresentTimeGOOGLE* when);
     int next_texture = 0;
     uint64_t presented = 0;
-    // nvnWindowSetCrop: la parte de la textura que va a la pantalla (ancho 0: entera). MH Rise dibuja a 1280x720 en
+    // nvnWindowSetCrop: la parte de la textura que va a la screen (ancho 0: entera). MH Rise dibuja a 1280x720 en
     // texturas de 1920x1080 y recorta.
     VkRect2D crop{};
     bool rebuild = false;
@@ -369,10 +372,13 @@ extern ResourceRegistry<DescriptorPool> g_texture_pools, g_sampler_pools;
 Program* find_program(const void* program);
 // Traduce la etapa la primera vez que se usa (program.cpp); false si no se pudo.
 bool ensure_translated(ProgramStage& stage);
-// The same, but a graphics stage that isn't in the SPIR-V cache yet goes to a background thread instead (program.cpp):
-// 0, done here as ensure_translated (stage.module says if it worked); 1, queued (draws with it wait).
+// Background translation (program.cpp): -1, no shader (must go to ensure_translated); 0, already ready (cache) or
+// translated here like ensure_translated (stage.module tells if it succeeded); 1, queued (draws using it wait).
 int translate_or_queue(ProgramStage& stage);
-// Precarga (program.cpp): el hilo que traduce los shaders al fijarlos le pasa al ejecutor cada compute traducido, para
+// A BRX compute shader translated with the plain path while its spirv-opt pass runs in the background. Swaps the
+// optimized module in when ready; no-op while pending or if optimization failed.
+void take_optimized(ProgramStage& stage);
+// Precarga (program.cpp): el hilo que traduce los shaders al fixedrlos le pasa al ejecutor cada compute traducido, para
 // crear su pipeline antes del primer dispatch (la toma warm_take).
 void prefetch_compute_pipeline(const ProgramStage& stage);
 // A program's shader modules once it's finalized or given new shaders: a pipeline build queued or running on a worker
@@ -383,14 +389,14 @@ void destroy_retired_modules();
 std::string describe_memory(const void* p, size_t size);
 
 // Lo que pasó en el último tramo del log de ritmo (window.cpp lo escribe cada 10 s si hubo frames lentos y lo pone a
-// cero): GPU del frame del juego, el ejecutor por frame, pipelines y traducciones en NvnSubmit y en segundo plano.
+// cero): GPU del frame del game, el ejecutor por frame, pipelines y translations en NvnSubmit y en background.
 struct DropStats {
     std::atomic<uint64_t> gpu_sum_ns{0}, gpu_max_ns{0}, gpu_frames{0};
     std::atomic<uint64_t> run_ns{0}, run_max_ns{0}, wait_ns{0};  // run_max: el peor frame (suma de sus envíos)
     std::atomic<uint64_t> pipelines_live{0}, pipelines_live_ns{0};   // creadas en NvnSubmit con el frame parado
     std::atomic<uint64_t> pipelines_async{0}, draws_skipped{0};     // mandadas al hilo y draws sin dibujar esperándolas
     std::atomic<uint64_t> pipelines_known{0}, pipelines_known_ns{0};  // already recorded: made in NvnSubmit, not on the threads
-    std::atomic<uint64_t> translated_live{0}, translated_live_ns{0};  // traducciones (no de la caché) en NvnSubmit
+    std::atomic<uint64_t> translated_live{0}, translated_live_ns{0};  // translations (no de la caché) en NvnSubmit
     std::atomic<uint64_t> prefetched{0}, prefetch_ns{0};             // las del hilo de la precarga
     std::mutex slow_mutex;      // el envío más lento del tramo (de 40 ms o más) y en qué se le fue el tiempo
     uint64_t slow_ns = 0;
@@ -403,8 +409,8 @@ inline void note_max(std::atomic<uint64_t>& a, uint64_t v) {
     while (v > now && !a.compare_exchange_weak(now, v, std::memory_order_relaxed)) {
     }
 }
-// true si hay que usar stripped_module en vez de module: un interruptor en vivo devuelve ese compute a la traducción
-// sin las barreras de sus bucles (<datos>/no_exposure_barrier, no_reduction_barrier o no_uniform_barrier: todos).
+// true si hay que usar stripped_module en vez de module: un interruptor live devuelve ese compute a la traducción
+// sin las barreras de sus bucles (<data>/no_exposure_barrier, no_reduction_barrier o no_uniform_barrier: todos).
 bool use_stripped_module(const ProgramStage& stage);
 // Geometry: el módulo para un vertex shader que escribe `previous_stores` y una topología de entrada de
 // Eden; module a VK_NULL_HANDLE si no se puede traducir.
@@ -430,11 +436,11 @@ VkResult create_fetch_module(VkDevice device, const std::vector<uint32_t>& spirv
 // o no llegó a tiempo. cached_translation: la traducción guardada con esa clave.
 bool shader_cache_ready(int timeout_ms);
 bool cached_translation(const spirv_cache::Key& key, nvnshader::Translated& out);
-// DEPURACIÓN: guarda el código de la etapa en <datos>/shaders/<name>.code.
+// DEPURACIÓN: guarda el código de la etapa en <data>/shaders/<name>.code.
 void dump_stage_code(const ProgramStage& stage, const std::string& name);
 struct CopyRegion;
 // Como nvnTextureWriteTexels: texels lineales (compactos si los strides son 0) a la memoria de la textura, en su
-// disposición; la caja se sube a la imagen al usarla. Para CopyBufferToTexture, que en la Switch copia la GPU.
+// disposición; la caja se sube a la image al usarla. Para CopyBufferToTexture, que en la Switch copia la GPU.
 void write_texels_to(Texture& t, const TextureViewDesc* view, const CopyRegion* region, const void* data, int64_t row_stride,
                      int64_t image_stride);
 Sampler* find_sampler(const void* sampler);
@@ -443,7 +449,7 @@ Sampler* find_sampler(const void* sampler);
 inline uint32_t handle_texture_id(uint64_t h) { return static_cast<uint32_t>(h & 0xFFFFFFFF); }
 inline uint32_t handle_sampler_id(uint64_t h) { return static_cast<uint32_t>(h >> 32); }
 
-// Presenta en pantalla la textura index de la ventana (window.cpp).
+// Presenta en screen la textura index de la window (window.cpp).
 void present(Window& window, int index);
 
 }  // namespace nvn

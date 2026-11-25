@@ -1,10 +1,10 @@
 // nn::mem::StandardAllocator y el ExpHeap de nn::lmem.
 //
-// StandardAllocator va sobre el malloc de bionic. El juego le da una región para gestionar (su malloc: 8 MB del
+// StandardAllocator va sobre el malloc de bionic. El game le da una región para gestionar (su malloc: 8 MB del
 // heap); se ignora: le da igual de dónde salga la memoria mientras Free la acepte, y su free() no mira rangos, va
 // directo a Free. Así tampoco hay tope de 8 MB.
 //
-// El ExpHeap, en cambio, sí reparte de verdad la región que le dan: el juego decide a quién devolver un puntero
+// El ExpHeap, en cambio, sí reparte de verdad la región que le dan: el game decide a quién devolver un puntero
 // mirando si cae dentro del bloque que le dio al heap (main+0x6c6b598), así que tiene que salir de ahí. Los
 // registros de huecos y bloques van fuera de la región, para no tocar sus páginas.
 
@@ -32,7 +32,7 @@ public:
     void Free(void* p);
 };
 
-// Sin miembros: el objeto vive en memoria del juego y no se toca.
+// Sin miembros: el objeto vive en memoria del game y no se toca.
 StandardAllocator::StandardAllocator() {}
 void StandardAllocator::Initialize(void*, size_t) {}
 void StandardAllocator::Initialize(void* address, size_t size, bool) {
@@ -49,7 +49,7 @@ void* StandardAllocator::Allocate(size_t size, size_t alignment) {
     return posix_memalign(&p, alignment, size ? size : 1) == 0 ? p : nullptr;
 }
 
-// Como el SDK: tamaño "negativo" -> nullptr sin tocar nada; sin puntero es Allocate (alineado a 16); tamaño 0 libera
+// Como el SDK: tamaño "negativo" -> nullptr not touching nada; sin puntero es Allocate (alineado a 16); tamaño 0 libera
 // y devuelve nullptr; si no cabe, nullptr y el bloque sigue como estaba (realloc hace lo mismo).
 void* StandardAllocator::Reallocate(void* p, size_t size) {
     if (static_cast<ptrdiff_t>(size) < 0) return nullptr;
@@ -82,7 +82,7 @@ using nn::lmem::AllocationMode;
 
 constexpr int kOptionZeroClear = 1;  // CreateExpHeap: las asignaciones salen a 0 (2 = DebugFill, 4 = ThreadSafe)
 
-// El handle que recibe el juego es este objeto (para él, opaco). Siempre con cerrojo, pida ThreadSafe o no.
+// El handle que recibe el game es este objeto (para él, opaco). Siempre con cerrojo, pida ThreadSafe o no.
 struct ExpHeap {
     std::mutex m;
     uintptr_t begin = 0, end = 0;

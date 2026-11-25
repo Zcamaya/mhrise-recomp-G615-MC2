@@ -7,9 +7,9 @@
 #pragma once
 // La cadena de compute de LSFG (modo rendimiento), port de Eden (src/video_core/renderer_vulkan/present/
 // lsfg_{common,mipmaps,alpha,beta,gamma,delta,generate,chain}) a Vulkan a pelo sobre nuestro VkContext. Solo
-// 2x: un frame generado (timestamp 0.5) entre cada par de frames reales, escrito en una imagen nuestra del
-// tamaño de la ventana del juego. Mismos tamaños de grupo, orden de dispatches y orden de descriptores que Eden.
-// Sin nullDescriptor: las entradas que faltan (la primera iteración) apuntan a una imagen 1x1 a cero.
+// 2x: un frame generado (timestamp 0.5) entre cada par de frames reales, escrito en una image nuestra del
+// tamaño de la window del game. Mismos tamaños de grupo, orden de dispatches y orden de descriptores que Eden.
+// Sin nullDescriptor: las entradas que faltan (la primera iteración) apuntan a una image 1x1 a cero.
 
 #include <cstdint>
 #include <map>
@@ -37,7 +37,7 @@ struct Pass {
 // Los 25 pipelines del modo rendimiento, uno por shader. Solo hacen falta vkCreate*: se crean en un hilo aparte.
 class Pipelines {
 public:
-    // false (y nada creado) si un shader no pasa la auditoría, sus bindings no son los que espera la cadena
+    // false (y nada created) si un shader no pasa la auditoría, sus bindings no son los que espera la cadena
     // o el driver no crea el módulo o el pipeline.
     bool create(const Modules& modules, bool float16, std::string* why);
     void destroy();
@@ -55,12 +55,12 @@ public:
     Chain& operator=(const Chain&) = delete;
     ~Chain() override { destroy(); }
 
-    // Para una ventana de ese tamaño y formato y una escala del flujo óptico (0.5 o 1.0). Todo en una reserva de
-    // memoria. false con el motivo (y nada creado) si falla.
+    // Para una window de ese tamaño y formato y una escala del flujo óptico (0.5 o 1.0). Todo en una reserva de
+    // memoria. false con el motivo (y nada created) si falla.
     bool create(const Pipelines& pipelines, VkExtent2D extent, VkFormat format, float flow, std::string* why);
     void destroy();
 
-    // La primera vez que se graba: todas las imágenes a GENERAL y la imagen vacía a cero.
+    // La primera vez que se graba: todas las imágenes a GENERAL y la image vacía a cero.
     const char* name() const override { return "LSFG"; }
     bool initialized() const override { return initialized_; }
     void record_init(VkCommandBuffer cmd) override;

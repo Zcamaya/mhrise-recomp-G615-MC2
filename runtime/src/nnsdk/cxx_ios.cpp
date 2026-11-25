@@ -1,15 +1,15 @@
-// Locale, iostreams y regex_traits de la libc++ de Nintendo (std::__1, ABI v1). El juego instancia en línea sus
+// Locale, iostreams y regex_traits de la libc++ de Nintendo (std::__1, ABI v1). El game instancia en línea sus
 // stringstreams y su __put_character_sequence y lee directamente los campos de ios_base/basic_ios/basic_streambuf
 // (flags +8, width +0x18, rdbuf +0x28, fill +0x90…), así que aquí esas clases se declaran con el mismo layout y el
 // mismo orden de virtuales: el compilador da entonces los nombres, los D0/D1/D2 con su VTT, los thunks y las
-// typeinfo que el juego importa.
+// typeinfo que el game importa.
 //
 // No se reenvía a la libc++ del NDK (std::__ndk1, mismo layout) porque su ctype<char> usa otras máscaras (unsigned
-// long, 1 << n) y el juego compara en línea con las de Nintendo, que son las de glibc (unsigned short): con la tabla
+// long, 1 << n) y el game compara en línea con las de Nintendo, que son las de glibc (unsigned short): con la tabla
 // del NDK, isspace(c, loc) o [[:alpha:]]/\d de std::regex darían otra cosa. Hay una sola locale, la "C", inmortal.
 //
-// Las funciones que llaman a virtuales del streambuf del juego no tienen objetos con destructor ni try/catch: así no
-// llevan LSDA y, si el juego lanza desde su streambuf, la unwind (la libc++abi del loader) atraviesa estos marcos sin
+// Las funciones que llaman a virtuales del streambuf del game no tienen objetos con destructor ni try/catch: así no
+// llevan LSDA y, si el game lanza desde su streambuf, la unwind (la libc++abi del loader) atraviesa estos marcos sin
 // pasar por la personality de la copia de libnnsdk.
 
 #include <pthread.h>
@@ -49,7 +49,7 @@ class collate;
 
 using streamsize = long;
 
-// basic_string<char> (24 bytes): aquí solo se devuelve; lo rellena el append de cxx.cpp con la memoria del juego.
+// basic_string<char> (24 bytes): aquí solo se devuelve; lo rellena el append de cxx.cpp con la memoria del game.
 template <>
 class basic_string<char, char_traits<char>, allocator<char>> {
   public:
@@ -72,7 +72,7 @@ class locale {
     const void* __locale_;
 };
 
-// locale::id = {once_flag, int}: el juego solo pasa su dirección a use_facet.
+// locale::id = {once_flag, int}: el game solo pasa su dirección a use_facet.
 class locale::id {
   public:
     unsigned long __flag_ = 0;
@@ -80,7 +80,7 @@ class locale::id {
 };
 
 // locale::facet: el __shared_count de libc++ ({vptr, cuenta}; virtuales D1, D0, __on_zero_shared) sin declararlo
-// como base: el juego no mira la typeinfo de las facetas y las nuestras son estáticas, la cuenta no llega a cero.
+// como base: el game no mira la typeinfo de las facetas y las nuestras son estáticas, la cuenta no llega a cero.
 class locale::facet {
   public:
     constexpr facet() = default;
@@ -101,7 +101,7 @@ struct ctype_base {
                           graph = alnum | punct;
 };
 
-// ctype<char> = {facet, tabla +0x10, del +0x18}; el juego lee la tabla en línea (is()) y llama do_widen (slot 7) y
+// ctype<char> = {facet, tabla +0x10, del +0x18}; el game lee la tabla en línea (is()) y llama do_widen (slot 7) y
 // do_tolower/do_toupper por la vtable.
 template <>
 class ctype<char> : public locale::facet, public ctype_base {
@@ -155,7 +155,7 @@ class ios_base {
     void setstate(iostate state) { clear(__rdstate_ | state); }
     bool good() const { return __rdstate_ == 0; }
 
-    // Los D0 de las clases de iostream liberan objetos del juego.
+    // Los D0 de las clases de iostream liberan objetos del game.
     static void operator delete(void* p) noexcept { nnsdk::host().game_delete(p); }
 
     fmtflags __fmtflags_;
@@ -207,7 +207,7 @@ struct __pos {
     long state, off;
 };
 
-// Las virtuales de la base son las de libc++: el basic_stringbuf del juego hereda imbue, setbuf, sync, showmanyc,
+// Las virtuales de la base son las de libc++: el basic_stringbuf del game hereda imbue, setbuf, sync, showmanyc,
 // xsgetn, uflow y xsputn, y las llama con sus objetos.
 template <>
 class basic_streambuf<char, char_traits<char>> {
@@ -297,7 +297,7 @@ using collate_char = std::__1::collate<char>;
 using streambuf = std::__1::basic_streambuf<char, std::__1::char_traits<char>>;
 using ostream = std::__1::basic_ostream<char, std::__1::char_traits<char>>;
 
-// cxx.cpp: string::append(const char*, size_type), sobre la memoria del juego.
+// cxx.cpp: string::append(const char*, size_type), sobre la memoria del game.
 extern "C" std::__1::string* _ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm(
     std::__1::string* self, const char* s, size_t n);
 
@@ -362,7 +362,7 @@ void end_output(ostream& os) {
         os.setstate(ios_base::badbit);
 }
 
-// basic_ios::fill(): el relleno se fija la primera vez (widen(' ') en la locale "C"); operator<< lo pide siempre.
+// basic_ios::fill(): el relleno se fixed la primera vez (widen(' ') en la locale "C"); operator<< lo pide siempre.
 char fill_char(ostream& os) {
     if (os.__fill_ == -1) os.__fill_ = ' ';
     return static_cast<char>(os.__fill_);
@@ -426,7 +426,7 @@ ostream& put_integer(ostream& os, unsigned long v, bool is_signed) {
     return os;
 }
 
-// La streambuf de std::clog: lo que el juego escribe ahí va al log del runtime, por líneas.
+// La streambuf de std::clog: lo que el game escribe ahí va al log del runtime, por líneas.
 class LogBuf : public streambuf {
   public:
     streamsize xsputn(const char* s, streamsize n) override {
@@ -478,7 +478,7 @@ locale::locale(const locale& other) noexcept : __locale_(other.__locale_) {}
 locale::~locale() {}
 string locale::name() const { return make_string(kClassicName, 1); }
 
-// use_facet(F::id): el juego solo importa los id de ctype<char> y collate<char>; otra faceta sería un bad_cast
+// use_facet(F::id): el game solo importa los id de ctype<char> y collate<char>; otra faceta sería un bad_cast
 // (std::terminate en la consola).
 const locale::facet* locale::use_facet(id& x) const {
     if (&x == &ctype<char>::id) return &g_ctype;
@@ -528,7 +528,7 @@ int collate<char>::do_compare(const char* lo1, const char* hi1, const char* lo2,
 string collate<char>::do_transform(const char* lo, const char* hi) const {
     return make_string(lo, static_cast<size_t>(hi - lo));
 }
-// El hash de libc++ (PJW), por si el juego guarda el resultado.
+// El hash de libc++ (PJW), por si el game guarda el resultado.
 long collate<char>::do_hash(const char* lo, const char* hi) const {
     size_t h = 0;
     constexpr size_t sr = 8 * sizeof(size_t) - 8, mask = size_t{0xF} << (sr + 4);
@@ -567,8 +567,8 @@ void ios_base::init(void* sb) {
     ::new (&__loc_) locale;
 }
 
-// Sin rdbuf el estado siempre lleva badbit. Si el juego pidió excepciones para ese estado, libc++ lanzaría
-// ios_base::failure: una nuestra no la puede capturar el juego (otra libc++abi), así que es fatal.
+// Sin rdbuf el estado siempre lleva badbit. Si el game pidió excepciones para ese estado, libc++ lanzaría
+// ios_base::failure: una nuestra no la puede capturar el game (otra libc++abi), así que es fatal.
 void ios_base::clear(iostate state) {
     __rdstate_ = __rdbuf_ ? state : state | badbit;
     if (__rdstate_ & __exceptions_) fail("ios_base::clear: ios_base::failure");
@@ -597,7 +597,7 @@ int basic_streambuf<char, char_traits<char>>::uflow() {
     return static_cast<unsigned char>(*__ninp_++);
 }
 
-// Lo que haya en [ninp, einp) y luego carácter a carácter con uflow() (del streambuf del juego).
+// Lo que haya en [ninp, einp) y luego carácter a carácter con uflow() (del streambuf del game).
 streamsize basic_streambuf<char, char_traits<char>>::xsgetn(char* s, streamsize n) {
     streamsize done = 0;
     while (done < n) {
@@ -615,7 +615,7 @@ streamsize basic_streambuf<char, char_traits<char>>::xsgetn(char* s, streamsize 
     return done;
 }
 
-// Lo que quepa en [nout, eout) y el resto carácter a carácter con overflow() (el stringbuf del juego crece ahí).
+// Lo que quepa en [nout, eout) y el resto carácter a carácter con overflow() (el stringbuf del game crece ahí).
 streamsize basic_streambuf<char, char_traits<char>>::xsputn(const char* s, streamsize n) {
     streamsize done = 0;
     while (done < n) {
@@ -675,7 +675,7 @@ basic_ostream<char, char_traits<char>>& basic_ostream<char, char_traits<char>>::
     return *this;
 }
 
-// std::clog: el juego vuelca ahí algunos avisos.
+// std::clog: el game vuelca ahí algunos avisos.
 [[clang::no_destroy]] basic_ostream<char, char_traits<char>> clog(&g_clog_buf);
 
 // regex_traits<char>::lookup_classname ([[:alpha:]], \d, \w…) con las máscaras de Nintendo. \w (__regex_word, 0x80)
@@ -698,7 +698,7 @@ ctype_base::mask __get_classname(const char* s, bool icase) {
     return 0;
 }
 
-// regex_traits<char>::lookup_collatename ([[.space.]]…): los nombres POSIX del juego de caracteres portable, en el
+// regex_traits<char>::lookup_collatename ([[.space.]]…): los nombres POSIX del game de caracteres portable, en el
 // orden de strcmp como la tabla de libc++. Devuelve el carácter como string, o vacío si no existe.
 string __get_collation_name(const char* s) {
     static const struct {

@@ -1,8 +1,8 @@
-// nn::prepo: los informes de juego (telemetría que la consola manda a Nintendo). Se aceptan y se tiran:
-// cada Add y cada Save responden éxito sin escribir nada en el búfer del juego.
+// nn::prepo: los informes de game (telemetría que la consola manda a Nintendo). Se aceptan y se tiran:
+// cada Add y cada Save responden éxito sin escribir nada en el búfer del game.
 //
-// Lo único que el juego lee de vuelta es PlayReport::GetCount, y solo para no guardar un informe vacío
-// (main+0x7282190): se cuentan las entradas añadidas. Los objetos los reserva el juego con el tamaño del
+// Lo único que el game lee de loop es PlayReport::GetCount, y solo para no guardar un informe vacío
+// (main+0x7282190): se cuentan las entradas añadidas. Los objetos los reserva el game con el tamaño del
 // SDK (PlayReport 0x38, Array y Struct 0x20) y se usan sus mismos campos: búfer y tamaño donde los pone
 // SetBuffer, y la cuenta en el campo que el SDK usa para la posición de escritura (PlayReport, +0x30)
 // o para la cuenta (Array y Struct, +0x18).

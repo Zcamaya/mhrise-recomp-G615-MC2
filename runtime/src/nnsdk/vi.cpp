@@ -1,4 +1,4 @@
-// nn::vi (pantalla y capa) y nv:: (arranque del driver). En Android solo hay una ventana:
+// nn::vi (screen y capa) y nv:: (arranque del driver). En Android solo hay una window:
 // la de la APK, que es lo que devuelve GetNativeWindow y luego recibe NVN.
 
 #include <cstddef>
@@ -29,10 +29,10 @@ Result CreateLayer(Layer** out, Display*) {
     *out = reinterpret_cast<Layer*>(&g_layer);
     return ResultSuccess;
 }
-// La ventana es de la APK y sigue viva hasta que Android la destruya.
+// La window es de la APK y sigue viva hasta que Android la destruya.
 void DestroyLayer(Layer*) {}
 
-// Sin ventana (terminal) se devuelve error: el juego no tiene dónde presentar.
+// Sin window (terminal) se devuelve error: el game no tiene dónde presentar.
 Result GetNativeWindow(void** out, Layer*) {
     *out = nnsdk::host().native_window;
     return *out ? ResultSuccess : Result{0x272};

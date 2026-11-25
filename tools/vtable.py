@@ -4,7 +4,7 @@
 Uso: python3 tools/vtable.py <nso> <clase C++>      p. ej. movie::Decoder
 
 Busca el símbolo `vtable for <clase>`, lee sus entradas (relocaciones RELATIVE o
-ABS64) y muestra cada slot desde el address point (+0x10), que es lo que el juego
+ABS64) y muestra cada slot desde el address point (+0x10), que es lo que el game
 indexa con `ldr x8, [x8, #slot]`.
 """
 import struct

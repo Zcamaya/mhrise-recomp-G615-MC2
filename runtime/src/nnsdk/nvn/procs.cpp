@@ -1,4 +1,4 @@
-// Punto de entrada de NVN. El juego pide cada función por nombre (nvnBootstrapLoader y luego
+// Punto de entrada de NVN. El game pide cada función por nombre (nvnBootstrapLoader y luego
 // nvnDeviceGetProcAddress). Lo implementado está registrado con NVN_PROC; el resto es un stub
 // con nombre que registra la llamada, para ver la secuencia real de NieR.
 
@@ -26,7 +26,7 @@ std::unordered_map<std::string, void*>& resolved() {
     return map;
 }
 
-// Mientras no estén hechas: los *Initialize devuelven NVN_TRUE para que el juego siga adelante.
+// Mientras no estén hechas: los *Initialize devuelven NVN_TRUE para que el game siga adelante.
 uint64_t stub_result(const char* name) {
     size_t n = strlen(name);
     return n > 10 && strcmp(name + n - 10, "Initialize") == 0 ? 1 : 0;

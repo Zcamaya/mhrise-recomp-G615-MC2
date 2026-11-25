@@ -47,7 +47,7 @@ uint32_t branch(const void* from, const void* to, uint32_t opcode) {
 }  // namespace
 
 // Lo llama nier_probe_slow (probe_slow.S) con todo guardado. regs: x0..x15, x18, y luego x19..x28; stub: lo que
-// guardó el stub (x16, x17, x30 del juego).
+// guardó el stub (x16, x17, x30 del game).
 extern "C" void nier_on_probe(uint64_t id, uint64_t* regs, const uint64_t* stub) {
     if (id >= g_count) return;
     Probe& p = g_probes[id];
@@ -117,7 +117,7 @@ bool install(Module& mod, std::string& err, size_t player_update) {
         stub[4] = 0xF9400BFE;                             // ldr x30, [sp, #16]
         stub[5] = 0xA8C247F0;                             // ldp x16, x17, [sp], #32
         stub[6] = *site;                                  // la instrucción original
-        stub[7] = branch(&stub[7], site + 1, 0x14000000);  // b de vuelta
+        stub[7] = branch(&stub[7], site + 1, 0x14000000);  // b de loop
         g_probes[id].offset = offset;
         g_probes[id].limit = limit;
         g_probes[id].player_update = player;

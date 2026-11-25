@@ -6,8 +6,8 @@ Uso: python3 tools/nso.py <carpeta_exefs> <carpeta_salida>
 Deja en la salida:
   <módulo>.elf        ELF64 AArch64 con segmentos y tabla dinámica, para Ghidra
   <módulo>.imports.txt imports demangleados, con su grupo y quién los exporta
-  needed.txt          lo que el juego importa y ningún módulo del juego da (hoy: sdk)
-  nvn_functions.txt   funciones NVN que el juego pide por nombre
+  needed.txt          lo que el game importa y ningún módulo del game da (hoy: sdk)
+  nvn_functions.txt   funciones NVN que el game pide por nombre
   SCOPE.md            resumen con los números
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ PATCH_SITES = {
     "mrs cntfrq_el0": (0xFFFFFFE0, 0xD53BE000),
 }
 NVN_NAME = re.compile(rb"(?<![A-Za-z0-9_])(nvn[A-Z][A-Za-z0-9]+)\0")
-RUNTIME_MODULES = ("sdk", "rtld")  # los sustituye el runtime; el resto es código del juego
+RUNTIME_MODULES = ("sdk", "rtld")  # los sustituye el runtime; el resto es código del game
 
 Symbol = namedtuple("Symbol", "name bind type shndx value size")
 
@@ -293,7 +293,7 @@ def analyze(exefs: Path, out: Path) -> dict:
                       for s in mod.imports)
         (out / f"{mod.name}.imports.txt").write_text("".join(f"{g}\t{p}\t{src}\n" for g, p, src in rows))
 
-    needed = {}  # lo que el runtime tiene que dar: imports del juego que no resuelve el juego
+    needed = {}  # lo que el runtime tiene que dar: imports del game que no resuelve el game
     for mod in game:
         for s in mod.imports:
             if providers.get(s.name) not in game_names:
@@ -321,7 +321,7 @@ def analyze(exefs: Path, out: Path) -> dict:
         "",
         f"## El runtime tiene que dar {len(needed)} funciones",
         "",
-        "Imports de " + ", ".join(sorted(game_names)) + " que no resuelve ningún módulo del juego "
+        "Imports de " + ", ".join(sorted(game_names)) + " que no resuelve ningún módulo del game "
         "(hoy los da `sdk`). Lista completa en `needed.txt`.",
         "",
         "| grupo | funciones |",
@@ -334,7 +334,7 @@ def analyze(exefs: Path, out: Path) -> dict:
         "",
         "Lista en `nvn_functions.txt`. Es la superficie de la capa NVN → Vulkan.",
         "",
-        "## Instrucciones a parchear al cargar (solo código del juego)",
+        "## Instrucciones a parchear al cargar (solo código del game)",
         "",
         "| módulo | " + " | ".join(PATCH_SITES) + " |",
         "|---|" + "--:|" * len(PATCH_SITES),
@@ -343,7 +343,7 @@ def analyze(exefs: Path, out: Path) -> dict:
         lines.append(f"| {m.name} | " + " | ".join(str(len(m.patch_sites[k])) for k in PATCH_SITES) + " |")
     svcs = sum((m.svc_numbers() for m in game), Counter())
     if svcs:
-        lines += ["", "SVC usados por el juego: " + ", ".join(f"0x{n:X}×{c}" for n, c in sorted(svcs.items()))]
+        lines += ["", "SVC usados por el game: " + ", ".join(f"0x{n:X}×{c}" for n, c in sorted(svcs.items()))]
     lines += ["", f"## Imports que no exporta ningún módulo: {len(unresolved)}", ""]
     lines += [f"- `{p}`" for p in unresolved[:50]]
     if len(unresolved) > 50:

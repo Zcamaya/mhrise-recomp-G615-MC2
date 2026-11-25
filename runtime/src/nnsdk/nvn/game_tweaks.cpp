@@ -21,7 +21,7 @@
 // Called from the thread that presents, once per frame: the game calls these setters from its own threads too, and
 // the shadow setter only stores the new size and lets the engine rebuild the maps.
 // Before touching anything the instructions at those addresses are checked, so another build of main is left alone.
-// What's in effect goes to <datos>/game_settings.txt (one line per setting) whenever it changes, for the settings menu.
+// What's in effect goes to <data>/game_settings.txt (one line per setting) whenever it changes, for the settings menu.
 // Switches (live): shadow_half, shadow_quarter / model_detail_low, model_detail_lowest, model_detail_high /
 // texture_bias_1, texture_bias_2 / no_foliage_sway, no_dynamic_shadows / effects_lower, effects_lowest / no_ao.
 #include <algorithm>
@@ -105,10 +105,88 @@ T* object_at(const uint8_t* base, size_t pointer) {
 }
 
 // Divides the game's own shadow map size (the Switch default isn't the PC's 2048), never below 256
-uint32_t wanted_shadow_divisor() {
-    if (NVN_FLAG("shadow_quarter")) return 4;
-    if (NVN_FLAG("shadow_half")) return 2;
-    return 1;
+uint32_t wanted_shadow_divisor(int adaptive_level) {
+    uint32_t divisor = NVN_FLAG("shadow_quarter") ? 4 : NVN_FLAG("shadow_half") ? 2 : 1;
+    if (adaptive_level == 1) divisor = std::max(divisor, 2u);
+    if (adaptive_level >= 2) divisor = std::max(divisor, 4u);
+    return divisor;
+}
+
+struct AdaptiveShadowState {
+    int level = 0;  // 0: game defaults, 1: half, 2: quarter, 3: quarter without moving shadows
+    int since_change = 0;
+    int64_t gpu_ns[90] = {};
+    uint64_t executor_ns[90] = {};
+    int count = 0, next = 0;
+    uint64_t serial = 0;
+    bool active = false;
+};
+
+int adaptive_shadow_level() {
+    static AdaptiveShadowState state;
+    if (!NVN_FLAG("adaptive_shadows")) {
+        if (state.level) NVN_LOG("adaptive shadows: restoring the game's shadow settings\n");
+        state.level = 0;
+        state.count = state.next = 0;
+        state.since_change = 0;
+        state.active = false;
+        return 0;
+    }
+    if (!state.active) {
+        state.active = true;
+        state.level = 0;
+        state.count = state.next = 0;
+        state.since_change = 0;
+    }
+
+    int64_t gpu_ns = 0;
+    const int64_t budget_ns = frame_period_ns();
+    if (budget_ns <= 0 || !game_gpu_frame(state.serial, gpu_ns) || gpu_ns <= 0) return state.level;
+
+    state.gpu_ns[state.next] = gpu_ns;
+    state.executor_ns[state.next] = last_frame_run_ns();
+    state.next = (state.next + 1) % 90;
+    state.count = std::min(state.count + 1, 90);
+    state.since_change = std::min(state.since_change + 1, 1000);
+
+    int next_level = state.level;
+    if (state.count >= 8 && state.since_change >= 15 && state.level < 3) {
+        double gpu_sum = 0.0, executor_sum = 0.0;
+        int gpu_over = 0, executor_over = 0;
+        for (int k = 0; k < 8; k++) {
+            const int i = (state.next - 1 - k + 90) % 90;
+            gpu_sum += state.gpu_ns[i];
+            executor_sum += static_cast<double>(state.executor_ns[i]);
+            gpu_over += state.gpu_ns[i] > budget_ns;
+            executor_over += state.executor_ns[i] > static_cast<uint64_t>(budget_ns);
+        }
+        if (gpu_sum / 8.0 > 0.90 * budget_ns || gpu_over >= 2 ||
+            executor_sum / 8.0 > 0.90 * budget_ns || executor_over >= 2)
+            next_level++;
+    }
+
+    if (next_level == state.level && state.count == 90 && state.since_change >= 90 && state.level > 0) {
+        int64_t worst_gpu = 0;
+        uint64_t worst_executor = 0;
+        for (int k = 0; k < 90; k++) {
+            const int i = (state.next - 1 - k + 90) % 90;
+            worst_gpu = std::max(worst_gpu, state.gpu_ns[i]);
+            worst_executor = std::max(worst_executor, state.executor_ns[i]);
+        }
+        if (worst_gpu < 0.72 * budget_ns && worst_executor < static_cast<uint64_t>(0.72 * budget_ns))
+            next_level--;
+    }
+
+    if (next_level != state.level) {
+        static constexpr const char* names[] = {
+            "game defaults", "half-resolution shadow maps", "quarter-resolution shadow maps",
+            "quarter-resolution shadow maps and moving shadows off"};
+        NVN_LOG("adaptive shadows: %s -> %s (GPU %.1f ms, executor %.1f ms, budget %.1f ms)\n",
+                names[state.level], names[next_level], gpu_ns / 1e6, last_frame_run_ns() / 1e6, budget_ns / 1e6);
+        state.level = next_level;
+        state.since_change = 0;
+    }
+    return state.level;
 }
 
 float wanted_lod_scale() {
@@ -154,7 +232,7 @@ void write_status() {
     }
 }
 
-void shadows(const uint8_t* base) {
+void shadows(const uint8_t* base, int adaptive_level) {
     uint8_t* sys = object_at<uint8_t>(base, kShadowPointer);
     if (!sys) return;
     auto* size = reinterpret_cast<volatile uint32_t*>(sys + kShadowSize);
@@ -162,7 +240,7 @@ void shadows(const uint8_t* base) {
     static uint32_t ours = 0;       // the last size we set (0: none)
     if (!*size) return;  // not set up yet
     if (!ours || *size != ours) game_size = *size;  // the game changed it (a load, a cutscene): that's the new default
-    const uint32_t divisor = wanted_shadow_divisor();
+    const uint32_t divisor = wanted_shadow_divisor(adaptive_level);
     const uint32_t target = divisor > 1 ? std::max<uint32_t>(game_size / divisor, 256) : game_size;
     g_status.shadow_seen = true;
     g_status.shadow = *size, g_status.shadow_game = game_size;
@@ -269,7 +347,7 @@ IntSwitch g_ao{"ambient occlusion", 0x1a8c};
 ByteSwitch g_sway{"foliage sway", 0x1a59, 0};
 ByteSwitch g_sway_shadow{"foliage sway in shadows", 0x1a56, 0};
 
-void renderer_switches(const uint8_t* base) {
+void renderer_switches(const uint8_t* base, int adaptive_level) {
     uint8_t* renderer = object_at<uint8_t>(base, kRendererPointer);
     if (!renderer) return;
     const bool no_sway = NVN_FLAG("no_foliage_sway");
@@ -283,7 +361,7 @@ void renderer_switches(const uint8_t* base) {
     if (!seen || !ours || *dynamic != 0) game_dynamic = *dynamic;
     if (!seen) NVN_LOG("game settings: dynamic shadows is %u in the game\n", game_dynamic);
     seen = true;
-    const bool off = NVN_FLAG("no_dynamic_shadows");
+    const bool off = NVN_FLAG("no_dynamic_shadows") || adaptive_level >= 3;
     const uint8_t target = off ? 0 : game_dynamic;
     if (*dynamic != target) {
         using Setter = void (*)(void*, bool);
@@ -347,10 +425,11 @@ void culling_switches(const uint8_t* base) {
 void game_tweaks() {
     const uint8_t* base = known_main();
     if (!base) return;
-    shadows(base);
+    const int adaptive_level = adaptive_shadow_level();
+    shadows(base, adaptive_level);
     model_detail(base);
     texture_detail(base);
-    renderer_switches(base);
+    renderer_switches(base, adaptive_level);
     culling_switches(base);
     write_status();
 }

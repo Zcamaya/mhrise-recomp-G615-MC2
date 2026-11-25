@@ -11,6 +11,7 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
 NDK="${NDK_DIR:-$SDK/ndk/28.2.13676358}"
 case "$(uname -s)" in
   Darwin) HOST_TAG=darwin-x86_64 ;;
+  MINGW*|MSYS*|CYGWIN*) HOST_TAG=windows-x86_64 ;;
   *) HOST_TAG=linux-x86_64 ;;
 esac
 TCB="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
@@ -24,6 +25,10 @@ OUT="$TP/ffmpeg-android"
 BUILD="$TP/ffmpeg-build"
 API=30
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 4)}"
+MAKE="${MAKE:-make}"
+if ! command -v "$MAKE" > /dev/null 2>&1 && command -v mingw32-make > /dev/null 2>&1; then
+  MAKE=mingw32-make
+fi
 
 [ -f "$OUT/lib/libavformat.a" ] && { echo "ffmpeg: already built ($OUT)"; exit 0; }
 
@@ -41,8 +46,8 @@ fi
 export PATH="$TCB/bin:$PATH"
 rm -rf "$BUILD" "$OUT"
 mkdir -p "$BUILD" "$OUT"
-cd "$BUILD"
-"$SRC/configure" --prefix="$OUT" \
+cd "$SRC"
+./configure --prefix="$OUT" \
   --enable-cross-compile --target-os=android --arch=aarch64 \
   --cc="aarch64-linux-android$API-clang" --cxx="aarch64-linux-android$API-clang++" \
   --ar=llvm-ar --nm=llvm-nm --ranlib=llvm-ranlib --strip=llvm-strip \
@@ -50,7 +55,7 @@ cd "$BUILD"
   --disable-everything --disable-programs --disable-doc --disable-network --disable-autodetect \
   --disable-debug --disable-avdevice --disable-avfilter --disable-swscale --disable-swresample \
   --enable-static --disable-shared --enable-protocol=file --enable-demuxer=mov \
-  --enable-parser=h264,aac --enable-decoder=h264,aac > configure.log 2>&1 \
-  || { tail -30 configure.log; exit 1; }
-make -j"$JOBS" install-libs install-headers > build.log 2>&1 || { tail -40 build.log; exit 1; }
+  --enable-parser=h264,aac --enable-decoder=h264,aac > "$BUILD/configure.log" 2>&1 \
+  || { tail -30 "$BUILD/configure.log"; exit 1; }
+"$MAKE" -j"$JOBS" install-libs install-headers > "$BUILD/build.log" 2>&1 || { tail -40 "$BUILD/build.log"; exit 1; }
 echo "ffmpeg: ok -> $OUT"

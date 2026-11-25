@@ -8,7 +8,7 @@ import subprocess
 import uuid
 
 
-PACKAGE = "io.github.iamwilmar.mhriseport"
+PACKAGE = "io.github.iamwilmar.mhriseport.camon50ultra"
 ROOT = Path(__file__).resolve().parents[1]
 
 

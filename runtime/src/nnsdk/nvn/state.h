@@ -1,9 +1,9 @@
 #pragma once
 // Objetos de estado de NVN (blend, color, máscara de canales, profundidad/stencil, polígono,
-// multisample, atributos y streams de vértice). Viven dentro de structs del juego cuyo tamaño sale de
+// multisample, atributos y streams de vértice). Viven dentro de structs del game cuyo tamaño sale de
 // las direcciones de la traza (p. ej. tres BlendState seguidos a 8 bytes): aquí se codifican en esos
 // bytes con nuestro propio formato. Los valores de los enums siguen el orden estilo OpenGL de NVN; los
-// que el juego usa al arrancar lo confirman (ONE/ZERO, LEQUAL, ALWAYS, BACK, FILL, REPEAT…).
+// que el game usa al arrancar lo confirman (ONE/ZERO, LEQUAL, ALWAYS, BACK, FILL, REPEAT…).
 
 #include <cstdint>
 

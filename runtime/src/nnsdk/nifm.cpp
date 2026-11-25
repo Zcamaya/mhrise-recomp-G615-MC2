@@ -42,7 +42,7 @@ bool IsNetworkAvailable() { return g_accepted.load(); }
 // En la consola enseña el applet de error de red; aquí no hay nada que el usuario pueda arreglar: false.
 bool HandleNetworkRequestErrorResult() { return false; }
 
-// Sin red no se tocan las salidas: el juego las inicializa a -1 y solo las lee si hay éxito.
+// Sin red no se tocan las salidas: el game las inicializa a -1 y solo las lee si hay éxito.
 Result GetCurrentPrimaryIpAddress(in_addr*) { return kResultNoInternetConnection; }
 Result GetCurrentPrimaryIpAddress(socket::InAddr*) { return kResultNoInternetConnection; }
 Result GetCurrentIpConfigInfo(in_addr*, in_addr*, in_addr*, in_addr*, in_addr*) { return kResultNoInternetConnection; }

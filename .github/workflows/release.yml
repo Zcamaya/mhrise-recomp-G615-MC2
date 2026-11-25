@@ -53,7 +53,8 @@ jobs:
             exit 1
           fi
           export RELEASE=1 KEYSTORE="$RUNNER_TEMP/release.jks" KEY_ALIAS=recomp
-          APK_OUT="build/mhriseport-${GITHUB_REF_NAME}.apk" bash tools/build_apk.sh
+          APK_OUT="build/mhriseport-${GITHUB_REF_NAME}.apk" PACKAGE=io.github.iamwilmar.mhriseport \
+            LABEL="MH Rise port" bash tools/build_apk.sh
           APK_OUT="build/mhriseport-${GITHUB_REF_NAME}-antutu.apk" PACKAGE=com.antutu.ABenchMark \
             LABEL="MH Rise port (AnTuTu)" bash tools/build_apk.sh
           APK_OUT="build/mhriseport-${GITHUB_REF_NAME}-ludashi.apk" PACKAGE=com.ludashi.benchmark \

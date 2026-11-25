@@ -1,4 +1,4 @@
-// nier_loader: el juego desde la terminal de la Flip (sin ventana).
+// nier_loader: el game desde la terminal de la Flip (sin window).
 // Uso: nier_loader <carpeta_exefs> [--stubs]   (NIER_WATCHDOG=<s> cambia el watchdog)
 
 #include <cstdio>

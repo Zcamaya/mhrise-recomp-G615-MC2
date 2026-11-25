@@ -2,7 +2,7 @@
 // pide toda la memoria libre como heap ((disponible - usada) redondeado a 2 MB), saca de ahí 8 MB para su malloc
 // (StandardAllocator) y el motor se queda luego con todo lo que sobra del heap (total - asignado) en un bloque.
 // En la Switch eso es la memoria física de la aplicación; aquí es memoria virtual reservada sin compromiso
-// (MAP_NORESERVE): solo cuestan RAM las páginas que el juego toque, y al liberar un bloque se le devuelven a Linux.
+// (MAP_NORESERVE): solo cuestan RAM las páginas que el game toque, y al liberar un bloque se le devuelven a Linux.
 //
 // Como MemoryHeapManager del SDK: el heap crece y encoge por el final (encoger solo si esa cola está libre) y los
 // bloques se dan con el mejor ajuste (el hueco más pequeño que quepa; a igualdad, el de dirección más baja), desde
@@ -10,7 +10,7 @@
 //
 // La reserva es un memfd mapeado MAP_SHARED (si no se puede, memoria anónima como antes): así unas páginas del heap se
 // pueden ver también en otra dirección (alias_heap_pages), que es lo que hacen los memory pools virtuales de NVN
-// (nvn/memory.cpp) con los trozos de pools físicos que el juego les mapea. Liberar memoria es entonces abrir un hueco
+// (nvn/memory.cpp) con los trozos de pools físicos que el game les mapea. Liberar memoria es entonces abrir un hueco
 // en el memfd (MADV_DONTNEED no devuelve las páginas de memoria compartida), que también vacía los alias.
 
 #include <fcntl.h>
@@ -82,7 +82,7 @@ void (*g_tls_free)(void*, size_t) = nullptr;
 bool reserve() {
     if (g_base) return true;
     const size_t size = kTotalMemory + kHeapUnit;
-    // El memfd no ocupa nada hasta que se tocan sus páginas (como MAP_NORESERVE). <datos>/no_memfd: memoria anónima,
+    // El memfd no ocupa nada hasta que se tocan sus páginas (como MAP_NORESERVE). <data>/no_memfd: memoria anónima,
     // como antes (sin alias: lo que MH Rise mapea en sus pools virtuales se vería a cero).
     const bool memfd = !nnsdk::ini::on("no_memfd");
     int fd = memfd ? memfd_create("nnsdk-heap", MFD_CLOEXEC) : -1;
@@ -224,7 +224,7 @@ void FreeMemoryBlock(uintptr_t address, size_t size) {
     printf("[nnsdk] FreeMemoryBlock 0x%lx +%zu KB\n", address, size / 1024);
 }
 
-// El thread_local ELF del juego lo monta el loader (loader/tls.cpp) sin pedir memoria al juego; solo se apunta.
+// El thread_local ELF del game lo monta el loader (loader/tls.cpp) sin pedir memoria al game; solo se apunta.
 void SetMemoryAllocatorForThreadLocal(void* (*allocate)(size_t, size_t), void (*deallocate)(void*, size_t)) {
     g_tls_allocate = allocate;
     g_tls_free = deallocate;

@@ -1,9 +1,9 @@
 // nn::util: utilidades puras del SDK (UTF-8/UTF-16, printf, StringBuilder, Base64, UUID, URI, el diccionario
 // intrusivo, pmr) y su zlib (nnutilZlib_*). Lo que tiene casos límite se calca de sdk.elf (SDK 11.4): códigos de
-// retorno, cuánto se escribe y cuándo se termina en 0, porque el juego mira esos resultados. Los printf van a los de
+// retorno, cuánto se escribe y cuándo se termina en 0, porque el game mira esos resultados. Los printf van a los de
 // bionic, con el formato retocado donde el formateador del SDK hace otra cosa (sdk_format). La zlib del SDK es la
 // 1.2.11 renombrada; la del sistema (libz del NDK) tiene el mismo z_stream (112 bytes) y solo compara la primera cifra
-// de la versión, así que se le pasa la llamada tal cual, con los zalloc/zfree del juego.
+// de la versión, así que se le pasa la llamada tal cual, con los zalloc/zfree del game.
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -88,7 +88,7 @@ ConversionResult utf8_to_utf16(size_t* written, size_t* consumed, uint16_t* dst,
         } else if (n == 4) {
             if (!is_continuation(s[1]) || !is_continuation(s[2]) || !is_continuation(s[3])) break;
             const uint32_t cp = ((c & 7) << 18 | (s[1] & 0x3f) << 12 | (s[2] & 0x3f) << 6 | (s[3] & 0x3f)) - 0x10000;
-            if (cp >> 20) break;  // sobrelargo (da la vuelta) o más allá de U+10FFFF
+            if (cp >> 20) break;  // sobrelargo (da la loop) o más allá de U+10FFFF
             if (dst_left == 1) {
                 result = ConversionResult_InsufficientLength;
                 break;
@@ -221,12 +221,12 @@ int code_point_count(const char* str, size_t n) {
     return count;
 }
 
-// El formateador del SDK (VFormatString) da lo mismo que el vsnprintf de bionic en todo lo que usa el juego (%s %.*s
+// El formateador del SDK (VFormatString) da lo mismo que el vsnprintf de bionic en todo lo que usa el game (%s %.*s
 // %u %d %08x, cabeceras HTTP) salvo en: %p (16 cifras hexadecimales sin "0x", sin precisión) y lo que no conoce (%n,
 // %a, %1$s, %% o %c con modificadores; bionic aborta con %n). Eso se reescribe aquí antes de llamar a bionic. Con lo
 // que no conoce, el SDK copia el texto hasta el carácter que no entiende (sin él), sigue leyendo desde ese carácter y
 // se queda con los argumentos de los '*' que ya leyó: aquí cada '*' se gasta con un "%.0s" (un argumento de 8 bytes que
-// no imprime nada). Quedan distintos, y no salen en el juego: %hhd (el SDK no extiende el signo), %f de más de 17
+// no imprime nada). Quedan distintos, y no salen en el game: %hhd (el SDK no extiende el signo), %f de más de 17
 // cifras (redondea distinto), "%+.0d" con 0 (el SDK no pone el signo) y el ancho de "%*p". Comprobado contra el código
 // de sdk.elf con formatos aleatorios. Devuelve format si no hay nada que cambiar.
 const char* sdk_format(const char* format, std::string& rewritten) {
@@ -298,7 +298,7 @@ ConversionResult ConvertStringUtf16NativeToUtf8(char* dst, int dst_len, const ui
 
 bool VerifyUtf8String(const char* s, size_t size) { return code_point_count(s, size) != -1; }
 
-// Devuelven lo que ocuparía la salida entera (sin el 0), como snprintf: el juego lo usa para saber si truncó.
+// Devuelven lo que ocuparía la salida entera (sin el 0), como snprintf: el game lo usa para saber si truncó.
 int VSNPrintf(char* buffer, size_t size, const char* format, va_list args) {
     std::string rewritten;
     return vsnprintf(buffer, size, sdk_format(format, rewritten), args);
@@ -323,7 +323,7 @@ Uuid GenerateUuid() {
     return uuid;
 }
 
-// El objeto es del juego (lo tiene en su pila); el layout es el del SDK.
+// El objeto es del game (lo tiene en su pila); el layout es el del SDK.
 class StringBuilder {
 public:
     StringBuilder(char* buffer, size_t size);
@@ -383,7 +383,7 @@ class Base64 {
 public:
     enum Mode {
         Mode_Normal = 0,             // con CR LF cada 76 caracteres (MIME); cualquier otro valor hace lo mismo
-        Mode_NormalNoLinefeed = 1,   // lo que usa el juego
+        Mode_NormalNoLinefeed = 1,   // lo que usa el game
         Mode_UrlSafe = 2,            // '-' y '_', sin '=' ni saltos
     };
     enum Status { Status_Success = 0, Status_BufferFull = 1, Status_BadData = 2 };
@@ -432,7 +432,7 @@ Base64::Status Base64::ToBase64String(char* dst, size_t size, const void* src, s
     return Status_Success;
 }
 
-// UriParser: un URI de RFC 3986 partido en trozos que apuntan dentro de la cadena del juego. La red del juego lo usa
+// UriParser: un URI de RFC 3986 partido en trozos que apuntan dentro de la cadena del game. La red del game lo usa
 // para sacar host y puerto. Cada Parse* calca su homónimo del SDK, rarezas incluidas (lee el byte que sigue a la
 // autoridad aunque esté vacía, '%' vale como '-' en las etiquetas de dominio...).
 class UriPart {
@@ -697,7 +697,7 @@ bool UriPart::ParseInteger(uint16_t* out) const {
     return true;
 }
 
-// Diccionario intrusivo (árbol Patricia) del SDK: los nodos son del juego, que inserta con código inline y nos pide
+// Diccionario intrusivo (árbol Patricia) del SDK: los nodos son del game, que inserta con código inline y nos pide
 // buscar, recorrer y borrar. Cada nodo es a la vez interno (decide por ref_bit) y hoja (le llega una arista "hacia
 // atrás", de un nodo con ref_bit mayor o igual). La raíz es un nodo con ref_bit -1 y la clave vacía.
 struct IntrusiveDicNode {
@@ -726,7 +726,7 @@ private:
 namespace {
 
 int key_bit(const char* key, size_t size, int bit) {
-    const int64_t byte = bit >> 3;  // con signo: el -1 de la raíz no cae dentro de ninguna clave
+    const int64_t byte = bit >> 3;  // con signo: el -1 de la raíz no cae dentro de no clave
     if (size <= static_cast<uint64_t>(byte)) return 0;
     return static_cast<uint8_t>(key[size - 1 - byte]) >> (bit & 7) & 1;
 }
@@ -735,7 +735,7 @@ int key_bit(const char* key, size_t size, int bit) {
 
 namespace detail {
 
-// El primer elemento: el nodo que vuelve a la raíz por child[0]; desde él, un paso por child[1] y luego child[0]
+// El primer elemento: el nodo que vuelve a la raíz por child[0]; desde él, un step por child[1] y luego child[0]
 // mientras se baje.
 const IntrusiveDicNode* IntrusiveDicImpl::FindIter() const {
     const IntrusiveDicNode* last = &root_;
@@ -777,7 +777,7 @@ const IntrusiveDicNode* IntrusiveDicImpl::MoveIter(const IntrusiveDicNode* node,
     }
 }
 
-// Saca node del árbol y lo deja como un nodo suelto (apuntándose a sí mismo). Calca el SDK paso a paso: el orden de
+// Saca node del árbol y lo deja como un nodo suelto (apuntándose a sí mismo). Calca el SDK step a step: el orden de
 // las lecturas importa cuando un hijo es el propio nodo.
 void IntrusiveDicImpl::EraseImpl(IntrusiveDicNode* node) {
     const char* key = node->key;
@@ -832,8 +832,8 @@ MemoryResource* SetDefaultResource(MemoryResource* resource);
 
 namespace {
 
-// nn::MemoryResource con la vtable del SDK {~D1, ~D0, do_allocate, do_deallocate, do_is_equal}: el juego la llama
-// directamente (allocate/deallocate son inline en la cabecera). La memoria es del allocator del juego; por encima de
+// nn::MemoryResource con la vtable del SDK {~D1, ~D0, do_allocate, do_deallocate, do_is_equal}: el game la llama
+// directamente (allocate/deallocate son inline en la cabecera). La memoria es del allocator del game; por encima de
 // 16 de alineación se reserva de más y el puntero real se guarda justo detrás del bloque, como hace el SDK.
 class GameNewDelete {
 public:
@@ -891,7 +891,7 @@ struct StringView {
 extern "C" {
 
 // IntrusiveDicImpl::FindImpl(basic_string_view<char, std::__1::char_traits<char>> const&) const: con su nombre
-// mangleado porque std::__1 no existe en el NDK. Devuelve el nodo al que lleva la clave; el juego compara las claves.
+// mangleado porque std::__1 no existe en el NDK. Devuelve el nodo al que lleva la clave; el game compara las claves.
 const nn::util::IntrusiveDicNode*
 _ZNK2nn4util6detail16IntrusiveDicImpl8FindImplERKNS0_17basic_string_viewIcNSt3__111char_traitsIcEEEE(
     const nn::util::IntrusiveDicNode* root, const StringView* key) {

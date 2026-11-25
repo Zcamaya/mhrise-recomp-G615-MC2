@@ -104,7 +104,7 @@ void probe_limits(VkContext& c) {
     for (VkDeviceMemory m : mems) vkFreeMemory(c.device, m, nullptr);
 }
 
-// Driver environment: <datos>/driver_env.txt, one NAME=value per line (# starts a comment), set before the driver
+// Driver environment: <data>/driver_env.txt, one NAME=value per line (# starts a comment), set before the driver
 // is loaded. Mesa's drivers read their debug settings from the environment when the Vulkan instance is created:
 // TU_DEBUG=sysmem,nolrz,noubwc and FD_DEV_FEATURES=… for Turnip (still being brought up on the Adreno 8xx),
 // PAN_DEBUG / PANVK_DEBUG for PanVK. The settings menu writes it (Debug → Driver environment). Read at start-up.
@@ -221,8 +221,8 @@ bool create(VkContext& c, bool system_driver) {
             device_ext.push_back(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);
             draw_indirect_count = true;
         }
-    // Todo lo que soporte el driver (ASTC y BCn para las texturas del juego, lo que pidan los shaders
-    // traducidos…), menos robustBufferAccess, que cuesta rendimiento y el juego no lo necesita.
+    // Todo lo que soporte el driver (ASTC y BCn para las texturas del game, lo que pidan los shaders
+    // traducidos…), menos robustBufferAccess, que cuesta rendimiento y el game no lo necesita.
     VkPhysicalDeviceFeatures features{};
     vkGetPhysicalDeviceFeatures(c.gpu, &features);
     features.robustBufferAccess = VK_FALSE;
@@ -235,7 +235,7 @@ bool create(VkContext& c, bool system_driver) {
     // memory is there. Adreno shrugs that off; an ARM Mali takes it as a GPU page fault (GROUP_ERROR_FATAL in the log,
     // status ...02c2: a translation fault), drops the whole batch of work, uploads included, and the picture goes black
     // or magenta (ASTC that never arrived) until something rebuilds it. So on by default on Mali (vendor 0x13B5);
-    // <datos>/no_robust turns it off there, and <datos>/robusto turns it on anywhere. Read at start-up.
+    // <data>/no_robust turns it off there, and <data>/robusto turns it on anywhere. Read at start-up.
     const bool arm = c.props.vendorID == 0x13B5;
     bool robust = false;
     if (nnsdk::ini::on("robusto") || (arm && !nnsdk::ini::on("no_robust"))) {
@@ -247,7 +247,7 @@ bool create(VkContext& c, bool system_driver) {
             c.props.limits.maxVertexOutputComponents, c.props.limits.maxFragmentInputComponents,
             c.props.limits.maxGeometryInputComponents, c.props.limits.maxGeometryOutputComponents,
             c.props.limits.maxGeometryOutputVertices);
-    NVN_LOG("memoria: máx. %u reservas, granularidad buffer/imagen %llu\n", c.props.limits.maxMemoryAllocationCount,
+    NVN_LOG("memoria: máx. %u reservas, granularidad buffer/image %llu\n", c.props.limits.maxMemoryAllocationCount,
             static_cast<unsigned long long>(c.props.limits.bufferImageGranularity));
     for (uint32_t k = 0; k < c.memory.memoryHeapCount; k++)
         NVN_LOG("memoria: heap %u de %llu MB, flags 0x%x\n", k, static_cast<unsigned long long>(c.memory.memoryHeaps[k].size >> 20),
@@ -298,7 +298,7 @@ bool create(VkContext& c, bool system_driver) {
             c.present_fences = true;
         }
     }
-    // Con <datos>/robusto, también robustBufferAccess2 (VK_EXT_robustness2): los índices leídos fuera del buffer de
+    // Con <data>/robusto, también robustBufferAccess2 (VK_EXT_robustness2): los índices leídos fuera del buffer de
     // índices (robustBufferAccess no los cubre) dan 0 en vez de un fallo de página.
     VkPhysicalDeviceRobustness2FeaturesEXT robust2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
     if (robust)
@@ -319,7 +319,7 @@ bool create(VkContext& c, bool system_driver) {
     // Extended dynamic state: the rasterizer and depth/stencil state the game changes most often, set per draw. A game
     // state that differs only in those (cull mode, which face is front, depth test/write/compare, the stencil test and
     // its ops) shares one pipeline instead of one each: fewer pipelines to build (the hitches when something new shows
-    // up) and fewer to switch between. Off by default (drivers have had bugs with it): <datos>/dynamic_state at start-up
+    // up) and fewer to switch between. Off by default (drivers have had bugs with it): <data>/dynamic_state at start-up
     // (Settings → Graphics, where the driver has it).
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
     if (nnsdk::ini::on("dynamic_state"))
@@ -337,7 +337,7 @@ bool create(VkContext& c, bool system_driver) {
             }
     NVN_LOG("extended dynamic state: %s\n", c.extended_dynamic_state ? "on" : "off");
     // Vertex input dynamic state: the attributes' formats and the streams' strides and step rates per draw as well, so
-    // a mesh with another vertex layout doesn't make a pipeline of its own. Off by default: <datos>/vertex_input_state at
+    // a mesh with another vertex layout doesn't make a pipeline of its own. Off by default: <data>/vertex_input_state at
     // start-up (Settings → Graphics, where the driver has it).
     VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT vids{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT};

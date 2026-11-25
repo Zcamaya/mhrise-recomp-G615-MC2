@@ -86,7 +86,7 @@ public:
     // instance en 0x644 y el número de draw de un multi-draw en 0x648 (gl_BaseVertexARB, gl_BaseInstanceARB y
     // gl_DrawIDARB del GLSL de NVN), que salen de Vulkan (gl_BaseVertex, gl_BaseInstance, gl_DrawID). MH Rise usa 0x640
     // como VertexId − c0[0x640] (traza tf1, draws 14, 182 y 192): el índice sin base. VertexId es gl_VertexIndex, que
-    // lleva el vertexOffset que usemos (desplazado a la ventana de vértices en los draws directos, el del juego en los
+    // lleva el vertexOffset que usemos (desplazado a la window de vértices en los draws directos, el del game en los
     // indirectos): restar gl_BaseVertex lo quita en todos los casos. Con 0x640 a cero (antes) un draw directo desplazado
     // leía el vértice índice − mínimo y un multi-draw con base vertex 1302, el 1302 + i.
     bool HasHLEMacroState() const override { return stage == Shader::Stage::VertexB; }
@@ -243,8 +243,8 @@ bool eval_invocation(const Shader::IR::Value& value, const uint32_t lid[3], uint
 // Memoria compartida que en realidad es privada de cada invocación: el compilador de NVN derrama registros a la memoria
 // compartida (STS/LDS en tid·28 + k en el skinning de la cara de MH Rise, 793657b4f1e65631: el índice del 4.º hueso y
 // las componentes que no le caben en registros). Si todos los accesos son base(invocación) + k, con la misma base para
-// la invocación en todos y ventanas [base + kmin, base + kmax + 4) que no se solapan entre las invocaciones del grupo,
-// ninguna lee lo que escribe otra (con o sin barreras): es memoria privada y se pasa a la memoria local de Eden
+// la invocación en todos y windows [base + kmin, base + kmax + 4) que no se solapan entre las invocaciones del grupo,
+// no lee lo que escribe otra (con o sin barreras): es memoria privada y se pasa a la memoria local de Eden
 // (Private con índices constantes, que el driver deja en registros). Con esos stores a Workgroup dentro de los casos de
 // su switch (BRX), el driver de Qualcomm (512.746) deja la salida de la Flip igual, bit a bit, a la de ese SPIR-V con los
 // 4 pesos del skinning a 0 (los del caso 1272, que los pone a 0): suma 0, 1/0 = inf, inf·0 = NaN en todo el grupo; un
@@ -301,7 +301,7 @@ int shared_to_local(Shader::IR::Program& program, const std::array<u32, 3>& work
     std::sort(bases.begin(), bases.end());
     for (size_t k = 1; k < bases.size(); k++)
         if (bases[k] - bases[k - 1] < window) return 0;
-    // La ventana va tras la memoria local que ya use el programa (LDL/STL), o sola (la de 1 KB por defecto no se usaba).
+    // La window va tras la memoria local que ya use el programa (LDL/STL), o sola (la de 1 KB por defecto no se usaba).
     const uint32_t first_word = uses_local ? (program.local_memory_size + 3) / 4 : 0;
     for (const Access& a : accesses) {
         const bool load = a.inst->GetOpcode() == Opcode::LoadSharedU32;
@@ -403,7 +403,7 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         Shader::HostTranslateInfo host{};
         host.support_conditional_barrier = options.keep_conditional_barriers;
         host.needs_demote_reorder = options.demote_reorder;
-        // Bindless de los uniform buffers del juego: arrays hasta el final del cbuf (los decals de c9 son 256 registros de
+        // Bindless de los uniform buffers del game: arrays hasta el final del cbuf (los decals de c9 son 256 registros de
         // 128 bytes en 32 KB; con el límite de 1024 descriptores repartido entre los arrays se cortaban). El Adreno admite
         // 524288 por etapa.
         host.bindless_cbuf_arrays = options.bindless_arrays;
@@ -420,7 +420,7 @@ bool translate(const uint8_t* code, size_t max_size, const Options& options, Tra
         }
         if (options.ir) {
             *options.ir = Shader::IR::DumpProgram(program);
-            // Qué textura (índice de descriptor) usa cada instrucción de imagen: el volcado de Eden no lo dice.
+            // Qué textura (índice de descriptor) usa cada instrucción de image: el volcado de Eden no lo dice.
             for (Shader::IR::Block* block : program.post_order_blocks)
                 for (Shader::IR::Inst& inst : block->Instructions())
                     if (Shader::IR::NameOf(inst.GetOpcode()).starts_with("Image")) {

@@ -1,6 +1,6 @@
-// nvnWindow*: la ventana NVN es un swapchain de Vulkan sobre la ventana de la APK. Las texturas
-// de la ventana del juego (1280x720) son nuestras; al presentar se copian a la imagen del swapchain.
-// Primer paso: se presenta el último ClearColor que el juego hizo sobre la textura.
+// nvnWindow*: the NVN window is a Vulkan swapchain over the APK window. The game's window
+// textures (1280x720) are ours; on present they are copied to the swapchain image.
+// First step: present the last ClearColor the game made on the texture.
 
 #include <android/native_window.h>
 #include <pthread.h>
@@ -26,11 +26,12 @@
 #include "nnsdk/nvn/present_probe.h"
 #include "nnsdk/nvn/nvn.h"
 #include "nnsdk/nvn/objects.h"
+#include "nnsdk/nvn/thermal_resolution.h"
 #include "nnsdk/runtime.h"
 
 namespace {
 
-// NVNwindowBuilder es opaco; solo guardamos lo que necesitamos.
+// NVNwindowBuilder is opaque; we only store what we need.
 struct WindowBuilder {
     void* device;
     void* native_window;
@@ -39,8 +40,8 @@ struct WindowBuilder {
     void* const* textures;
 };
 
-// Varios juegos de command buffer, fence y semáforos: con uno, presentar el frame N esperaba a que la GPU
-// acabara el N-1 (CPU y GPU por turnos: la GPU al 66 % y 22 fps en la fábrica).
+// Several command buffer, fence, and semaphore sets: with only one, presenting frame N waited for the
+// GPU to finish N-1 (CPU and GPU taking turns: GPU at 66% and 22 fps in the factory).
 constexpr int kPresentSlots = 3;
 struct PresentSlot {
     nvn::hud::Uploads hud;
@@ -57,8 +58,8 @@ struct Presenter {
 };
 
 Presenter g_presenter;
-// Un present cada vez (g_presenter, su pool y el ritmo). No es el del ejecutor: esperar al fence de hace
-// kPresentSlots frames o a una imagen del swapchain no para a los hilos del juego ni a una reproducción.
+// One present at a time (g_presenter, its pool, and pacing). This is not the executor lock: waiting on
+// a fence from kPresentSlots frames ago or on a swapchain image must not stop game threads or replay.
 std::mutex g_present_mutex;
 
 bool init_presenter(nvn::VkContext& c) {
@@ -113,13 +114,13 @@ bool build_swapchain(nvn::Window& w) {
     for (const VkSurfaceFormatKHR& f : formats)
         if (f.format == VK_FORMAT_R8G8B8A8_UNORM) format = f;
 
-    // La pantalla de la Flip es vertical de fábrica (1080x1920) y Android la usa girada: el surface
-    // da el tamaño ya en horizontal (1920x1080) con una rotación de 90°. Pretransformar obligaría a
-    // dibujar girado (el blit no puede), así que se pide sin transformar y la gira el compositor.
+    // The Flip's screen is portrait by default (1080x1920) and Android uses it rotated: the surface
+    // reports the size already in landscape (1920x1080) with a 90-degree rotation. Pre-transform would
+    // require drawing rotated (the blit cannot), so we request no transform and let the compositor rotate.
     w.extent = caps.currentExtent;
     VkSurfaceTransformFlagBitsKHR transform = caps.currentTransform;
     if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    NVN_LOG("swapchain %ux%u (transformación actual 0x%x, usada 0x%x)\n", w.extent.width, w.extent.height,
+    NVN_LOG("swapchain %ux%u (current transform 0x%x, used 0x%x)\n", w.extent.width, w.extent.height,
             caps.currentTransform, transform);
     VkSwapchainCreateInfoKHR info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     info.surface = w.surface;
@@ -158,7 +159,7 @@ bool build_swapchain(nvn::Window& w) {
         if (c->present_fences && vkCreateFence(c->device, &fi, nullptr, &w.images[i].released) != VK_SUCCESS) return false;
     }
 
-    NVN_LOG("swapchain %ux%u, %u imágenes, formato %d, present fences %d\n",
+    NVN_LOG("swapchain %ux%u, %u images, format %d, present fences %d\n",
             w.extent.width, w.extent.height, count, format.format, c->present_fences);
     return true;
 }
@@ -225,8 +226,8 @@ VkResult nvn::Window::queue_image(uint32_t index, const VkPresentTimeGOOGLE* whe
 }
 
 namespace {
-// DEPURACIÓN: <datos>/lsfg_margen con unos milisegundos (p. ej. "4"): margen fijo entre el generado y el real, en vez
-// del que se ajusta solo. Se lee como mucho una vez por segundo; -1 si no hay fichero.
+// DEBUG: <data>/lsfg_margen with milliseconds (e.g. "4"): fixed margin between the generated and real frame,
+// instead of the auto-adjusted one. Read at most once per second; -1 if there is no file.
 int64_t live_margin_ns() {
     static int64_t value = -1;
     static std::chrono::steady_clock::time_point next{};
@@ -241,17 +242,17 @@ int64_t live_margin_ns() {
         }
         const int64_t v = ms < 0 ? -1 : static_cast<int64_t>(ms * 1e6);
         if (v != value) {
-            if (v < 0) NVN_LOG("lsfg: margen del real tras el generado: automático\n");
-            else NVN_LOG("lsfg: margen del real tras el generado fijo en %.1f ms\n", ms);
+            if (v < 0) NVN_LOG("lsfg: margin of real frame after generated: automatic\n");
+            else NVN_LOG("lsfg: margin of real frame after generated fixed at %.1f ms\n", ms);
         }
         value = v;
     }
     return value;
 }
-// El real tiene que salir un refresco después de que salga el generado, y el generado sale cuando la GPU lo acaba
-// (detrás del frame del juego): desde que se manda hasta que se ve pasan L ms, que dependen de la carga. Se mide L con
-// los tiempos de presentación pasados (VK_GOOGLE_display_timing) y el real se pide para "mandado + 16,7 + L - 1"; si
-// un generado no llega a verse (el compositor lo tiró), se sube L.
+// The real frame must appear one refresh after the generated frame appears, and the generated frame appears when
+// the GPU finishes it (behind the game's frame): from submission to display it takes L ms, depending on load. L is
+// measured using past presentation timings (VK_GOOGLE_display_timing) and the real frame is requested for
+// "submitted + 16.7 + L - 1"; if a generated frame is not displayed (the compositor dropped it), L is increased.
 class LsfgPacer {
 public:
     int64_t margin_ns(VkDevice device, VkSwapchainKHR swapchain) {
@@ -277,11 +278,11 @@ private:
         int64_t ns = 0;
     };
     void note(const VkPastPresentationTimingGOOGLE& t) {
-        if (!(t.presentID & 1)) {  // un real: ¿se vio el generado de delante?
+        if (!(t.presentID & 1)) {  // a real frame: was the generated frame before it shown?
             const uint32_t g = t.presentID - 1;
             if (g > last_seen_g_ && g > 1) {
-                latency_ns_ = std::min<int64_t>(latency_ns_ + 4000000, 45000000);  // no salió: más margen
-                if (dropped_++ < 5) NVN_LOG("lsfg: el generado %u no se vio; margen %.1f ms\n", g, latency_ns_ / 1e6);
+                latency_ns_ = std::min<int64_t>(latency_ns_ + 4000000, 45000000);  // not shown: more margin
+                if (dropped_++ < 5) NVN_LOG("lsfg: generated frame %u was not shown; margin %.1f ms\n", g, latency_ns_ / 1e6);
             }
             return;
         }
@@ -289,7 +290,7 @@ private:
         if (s.id != t.presentID || !t.actualPresentTime) return;
         last_seen_g_ = t.presentID;
         const int64_t l = static_cast<int64_t>(t.actualPresentTime) - s.ns;
-        if (l > 0 && l < 100000000) latency_ns_ += (l - latency_ns_) / 8;  // media móvil
+        if (l > 0 && l < 100000000) latency_ns_ += (l - latency_ns_) / 8;  // moving average
     }
     PFN_vkGetPastPresentationTimingGOOGLE get_past_ = nullptr;
     Sent sent_[kRing];
@@ -298,17 +299,17 @@ private:
 };
 LsfgPacer g_lsfg_pacer;
 
-// El reloj de MH Rise (16.0.1), en el objeto de via.Application (App = *(main+0x12950348)). Su bucle principal
-// (main+0x6b047c0) mide cada vuelta con GetSystemTick, ejecuta el frame (main+0x6b03fa4) y luego ESPERA (sleep de 1 ms,
-// y girando los últimos 2 ms) hasta que hayan pasado App+0x430 / App+0x434 frames de 60 Hz: base 60 y MaxFps 30 en
-// juego (main+0x3600f04 pone MaxFps 60 u 30 y el intervalo 1 o 2 de la ventana a la vez; las cargas van a 60). El paso es
-// variable (App+0x441, isFixedFrameRate, a 0): dt = lo medido en frames de 60 Hz (como mucho 8, App+0x438; más de 50,
-// App+0x43c, vuelve a 1) en App+0x41c, y en segundos en App+0x424; App+0x420 = ms de la vuelta anterior. O sea: entre
-// 7,5 y 60 fps el juego va a su velocidad (no a cámara lenta como NieR), pero forzar el intervalo 1 al presentar no
-// basta para 60: el limitador del juego seguía en 30. Con <datos>/60fps se le pone MaxFps 60 en cada present (el juego lo
-// vuelve a poner en 30 al cambiar de escena) y al quitarlo se le devuelve lo suyo.
-constexpr size_t kAppPointer = 0x12950348;      // via.Application* (dato de main)
-constexpr size_t kLimiterLoad = 0x6b04828;      // ldr s1, [x19, #0x434]: el MaxFps que lee el limitador
+// MH Rise (16.0.1) game clock, in the via.Application object (App = *(main+0x12950348)). Its main loop
+// (main+0x6b047c0) measures each iteration with GetSystemTick, runs the frame (main+0x6b03fa4), then WAITS (1 ms sleep,
+// and spinning for the last 2 ms) until App+0x430 / App+0x434 60 Hz frames have passed: base 60 and MaxFps 30 in
+// gameplay (main+0x3600f04 sets MaxFps to 60 or 30 and the window interval to 1 or 2 at the same time; loading uses 60).
+// The step is variable (App+0x441, isFixedFrameRate, 0): dt = measured in 60 Hz frames (at most 8, App+0x438; over 50,
+// App+0x43c, back to 1) in App+0x41c, and in seconds in App+0x424; App+0x420 = previous loop ms. So: between 7.5 and
+// 60 fps the game runs at its own speed (not slow motion like NieR), but forcing present interval 1 is not enough for 60:
+// the game's limiter stayed at 30. With <data>/60fps MaxFps is set to 60 on each present (the game sets it back to 30 on
+// scene changes) and removing it restores its value.
+constexpr size_t kAppPointer = 0x12950348;      // via.Application* (main data)
+constexpr size_t kLimiterLoad = 0x6b04828;      // ldr s1, [x19, #0x434]: MaxFps read by the limiter
 constexpr uint32_t kLimiterLoadCode = 0xBD443661;
 struct GameClock {  // App+0x41c..0x434
     float dt60, frame_ms, dt, unused[2], base, max_fps;
@@ -320,43 +321,43 @@ GameClock* game_clock() {
     static const bool known = [] {
         const bool ok = base && nnsdk::host().main_size > kAppPointer + 8 &&
                         *reinterpret_cast<const uint32_t*>(base + kLimiterLoad) == kLimiterLoadCode;
-        NVN_LOG("reloj del juego: %s\n", ok ? "MH Rise 16.0.1 (App en main+0x12950348)" : "no es el main conocido: sin tocar MaxFps");
+        NVN_LOG("game clock: %s\n", ok ? "MH Rise 16.0.1 (App at main+0x12950348)" : "not the known main binary: not touching MaxFps");
         return ok;
     }();
     if (!known) return nullptr;
     const uint64_t app = *reinterpret_cast<const volatile uint64_t*>(base + kAppPointer);
-    if (!app) return nullptr;  // aún sin via.Application
+    if (!app) return nullptr;  // via.Application not ready yet
     auto* c = reinterpret_cast<GameClock*>(app + 0x41c);
     return c->base == 60.0f ? c : nullptr;
 }
 
-// --- Resolución dinámica (MH Rise 16.0.1) ---
-// via.render.Renderer (*(main+0x12950538)) guarda en +0x1a78 su ImageQualityRate. La actualización de RenderOutput
-// (main+0x7936a24) lo multiplica cada frame por su ImageQuality (en portátil la escena sale a 960x540) y layer.Scene recorta
-// a eso su región (ImageQualityRegion) y la escala él a la salida: el resto del port no cambia. El juego solo lo toca al
-// cargar (main+0x5389b50: 0,1 mientras carga, 1,0 al acabar). Su propia resolución dinámica (snow.DynamicResolutionManager)
-// escribe en RenderOutput y aquí no baja de 960x540; esto multiplica encima. Cambiarlo cuesta un frame sin la historia del
-// TAA: por pasos (anchos múltiplos de 64: 960, 896, 832, 768, 704) y con esperas. En combate la GPU del frame del juego
-// pasaba de 33 ms (al 90-99 % y a su reloj máximo): 25 y 21 fps.
-// Baja un paso cuando la media de los últimos 8 frames pasa del 91 % del presupuesto (33,3 ms a 30 fps) o dos de ellos
-// pasan del 100 %, como pronto 0,5 s después del cambio anterior y solo si el ejecutor cabe (si el frame lo limita la CPU,
-// bajar la resolución no lo arregla). Sube tras 3 s sin cambios si el peor de esos 90 frames, escalado por los píxeles
-// del paso de arriba, cabe en el 78 % (con 2 s y el 80 % subía y bajaba 7 veces en 10 s al entrar en la misión).
-// <datos>/no_dynamic_resolution (en vivo): quieta en la resolución base.
-// Resolución base (en vivo, el menú de opciones): la escena de portátil es 960x540 dentro de la salida de 1280x720, y la
-// profundidad y el resto de la escena ya son de 1280x720, así que el ratio puede subir hasta llenarla. <datos>/resolution_576,
-// resolution_648 o resolution_720: la escena a 1024x576, 1152x648 o 1280x720 (720p de verdad, sin escalar del juego), y
-// la dinámica baja desde ahí con los mismos pasos. Sin ninguno, 960x540 como el juego.
-constexpr size_t kRendererPointer = 0x12950538;  // via.render.Renderer* (dato de main)
+// --- Dynamic resolution (MH Rise 16.0.1) ---
+// via.render.Renderer (*(main+0x12950538)) stores its ImageQualityRate at +0x1a78. The RenderOutput update
+// (main+0x7936a24) multiplies it every frame by its ImageQuality (in handheld the scene renders at 960x540) and layer.Scene crops
+// its region (ImageQualityRegion) to that and scales it to the output: the rest of the port does not change. The game only touches it on
+// load (main+0x5389b50: 0.1 while loading, 1.0 when done). Its own dynamic resolution (snow.DynamicResolutionManager)
+// writes to RenderOutput and here does not go below 960x540; this multiplies on top. Changing it costs one frame without TAA history:
+// by steps (widths multiples of 64: 960, 896, 832, 768, 704) and with waits. In combat the game frame GPU time
+// exceeded 33 ms (at 90-99% and max clock): 25 and 21 fps.
+// Steps down when the average of the last 8 frames exceeds 91% of the budget (33.3 ms at 30 fps) or two of them
+// exceed 100%, no sooner than 0.5 s after the previous change and only if the executor fits (if the frame is CPU-limited,
+// lowering resolution does not help). Steps up after 3 s without changes if the worst of those 90 frames, scaled by the pixels of
+// the next step up, fits in 78% (with 2 s and 80% it oscillated up/down 7 times in 10 s when entering a quest).
+// <data>/no_dynamic_resolution (live): stays at the base resolution.
+// Base resolution (live, options menu): the handheld scene is 960x540 inside a 1280x720 output, and
+// depth and the rest of the scene are already 1280x720, so the ratio can increase to fill it. <data>/resolution_576,
+// resolution_648 or resolution_720: scene at 1024x576, 1152x648 or 1280x720 (true 720p, without game scaling), and
+// dynamic resolution steps down from there with the same steps. Without any, 960x540 like the game.
+constexpr size_t kRendererPointer = 0x12950538;  // via.render.Renderer* (main data)
 constexpr size_t kRateField = 0x1a78;
-constexpr size_t kRateSetter = 0x78a0ea0;  // set_ImageQualityRate: adrp/ldr del Renderer y str s0, [x8, #0x1a78]
+constexpr size_t kRateSetter = 0x78a0ea0;  // set_ImageQualityRate: adrp/ldr of Renderer and str s0, [x8, #0x1a78]
 constexpr uint32_t kRateSetterCode[3] = {0x90058588, 0xF9429D08, 0xBD1A7900};
-constexpr size_t kRateLoad = 0x7936e20;  // ldr s1, [x8, #0x1a78] en la actualización de RenderOutput
+constexpr size_t kRateLoad = 0x7936e20;  // ldr s1, [x8, #0x1a78] in RenderOutput update
 constexpr uint32_t kRateLoadCode = 0xBD5A7901;
-constexpr float kRates[] = {1.0f, 0.93334f, 0.86667f, 0.80001f, 0.73334f};  // un poco por encima: floor no pierde un píxel
+constexpr float kRates[] = {1.0f, 0.93334f, 0.86667f, 0.80001f, 0.73334f};  // slightly above: floor does not lose a pixel
 constexpr int kLevels = static_cast<int>(std::size(kRates));
 
-// La base elegida: el ratio sobre 960x540 y las líneas, para el log
+// Selected base: ratio over 960x540 and lines, for logging
 struct BaseResolution {
     float rate;
     int lines;
@@ -376,12 +377,15 @@ BaseResolution base_resolution() {
 
 struct DynamicResolution {
     int level = 0;
-    int since_change = 1000;  // frames de GPU desde el último cambio
+    int thermal_level = 0;
+    int applied_level = 0;
+    int since_change = 1000;  // GPU frames since the last change
     int64_t samples[90] = {};
     int count = 0, next = 0;
     uint64_t serial = 0;
-    uint64_t changes = 0;   // para el log de ritmo
-    bool written = false;   // se escribió algo distinto de 1,0
+    uint64_t thermal_serial = 0;
+    uint64_t changes = 0;   // for pace logging
+    bool written = false;   // something other than 1.0 was written
     int logged = 0;
 };
 DynamicResolution g_dynres;
@@ -393,8 +397,8 @@ volatile float* game_quality_rate() {
         const bool ok = base && nnsdk::host().main_size > kRendererPointer + 8 && code[0] == kRateSetterCode[0] &&
                         code[1] == kRateSetterCode[1] && code[2] == kRateSetterCode[2] &&
                         *reinterpret_cast<const uint32_t*>(base + kRateLoad) == kRateLoadCode;
-        NVN_LOG("resolución dinámica: %s\n", ok ? "MH Rise 16.0.1 (Renderer en main+0x12950538, ImageQualityRate en +0x1a78)"
-                                                : "no es el main conocido: sin tocar la resolución");
+        NVN_LOG("dynamic resolution: %s\n", ok ? "MH Rise 16.0.1 (Renderer at main+0x12950538, ImageQualityRate at +0x1a78)"
+                                                : "not the known main binary: not touching resolution");
         return ok;
     }();
     if (!known) return nullptr;
@@ -402,13 +406,13 @@ volatile float* game_quality_rate() {
     return renderer ? reinterpret_cast<volatile float*>(renderer + kRateField) : nullptr;
 }
 
-// Desde el hilo que presenta, una vez por frame. period_ns: lo que dura un frame (el presupuesto).
+// From the present thread, once per frame. period_ns: frame duration (the budget).
 void dynamic_resolution(int64_t period_ns) {
     DynamicResolution& d = g_dynres;
     volatile float* rate = game_quality_rate();
     if (!rate) return;
     const float now = *rate;
-    if (now < 0.2f) {  // cargando (0,1): es del juego; al acabar pone 1,0 y se vuelve a empezar desde arriba
+    if (now < 0.2f) {  // loading (0.1): set by the game; when done it sets 1.0 and starts over from the top
         d.level = 0;
         d.count = d.next = 0;
         d.since_change = 1000;
@@ -417,15 +421,32 @@ void dynamic_resolution(int64_t period_ns) {
     const BaseResolution base = base_resolution();
     static int base_logged = 0;
     if (base.lines != base_logged) {
-        NVN_LOG("resolución base: %dp (escena %dx%d)%s\n", base.lines, static_cast<int>(960 * base.rate),
-                static_cast<int>(540 * base.rate), NVN_FLAG("no_dynamic_resolution") ? ", fija" : ", la dinámica baja desde ahí");
+        NVN_LOG("base resolution: %dp (scene %dx%d)%s\n", base.lines, static_cast<int>(960 * base.rate),
+                static_cast<int>(540 * base.rate), NVN_FLAG("no_dynamic_resolution") ? ", fixed" : ", dynamic steps down from here");
         base_logged = base.lines;
     }
     if (NVN_FLAG("no_dynamic_resolution")) {
         d.level = 0;
+        d.thermal_level = 0;
+        d.thermal_serial = 0;
+        d.applied_level = 0;
         if (now != base.rate) *rate = base.rate;
         d.written = base.rate != 1.0f;
         return;
+    }
+    if (NVN_FLAG("thermal_resolution")) {
+        float headroom = -1.0f;
+        if (nvn::new_thermal_headroom(d.thermal_serial, headroom)) {
+            const int next = nvn::next_thermal_resolution_level(d.thermal_level, headroom);
+            if (next != d.thermal_level) {
+                d.thermal_level = next;
+                NVN_LOG("thermal resolution: HEAT %.0f%%, minimum scale x%.3f (level %d)\n",
+                        headroom * 100.0f, kRates[d.thermal_level], d.thermal_level);
+            }
+        }
+    } else {
+        d.thermal_level = 0;
+        d.thermal_serial = 0;
     }
     int64_t gpu = 0;
     const bool fresh = nvn::game_gpu_frame(d.serial, gpu);
@@ -452,7 +473,7 @@ void dynamic_resolution(int64_t period_ns) {
         }
         if (level != d.level) {
             if (d.logged++ < 40)
-                NVN_LOG("resolución dinámica: x%.3f -> x%.3f (escena ~%dx%d), GPU del juego %.1f ms\n", kRates[d.level],
+                NVN_LOG("dynamic resolution: x%.3f -> x%.3f (scene ~%dx%d), game GPU %.1f ms\n", kRates[d.level],
                         kRates[level], static_cast<int>(960 * base.rate * kRates[level]),
                         static_cast<int>(540 * base.rate * kRates[level]), gpu / 1e6);
             d.level = level;
@@ -460,19 +481,20 @@ void dynamic_resolution(int64_t period_ns) {
             d.changes++;
         }
     }
-    const float want = base.rate * kRates[d.level];
+    d.applied_level = std::max(d.level, d.thermal_level);
+    const float want = base.rate * kRates[d.applied_level];
     if (now != want) {
         *rate = want;
         d.written = d.written || want != 1.0f;
     }
 }
 
-// Registro de ritmo (siempre, sin <datos>/verbose_log): cada 10 s, si hubo algún frame de más de 40 ms (por debajo de 30 fps,
-// con el intervalo 2 del juego), una línea con por qué pudo ser: la GPU del frame del juego (media y peor), el ejecutor
-// por frame (y lo que esperó a la GPU), las pipelines que se crearon en NvnSubmit con el frame parado, las que fueron al
-// hilo de segundo plano (y los draws que no se dibujaron esperándolas) y las traducciones en NvnSubmit y en la precarga.
-// Sin frames lentos, una cada 60 s. Con fflush: si el juego se cierra, no se pierde lo último (va por la tubería, no a la
-// SD desde aquí).
+// Pace log (always, without <data>/verbose_log): every 10 s, if any frame took more than 40 ms (below 30 fps,
+// with the game's interval 2), one line explaining why: game frame GPU time (average and worst), executor per frame
+// (and how long it waited for the GPU), pipelines created in NvnSubmit with the frame stalled, those sent to the
+// background thread (and draws not rendered while waiting for them), and translations in NvnSubmit and preload.
+// Without slow frames, once every 60 s. With fflush: if the game closes, the latest data is not lost (pipe, not SD here).
+// (see above).
 void log_pace(const nvn::Window& w) {
     using clock = std::chrono::steady_clock;
     static clock::time_point window_start = clock::now(), last_present = window_start, last_line = window_start;
@@ -503,51 +525,70 @@ void log_pace(const nvn::Window& w) {
         slowest = std::move(d.slow_summary);
         d.slow_summary.clear();
     }
-    if (slow || now - last_line >= std::chrono::seconds(60)) {
+    const bool perf_stats = NVN_FLAG("perf_stats");
+    if (slow || perf_stats || now - last_line >= std::chrono::seconds(60)) {
         last_line = now;
-        NVN_LOG("ritmo: %.1f fps, %llu frames de más de 40 ms (el peor %.0f ms), intervalo %d, resolución x%.3f (%llu cambios); "
-                "GPU del juego %.1f ms (peor "
-                "%.1f); ejecutor %.1f ms/frame (peor %.1f, %.1f esperando a la GPU); pipelines en NvnSubmit %llu (%.0f ms), "
-                "en segundo plano %llu (%.1f ms esperando pipelines), %llu draws omitidos por traducción, registradas %llu (%.0f ms); traducciones en NvnSubmit %llu (%.0f ms), precargadas %llu "
+        NVN_LOG("pace: %.1f fps, %llu frames over 40 ms (worst %.0f ms), interval %d, resolution x%.3f (%llu changes); "
+                "game GPU %.1f ms (worst "
+                "%.1f); executor %.1f ms/frame (worst %.1f, %.1f waiting for GPU); pipelines in NvnSubmit %llu (%.0f ms), "
+                "background %llu (%.1f ms waiting for pipelines), %llu draws skipped due to translation, recorded %llu (%.0f ms); translations in NvnSubmit %llu (%.0f ms), prefetched %llu "
                 "(%.0f ms)\n",
-                frames / secs, static_cast<unsigned long long>(slow), worst_ns / 1e6, w.present_interval, kRates[g_dynres.level],
+                frames / secs, static_cast<unsigned long long>(slow), worst_ns / 1e6, w.present_interval,
+                kRates[g_dynres.applied_level],
                 static_cast<unsigned long long>(std::exchange(g_dynres.changes, 0)),
                 gpu_frames ? gpu_sum / 1e6 / gpu_frames : 0.0, gpu_max / 1e6, run / 1e6 / std::max<uint64_t>(frames, 1),
                 run_max / 1e6, wait / 1e6 / std::max<uint64_t>(frames, 1), static_cast<unsigned long long>(live), live_ns / 1e6,
                 static_cast<unsigned long long>(async), pipeline_wait / 1e6, static_cast<unsigned long long>(skipped),
                 static_cast<unsigned long long>(known), known_ns / 1e6, static_cast<unsigned long long>(translated), translated_ns / 1e6, static_cast<unsigned long long>(prefetched),
                 prefetch_ns / 1e6);
-        if (slowest_ns) NVN_LOG("ritmo: el envío más lento, %.0f ms: %s\n", slowest_ns / 1e6, slowest.c_str());
+        if (slowest_ns) NVN_LOG("pace: slowest submit, %.0f ms: %s\n", slowest_ns / 1e6, slowest.c_str());
         fflush(stdout);
     }
     window_start = now;
     frames = slow = worst_ns = 0;
 }
 
-// Límite de FPS (el menú de opciones; en vivo): <datos>/fps_20, fps_25, fps_40, fps_45 o 60fps. Sin ninguno, lo del juego
-// (30 jugando, 60 en las cargas). El paso del juego es variable (ver GameClock): entre 7,5 y 60 fps va a su velocidad, así
-// que bajar el límite ahorra GPU y batería sin cámara lenta; subirlo pide más. En las cargas el juego pide 60 y se le deja
-// (un límite bajo las alargaría).
+// FPS limit (options menu; live): <data>/fps_20, fps_25, fps_40, fps_45 or 60fps. Without any, use the game's value
+// (30 in gameplay, 60 in loading screens). The game step is variable (see GameClock): between 7.5 and 60 fps it runs at its own speed, so
+// lowering the limit saves GPU and battery without slow motion; raising it demands more. During loading the game requests 60 and it is left as-is
+// (a low limit would extend them).
 int fps_cap() {
+    static int thermal_level = 0;
+    static uint64_t thermal_serial = 0;
+    if (NVN_FLAG("thermal_fps")) {
+        float headroom = -1.0f;
+        if (nvn::new_thermal_headroom(thermal_serial, headroom)) {
+            const int next = nvn::next_thermal_fps_level(thermal_level, headroom);
+            if (next != thermal_level) {
+                thermal_level = next;
+                NVN_LOG("thermal fps: HEAT %.0f%%, cap %d fps\n", headroom * 100.0f,
+                        thermal_level == 1 ? 25 : thermal_level == 2 ? 20 : 0);
+            }
+        }
+    } else {
+        thermal_level = 0;
+        thermal_serial = 0;
+    }
+
     if (NVN_FLAG("60fps")) return 60;
     if (NVN_FLAG("fps_45")) return 45;
     if (NVN_FLAG("fps_40")) return 40;
     if (NVN_FLAG("fps_25")) return 25;
     if (NVN_FLAG("fps_20")) return 20;
-    return 0;
+    return thermal_level == 1 ? 25 : thermal_level == 2 ? 20 : 0;
 }
 
-// Pone el MaxFps del juego para ese límite (0: el suyo, de vuelta si se había cambiado). Devuelve los fps a los que va
-// el juego, o 0 si no se conoce su reloj. Desde el hilo que presenta.
+// Sets the game's MaxFps for that limit (0: restore its own, if changed). Returns the fps the game is running at,
+// or 0 if its clock is unknown. Called from the present thread.
 float game_max_fps(int cap) {
-    static float wanted = 30.0f;  // lo último que puso el juego
-    static float ours = 0.0f;     // lo que pusimos nosotros (0: nada)
+    static float wanted = 30.0f;  // last value set by the game
+    static float ours = 0.0f;     // value set by us (0: none)
     static float logged = 0.0f;
     GameClock* c = game_clock();
     if (!c) return 0.0f;
     volatile float& max_fps = c->max_fps;
     const float now = max_fps;
-    if (ours == 0.0f || now != ours) wanted = now;  // lo ha cambiado el juego
+    if (ours == 0.0f || now != ours) wanted = now;  // changed by the game
     float target = wanted;
     if (cap) {
         target = wanted >= 60.0f ? 60.0f : static_cast<float>(cap);
@@ -558,16 +599,16 @@ float game_max_fps(int cap) {
         ours = 0.0f;
     }
     if (target != logged) {
-        NVN_LOG("reloj del juego: MaxFps %.0f%s\n", target, cap ? " (límite del menú)" : "");
+        NVN_LOG("reloj del game: MaxFps %.0f%s\n", target, cap ? " (menu limit)" : "");
         logged = target;
     }
     return target;
 }
 }  // namespace
 
-// La ventana de Android cambió (la app se fue a segundo plano o volvió; ver NnsdkWindow): se suelta el swapchain y la
-// superficie de la vieja y, si hay una nueva, se crean en ella. Antes, al volver del escritorio la pantalla se quedaba
-// en negro (se seguía presentando en la ventana destruida).
+// The Android window changed (the app went to background or returned; see NnsdkWindow): release the swapchain and
+// surface of the old one and, if there is a new one, create them on it. Previously, returning from the home screen left
+// the display black (it kept presenting to the destroyed window).
 void follow_native_window(nvn::Window& w) {
     NnsdkWindow* state = nnsdk::host().window_state;
     const uint32_t serial = state ? state->serial.load(std::memory_order_acquire) : 0;
@@ -577,7 +618,7 @@ void follow_native_window(nvn::Window& w) {
     if (now != w.native_window || !w.swapchain || w.rebuild) {
         {
             std::lock_guard queue_lock(nvn::vk_queue_mutex());
-            vkQueueWaitIdle(c->queue);  // lo presentado en la vieja, terminado antes de soltarla
+            vkQueueWaitIdle(c->queue);  // finish anything presented on the old one before releasing it
         }
         destroy_swapchain(w);
         w.rebuild = false;
@@ -585,9 +626,9 @@ void follow_native_window(nvn::Window& w) {
         if (now) {
             const bool ok = create_swapchain(w);
             w.rebuild = !ok;
-            NVN_LOG("ventana nueva: swapchain %s\n", ok ? "creado" : "sin crear");
+            NVN_LOG("new window: swapchain %s\n", ok ? "created" : "not created");
         } else {
-            NVN_LOG("sin ventana (segundo plano): no se presenta\n");
+            NVN_LOG("no window (background): not presenting\n");
         }
     }
     if (state) state->done.store(serial, std::memory_order_release);
@@ -610,7 +651,7 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
     fsr::release_if_resized(picture_rect(w.extent).extent);
     hud::real_frame(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
-    // LSFG 2x encendido: antes del real, el frame intermedio (lsfg/framegen.cpp).
+    // LSFG 2x enabled: before the real frame, present the intermediate frame (lsfg/framegen.cpp).
     uint32_t generated_id = 0;
     const int64_t generated_ns = lsfg::present_generated(w, source, &generated_id);
     if (w.rebuild) return;
@@ -624,9 +665,9 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
         NVN_LOG("present slot fence: %s\n", vk_result_name(r));
         return;
     }
-    // Las muestras de cualquier juego de present ya terminado, no solo las de este (el de hace kPresentSlots frames): el
-    // del frame anterior suele estarlo ya, y así la traza cae 2 frames después del destello y no 4 (el 5-11 llegó tarde:
-    // en el frame trazado el cazador ya estaba en el suelo).
+    // Collect samples from any finished present job, not only this one (the one from kPresentSlots frames ago): the
+    // previous frame is usually done already, so the trace lands 2 frames after the flash instead of 4 (5-11 arrived late:
+    // in the traced frame the hunter was already on the ground).
     for (auto& queued : g_presenter.slots)
         if (queued.probe.pending && (&queued == &slot || vkGetFenceStatus(c->device, queued.done) == VK_SUCCESS))
             queued.probe.collect();
@@ -635,7 +676,7 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) w.rebuild = true;
         NVN_LOG("vkAcquireNextImageKHR: %s\n", vk_result_name(r));
-        return;  // el fence sigue señalado (se reinicia después): este contexto no se queda esperando para siempre
+        return;  // fence remains signaled (reset later): this slot does not wait forever
     }
     // On a failed recording or submit, drain the acquisition before using this slot again.
     auto abandon = [&](VkResult error) {
@@ -652,8 +693,8 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
                       vkQueueSubmit(c->queue, 1, &wait, slot.done) == VK_SUCCESS;
     };
 
-    // El blit lee la imagen de la textura: desde grabarlo hasta enviarlo, con el lock del ejecutor. Así, si el
-    // juego la retira, se libera tras un envío del ejecutor posterior a este (va detrás en la cola).
+    // The blit reads the texture image: from recording to submission, hold the executor lock. That way, if the
+    // game releases it, it is freed after an executor submission later than this one (it goes after it in the queue).
     std::unique_lock executor_lock(executor_mutex());
     Texture* t = source.get();
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -664,8 +705,8 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
     present_image_barrier(slot.cmd, target.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkClearColorValue color{};
     if (t && t->cleared) memcpy(color.float32, t->clear_color, sizeof color.float32);
-    // Lo que el juego dibujó en la textura de la ventana, escalado a la pantalla; si aún no hay
-    // imagen (no se ha dibujado nada), su último color de borrado.
+    // What the game drew into the window texture, scaled to the screen; if there is no image yet
+    // (nothing drawn), use its last clear color.
     const auto crop = t ? picture_crop({uint32_t(t->desc.width), uint32_t(t->desc.height)}, w.crop) : VkRect2D{};
     const auto path = t ? blit_to_swapchain(*t, crop, target.image, w.format, w.extent, slot.cmd) : PicturePath::Clear;
     if (path == PicturePath::Clear) {
@@ -694,12 +735,12 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
     if (r != VK_SUCCESS) return abandon(r);
     executor_lock.unlock();
 
-    // Con un generado delante, el real no antes de un refresco después: con los dos listos en el mismo refresco,
-    // el compositor de Android se queda con el más nuevo y tira el otro (en pantalla seguían saliendo 30).
-    // <datos>/lsfg_margen (ms) añade margen en vivo por si el generado aún no está en pantalla a esa hora.
+    // With a generated frame ahead, the real one must not appear before one refresh later: if both are ready in the same refresh,
+    // Android's compositor keeps the newer one and drops the other (on screen it still looked like 30).
+    // <data>/lsfg_margen (ms) adds live margin in case the generated frame is not on screen yet at that time.
     VkPresentTimeGOOGLE when{};
     if (generated_ns && c->display_timing) {
-        when.presentID = generated_id + 1;  // par: el real detrás del generado generated_id
+        when.presentID = generated_id + 1;  // even: the real frame after generated frame generated_id
         when.desiredPresentTime =
             static_cast<uint64_t>(generated_ns + lsfg::spacing_ns() + g_lsfg_pacer.margin_ns(c->device, w.swapchain));
     }
@@ -712,10 +753,10 @@ void show(nvn::Window& w, nvn::ResourceRef<nvn::Texture> source) {
         return;
     }
     w.presented++;
-    if (w.presented == 60) nvn::driver::works();  // (un driver del usuario que ya ha dibujado: se queda elegido)
+    if (w.presented == 60) nvn::driver::works();  // (a user driver that has already rendered: it stays selected)
 }
 
-// Asynchronous presentation (Settings → Performance, async_present; Eden's option of the same name): NvnSubmit hands the
+// Asynchronous presentation (Settings -> Performance, async_present; Eden's option of the same name): NvnSubmit hands the
 // frame to this thread after its pacing and goes on with the next frame's command lists while this one waits for a
 // swapchain image, makes the generated pictures and presents. One frame at most: NvnSubmit waits for the last one before
 // it paces the next (so the game's window texture is never drawn over before its blit is on the queue).
@@ -770,39 +811,39 @@ void nvn::present(Window& w, int index) {
         follow_native_window(w);
         t = w.textures[index];
     }
-    // Intervalo de presentación de NVN (NieR pide 2: 30 fps, como en la Switch). FIFO solo garantiza
-    // uno por vsync, así que el resto lo pone este ritmo. El reloj del juego mide tiempo real (pasos de 1/60 s,
-    // entre 1 y 2 por frame): a 60 va a su velocidad, y por debajo de 30 a cámara lenta (eso es NieR; MH Rise mide su
-    // paso, ver GameClock). Con <datos>/60fps se fuerza el intervalo 1 (y, en MH Rise, MaxFps 60). Sin el lock del
-    // ejecutor: dormido con él, los hilos del juego que esperaban un sync se quedaban parados hasta 33 ms.
+    // NVN present interval (NieR requests 2: 30 fps, as on Switch). FIFO only guarantees
+    // one per vsync, so the rest is paced here. The game clock measures real time (steps of 1/60 s,
+    // between 1 and 2 per frame): at 60 it runs at full speed, and below 30 in slow motion (that is NieR; MH Rise measures its
+    // step, see GameClock). With <data>/60fps interval 1 is forced (and, in MH Rise, MaxFps 60). Without the executor lock:
+    // sleeping with it held would stall game threads waiting for a sync for up to 33 ms.
     {
         using clock = std::chrono::steady_clock;
         static clock::time_point next = clock::now();
         static int64_t logged_period = 0;
         const int cap = fps_cap();
         const float game_fps = game_max_fps(cap);
-        // Con límite, el frame dura lo que pide (lo que el juego tenga de MaxFps; sin su reloj, el límite tal cual); sin él,
-        // el intervalo de NVN que pide el juego (x 16,7 ms)
+        // With a limit, the frame lasts as requested (the game's MaxFps; without its clock, the limit as-is); without it,
+        // the NVN interval requested by the game (x 16.7 ms)
         const float fps = cap ? (game_fps > 0.0f ? game_fps : static_cast<float>(cap)) : 0.0f;
         const int64_t period_ns = fps > 0.0f ? static_cast<int64_t>(1e9 / fps) : 16'666'667LL * std::max(w.present_interval, 1);
         g_frame_period_ns.store(period_ns, std::memory_order_relaxed);
         dynamic_resolution(period_ns);
         game_tweaks();
         if (period_ns != logged_period) {
-            NVN_LOG("ritmo de presentación: %.1f ms por frame (%.0f fps)%s\n", period_ns / 1e6, 1e9 / period_ns,
-                    cap ? " (límite del menú)" : "");
+            NVN_LOG("present pacing: %.1f ms per frame (%.0f fps)%s\n", period_ns / 1e6, 1e9 / period_ns,
+                    cap ? " (menu limit)" : "");
             logged_period = period_ns;
         }
         const auto period = std::chrono::nanoseconds(period_ns);
-        // Con frames de más de 20 ms se despierta 2 ms antes (FIFO pone el resto). A 60, en `next`: un frame de menos de
-        // 16,7 ms le cuenta al juego como uno entero y lo aceleraría un poco.
+        // With frames over 20 ms wake up 2 ms early (FIFO handles the rest). At 60 fps, wake at `next`: a frame shorter than
+        // 16.7 ms would count as a full frame to the game and speed it up slightly.
         const auto early = std::chrono::milliseconds(period_ns > 20'000'000 ? 2 : 0);
         auto now = clock::now();
         if (now < next - early) std::this_thread::sleep_until(next - early);
         next = std::max(next + period, clock::now() + period / 2);
     }
     capture_loading_present(w.swapchain ? t : nullptr, w.crop);
-    if (!w.swapchain) {  // sin ventana (en segundo plano): el juego sigue a su ritmo, sin presentar
+    if (!w.swapchain) {  // no window (background): the game keeps its pace, without presenting
         std::lock_guard executor_lock(executor_mutex());
         next_frame();
         return;
@@ -813,12 +854,12 @@ void nvn::present(Window& w, int index) {
         show(w, t);
     }
     {
-        std::lock_guard executor_lock(executor_mutex());  // el frame del ejecutor y sus volcados
+        std::lock_guard executor_lock(executor_mutex());  // executor frame and its dumps
         debug_dump_frame(t);
         next_frame();
     }
     log_pace(w);
-    // Rendimiento: frames por segundo cada ~5 s.
+    // Performance: frames per second every ~5 s.
     static auto window_start = std::chrono::steady_clock::now();
     static uint64_t window_frames = 0;
     window_frames++;
@@ -827,9 +868,9 @@ void nvn::present(Window& w, int index) {
     if (secs >= 5.0) {
         if (NVN_FLAG("verbose_log")) {
             NVN_LOG("%.1f fps (frame %llu)\n", window_frames / secs, static_cast<unsigned long long>(w.presented));
-            // El reloj del juego: su MaxFps, lo que midió de la última vuelta y el paso que dio (a 60 fps, ~16,7 ms y 1).
+            // Game clock: its MaxFps, what it measured for the last loop, and the step it took (at 60 fps, ~16.7 ms and 1).
             if (const GameClock* c = game_clock())
-                NVN_LOG("reloj del juego: MaxFps %.0f, vuelta %.1f ms, paso %.2f frames de 60 Hz (%.4f s)\n", c->max_fps,
+                NVN_LOG("game clock: MaxFps %.0f, loop %.1f ms, step %.2f 60 Hz frames (%.4f s)\n", c->max_fps,
                         c->frame_ms, c->dt * 60.0f, c->dt);
         }
         window_start = now;
@@ -855,7 +896,7 @@ nvn::Boolean nvnWindowInitialize(void* window, const WindowBuilder* b) {
     nvn::Window& w = nvn::g_windows.create(window);
     w.native_window = b->native_window;
     w.present_interval = b->present_interval;
-    NVN_LOG("ventana con intervalo de presentación %d\n", w.present_interval);
+    NVN_LOG("window with present interval %d\n", w.present_interval);
     for (int i = 0; i < b->texture_count; ++i) w.textures.push_back(nvn::g_textures.reference(b->textures[i]));
     std::lock_guard lock(g_present_mutex);
     if (create_swapchain(w)) return 1;
@@ -880,7 +921,7 @@ int nvnWindowGetPresentInterval(const void* window) {
 }
 void nvnWindowSetPresentInterval(void* window, int interval) {
     static int last = -1;
-    if (interval != last) NVN_LOG("intervalo de presentación %d\n", interval), last = interval;
+    if (interval != last) NVN_LOG("present interval %d\n", interval), last = interval;
     if (nvn::Window* w = nvn::g_windows.get(window)) w->present_interval = interval;
 }
 int nvnWindowGetNumTextures(const void* window) {
@@ -890,12 +931,12 @@ int nvnWindowGetNumTextures(const void* window) {
 void nvnWindowSetCrop(void* window, int x, int y, int w, int h) {
     nvn::Window* win = nvn::g_windows.get(window);
     if (!win) return;
-    static VkRect2D logged{};  // DEPURACIÓN: cada recorte nuevo
+    static VkRect2D logged{};  // DEBUG: each new crop
     const VkRect2D crop{{x, y}, {static_cast<uint32_t>(std::max(w, 0)), static_cast<uint32_t>(std::max(h, 0))}};
-    if (memcmp(&crop, &logged, sizeof crop) != 0) NVN_LOG("recorte de la ventana %d,%d %dx%d\n", x, y, w, h), logged = crop;
+    if (memcmp(&crop, &logged, sizeof crop) != 0) NVN_LOG("window crop %d,%d %dx%d\n", x, y, w, h), logged = crop;
     win->crop = crop;
 }
-// NVNrectangle: x, y, ancho, alto.
+// NVNrectangle: x, y, width, height.
 void nvnWindowGetCrop(const void* window, int* rect) {
     const nvn::Window* w = nvn::g_windows.get(window);
     rect[0] = w ? w->crop.offset.x : 0, rect[1] = w ? w->crop.offset.y : 0;

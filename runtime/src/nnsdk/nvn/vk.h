@@ -17,7 +17,7 @@ struct VkContext {
     VkQueue queue = VK_NULL_HANDLE;
     // The enabled device extensions support VK_ATTACHMENT_STORE_OP_NONE on this Vulkan 1.1 instance.
     bool store_op_none = false;
-    // VK_GOOGLE_display_timing activa: se puede pedir a qué hora se muestra cada imagen (LSFG: el real 16,7 ms
+    // VK_GOOGLE_display_timing activa: se puede pedir a qué hora se muestra cada image (LSFG: el real 16,7 ms
     // después del generado, para que el compositor no tire uno de los dos).
     bool display_timing = false;
     bool push_descriptor = false;  // VK_KHR_push_descriptor activa (el escalado FSR, fsr.cpp)

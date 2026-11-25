@@ -15,6 +15,8 @@ GLSLC="${GLSLC:-$(command -v glslc || true)}"
 DIR="$ROOT/runtime/src/nnsdk/nvn/shaders"
 FSR="$ROOT/third_party/eden/externals/FidelityFX-FSR/ffx-fsr"
 OUT="$DIR/spirv.h"
+PY_OUT="$OUT"
+case "$OSTYPE" in msys*|cygwin*) PY_OUT="$(cygpath -w "$OUT")" ;; esac
 # An FSR shader that doesn't compile here (they need Eden's externals/FidelityFX-FSR, which tools/setup.sh doesn't
 # fetch) keeps the array it already has in spirv.h. Any other shader has to compile: an old array kept for a shader
 # whose source changed would run the old code with the new executor (bc_decode with BC4/BC5 sent to it, say).
@@ -29,10 +31,12 @@ trap 'rm -f "$TMP" "$DIR"/*.spv "$DIR"/*.err' EXIT
     echo "#define HAVE_${name}_SPV 1"
     if "$GLSLC" -O --target-env=vulkan1.1 -I "$FSR" "$src" -o "$DIR/$name.spv" 2> "$DIR/$name.err"; then
       echo "inline constexpr uint32_t k_${name}_spv[] = {"
-      python3 -c "import struct,sys; d=open('$DIR/$name.spv','rb').read(); w=struct.unpack('<%dI'%(len(d)//4),d); print(','.join('0x%08x'%x for x in w))"
+      SPV="$DIR/$name.spv"
+      case "$OSTYPE" in msys*|cygwin*) SPV="$(cygpath -w "$SPV")" ;; esac
+      python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); w=struct.unpack('<%dI'%(len(d)//4),d); print(','.join('0x%08x'%x for x in w))" "$SPV"
       echo "};"
       rm "$DIR/$name.spv"
-    elif grep -q "ffx_" "$src" && python3 - "$OUT" "$name" <<'PY'
+    elif grep -q "ffx_" "$src" && python3 - "$PY_OUT" "$name" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read()
 m = re.search(r"inline constexpr uint32_t k_%s_spv\[\] = \{\n.*?\n\};" % re.escape(sys.argv[2]), text, re.S)

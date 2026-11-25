@@ -5,8 +5,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Port de lsfg_common/mipmaps/alpha/beta/gamma/delta/generate/chain de Eden. Cambios respecto a Eden: Vulkan a
-// pelo; una sola generación (2x) y un solo destino (nuestra imagen de salida); una imagen 1x1 a cero en vez de
-// descriptores nulos; y una barrera de memoria global entre dispatches dependientes en vez de una por imagen
+// pelo; una sola generación (2x) y un solo destino (nuestra image de salida); una image 1x1 a cero en vez de
+// descriptores nulos; y una barrera de memoria global entre dispatches dependientes en vez de una por image
 // (todas son de compute a compute: en el Adreno cuestan lo mismo).
 
 #include "nnsdk/nvn/lsfg/chain.h"
@@ -105,7 +105,7 @@ public:
         return *this;
     }
     Writer& sampler(VkSampler s) { return image(VK_DESCRIPTOR_TYPE_SAMPLER, s, VK_NULL_HANDLE); }
-    // La entrada que falta en la primera iteración (nullptr) es la imagen vacía.
+    // La entrada que falta en la primera iteración (nullptr) es la image vacía.
     Writer& optional(const Image* i) { return image(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_NULL_HANDLE, i ? i->view : dummy_); }
     Writer& sampled(const Image& i) { return image(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_NULL_HANDLE, i.view); }
     template <size_t N>
@@ -277,8 +277,8 @@ bool Chain::create(const Pipelines& pipelines, VkExtent2D extent, VkFormat forma
     format_ = format;
     flow_ = flow;
 
-    // Entradas: copia exacta de la textura de la ventana, en su formato (si es sRGB, leída por una vista UNORM).
-    // Salida: si la ventana es sRGB, la imagen también (con vista UNORM para escribirla) para que el blit al
+    // Entradas: copia exacta de la textura de la window, en su formato (si es sRGB, leída por una vista UNORM).
+    // Salida: si la window es sRGB, la image también (con vista UNORM para escribirla) para que el blit al
     // swapchain convierta el frame generado igual que convierte hoy el real.
     const VkFormat input_view = unorm_of(format);
     const bool srgb = input_view != format;

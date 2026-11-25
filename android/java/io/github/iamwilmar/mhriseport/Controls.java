@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 
 // Los ajustes de los controles, guardados en las preferencias de la app ("controles"): los táctiles (si se ven, su
 // opacidad y tamaño, la vibración, deslizar de un botón a otro, la zona muerta de sus sticks), dónde está cada control,
-// los combos (un botón en pantalla, o uno del mando, que pulsa varios de la consola) y el mando físico (zona muerta,
+// los combos (un botón en screen, o uno del mando, que pulsa varios de la consola) y el mando físico (zona muerta,
 // gatillos, dónde lee el stick derecho). TouchPad dibuja y lee los táctiles; lo del mando lo aplica el loader
 // (GameActivity.nativePad).
 final class Controls {
@@ -34,7 +34,7 @@ final class Controls {
         return s.toString();
     }
 
-    // Los controles en pantalla. Cada uno: dónde está su centro (fracción del ancho y del alto de la pantalla), su tamaño
+    // Los controles en screen. Cada uno: dónde está su centro (fracción del ancho y del alto de la screen), su tamaño
     // (1: el suyo) y si se ve.
     enum Ctl {
         LSTICK, RSTICK, DPAD, A, B, X, Y, L, R, ZL, ZR, MINUS, PLUS, L3, R3, MENU, MOD, COMBO1, COMBO2, COMBO3, COMBO4,
@@ -91,7 +91,7 @@ final class Controls {
                                         R | ZR, MINUS | L, MINUS | R, PLUS | L, PLUS | R};
 
     // Los toques
-    boolean touchOn = true;     // los controles en pantalla (apagados: solo el botón del menú)
+    boolean touchOn = true;     // los controles en screen (apagados: solo el botón del menú)
     int opacity = 70;           // %
     int size = 100;             // %
     int vibration = 2;          // 0 apagada, 1 suave, 2 media, 3 fuerte
@@ -115,7 +115,7 @@ final class Controls {
     int imageVersion;  // goes up when a picture changes (TouchPad loads them again)
     boolean grid = false;  // the layout editor's grid: shown, and what's dragged snaps to it
     // Los combos
-    final long[] combo = new long[COMBOS];     // los botones que pulsa (0: ninguno, y no sale en pantalla)
+    final long[] combo = new long[COMBOS];     // los botones que pulsa (0: ninguno, y no sale en screen)
     // Button mapping: the controller key (an Android keycode) that presses each of BUTTONS instead of its own
     // (0: the usual one). Analog triggers count as L2 / R2 and a hat as the d-pad keys (android_main.cpp).
     final int[] mapKey = new int[BUTTONS.length];

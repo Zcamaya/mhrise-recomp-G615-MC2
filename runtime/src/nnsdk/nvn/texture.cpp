@@ -1,6 +1,6 @@
 // nvnTextureBuilder*, nvnTexture*, nvnTextureView*, nvnTexturePool*, nvnSamplerBuilder*, nvnSampler*,
 // nvnSamplerPool* y los handles del dispositivo. Las imágenes de Vulkan las crea el ejecutor cuando
-// hacen falta; aquí solo se guarda la descripción y dónde están los texels en memoria del juego.
+// hacen falta; aquí solo se guarda la descripción y dónde están los texels en memoria del game.
 
 #include <algorithm>
 #include <cstring>
@@ -34,7 +34,7 @@ nvn::TextureLayout layout_of(const TextureDesc& d) {
                  d.target == nvn::kTarget2DMultisampleArray || d.target == nvn::kTargetCubeArray;
     bool cube = d.target == nvn::kTargetCube || d.target == nvn::kTargetCubeArray;
     bool is_3d = d.target == nvn::kTarget3D;
-    // Un cubemap tiene 6 caras aunque el juego deje depth en 1 (NieR lo hace); un array de cubos, depth
+    // Un cubemap tiene 6 caras aunque el game deje depth en 1 (NieR lo hace); un array de cubos, depth
     // caras (múltiplo de 6). Con 1 sola capa, GetStorageSize salía de una cara y los datos de las otras
     // 5 se escribían sobre lo que hubiera detrás (el mar del prólogo salía magenta: ASTC inválido).
     uint32_t layers = d.target == nvn::kTargetCube ? 6 : array || cube ? std::max(d.depth, 1) : 1;
@@ -42,9 +42,9 @@ nvn::TextureLayout layout_of(const TextureDesc& d) {
     uint32_t height = d.target == nvn::kTarget1D || d.target == nvn::kTarget1DArray ? 1 : d.height;
     uint32_t samples = std::max(d.samples, 1);
     // NVNpackagedTextureLayout (SetPackagedTextureLayout): byte 0 = alto del bloque y byte 1 = alineación del pitch, en
-    // log2 de GOBs. Las texturas sparse de MH Rise traen 03 04 (8 GOBs de alto, pitch a 16: tiles de 64 KB) y el juego
+    // log2 de GOBs. Las texturas sparse de MH Rise traen 03 04 (8 GOBs de alto, pitch a 16: tiles de 64 KB) y el game
     // escribe sus mips ya swizzleados así, en los offsets que le da GetViewOffset: hay que usar los mismos.
-    // <datos>/no_packed_layout (al arrancar: las texturas se crean al cargar): el bloque calculado, como antes.
+    // <data>/no_packed_layout (al arrancar: las texturas se crean al cargar): el bloque calculado, como antes.
     const bool packaged = d.has_packaged_layout && !(d.flags & nvn::kTextureFlagLinear) && !is_3d &&
                           d.packaged_layout[0] <= 5 && d.packaged_layout[1] <= 5 && !NVN_FLAG("no_packed_layout");
     return nvn::compute_layout(d.width * (samples > 1 ? 2 : 1), height * (samples > 2 ? 2 : 1), depth, layers,
@@ -60,7 +60,7 @@ int storage_class_of(const TextureDesc& d, bool raw = false) {
     return fmt && fmt->block == 1 && fmt->bytes ? kStorageClassNativeImage : kStorageClassBlockLinear;
 }
 
-// Nivel y capa que nombra una vista (lo que no fija, el primero).
+// Nivel y capa que nombra una vista (lo que no fixed, el primero).
 int view_level(const TextureViewDesc* v) { return v ? nvn::transfer_level(*v) : 0; }
 int view_layer(const TextureViewDesc* v) { return v ? nvn::transfer_base_layer(*v) : 0; }
 
@@ -70,7 +70,7 @@ struct TexelRegion {
     const nvn::LevelLayout* level;
     uint32_t level_index, layer, layers, bpb;
     nvn::BlockBox box;
-    size_t row_pitch, image_pitch;  // de la memoria lineal del juego (compacta si no da otros)
+    size_t row_pitch, image_pitch;  // de la memoria lineal del game (compacta si no da otros)
 };
 bool texel_region(const nvn::Texture& t, const TextureViewDesc* view, const nvn::CopyRegion* r, int64_t row_stride,
                   int64_t image_stride, TexelRegion& out) {
@@ -83,7 +83,7 @@ bool texel_region(const nvn::Texture& t, const TextureViewDesc* view, const nvn:
     out.level_index = region.level;
     out.bpb = L.bytes_per_block;
     auto [x,y,z,w,h,d] = region.box;
-    // Recortada al nivel: el juego no debería pasarse, y escribir fuera pisaría el siguiente nivel.
+    // Recortada al nivel: el game no debería pasarse, y escribir fuera pisaría el siguiente nivel.
     w = std::min<int>(w, static_cast<int>(lv.width) - x), h = std::min<int>(h, static_cast<int>(lv.height) - y);
     d = std::min<int>(d, static_cast<int>(std::max(lv.depth, 1u)) - z);
     if (w <= 0 || h <= 0 || d <= 0) return false;
@@ -138,7 +138,7 @@ void write_texels(nvn::Texture& t, const TextureViewDesc* view, const nvn::CopyR
             nvn::swizzle_region(*r.level, r.bpb, r.box, in, r.row_pitch, r.image_pitch, level);
         }
     }
-    // La imagen se rehace desde la memoria al usarla (solo esta caja si la GPU ya escribió el resto).
+    // La image se rehace desde la memoria al usarla (solo esta caja si la GPU ya escribió el resto).
     mark_texel_write(t, r);
 }
 
@@ -423,7 +423,7 @@ void nvnTextureBuilderSetStorage(TextureDesc* b, void* pool, int64_t offset) {
     b->pool = pool;
     b->offset = offset;
 }
-// El juego reserva esto y escribe ahí los texels en disposición Tegra: tiene que ser el tamaño real.
+// El game reserva esto y escribe ahí los texels en disposición Tegra: tiene que ser el tamaño real.
 size_t nvnTextureBuilderGetStorageSize(const TextureDesc* b) {
     size_t size = (layout_of(*b).total_size() + kStorageAlignment - 1) & ~(kStorageAlignment - 1);
     if (size > (64u << 20))
@@ -471,7 +471,7 @@ void nvnTextureBuilderGetSwizzle(const TextureDesc* b, int* r, int* g, int* bl, 
 
 nvn::Boolean nvnTextureInitialize(void* texture, const TextureDesc* b) {
     // Reinicializar sin Finalize: el mismo objeto (los comandos grabados y los pools de texturas guardan su
-    // dirección), sin la imagen anterior.
+    // dirección), sin la image anterior.
     std::unique_lock<std::recursive_mutex> lock(nvn::executor_mutex(), std::defer_lock);
     auto existing = nvn::g_textures.acquire(texture);
     if (existing) {
@@ -624,7 +624,7 @@ void nvnTextureInvalidateTexels(const void* t, const TextureViewDesc* view, cons
     if (auto tex = nvn::g_textures.acquire(t); tex && texel_region(*tex, view, region, 0, 0, r))
         nvn::sync_texture_storage(*tex, {r.level_index, r.layer, r.layers, r.box});
 }
-// El juego escribe por CPU en texturas lineales (los frames de vídeo) con este stride.
+// El game escribe por CPU en texturas lineales (los frames de vídeo) con este stride.
 int64_t nvnTextureGetStride(const void* t) {
     auto tex = nvn::g_textures.acquire(t);
     return tex && tex->layout.linear ? tex->layout.stride : 0;
@@ -658,7 +658,7 @@ void nvnTextureViewSetDepthStencilMode(TextureViewDesc* v, int mode) {
     v->depth_stencil_mode = mode;
 }
 void nvnTextureViewSetSwizzle(TextureViewDesc* v, int r, int g, int b, int a) {
-    static int logged = 0;  // DEPURACIÓN: qué combinaciones usa el juego
+    static int logged = 0;  // DEPURACIÓN: qué combinaciones usa el game
     static int seen[16][4];
     bool fresh = true;
     for (int k = 0; k < std::min(logged, 16); k++)
@@ -672,7 +672,7 @@ void nvnTextureViewSetSwizzle(TextureViewDesc* v, int r, int g, int b, int a) {
     v->swizzle[0] = r, v->swizzle[1] = g, v->swizzle[2] = b, v->swizzle[3] = a;
 }
 
-// Getters de la vista: NVN_TRUE si la vista fija ese campo (si no, no tocan la salida).
+// Getters de la vista: NVN_TRUE si la vista fixed ese campo (si no, no tocan la salida).
 nvn::Boolean nvnTextureViewGetLevels(const TextureViewDesc* v, int* base, int* count) {
     if (!(v->flags & nvn::kViewLevels)) return 0;
     if (base) *base = v->base_level;
@@ -730,7 +730,7 @@ void nvnTexturePoolRegisterTexture(void* pool, int id, const void* texture, cons
     const auto owner = nvn::g_textures.acquire(texture);
     const auto entry = nvn::TexturePoolEntry{owner ? owner->ref : nvn::ResourceRef<nvn::Texture>{}, view ? *view : TextureViewDesc{}};
     p->register_texture(id, entry);
-    {  // DEPURACIÓN: ¿limita el juego los niveles al registrar (streaming)?
+    {  // DEPURACIÓN: ¿limita el game los niveles al registrar (streaming)?
         static std::atomic<unsigned> with_levels{}, total{};
         const unsigned registered = total.fetch_add(1, std::memory_order_relaxed) + 1;
         const nvn::Texture* t = owner.get();

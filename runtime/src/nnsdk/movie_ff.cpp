@@ -131,7 +131,7 @@ struct Demuxer {
 
     // Muestras leídas del contenedor y aún no entregadas, por pista. El orden de entrega es el de AMediaExtractor
     // (siempre la de menor tiempo entre las pistas elegidas), no el de posición en el archivo: con éste el audio
-    // iba muchos frames por delante del vídeo y el juego se quedaba esperando.
+    // iba muchos frames por delante del vídeo y el game se quedaba esperando.
     struct Pend {
         AVPacket* pkt = nullptr;
         std::vector<uint8_t> sample;

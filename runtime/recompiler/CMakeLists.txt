@@ -34,7 +34,7 @@ target_sources(eden_shader PRIVATE ${CMAKE_CURRENT_LIST_DIR}/nvn_shader.cpp ${CM
 target_include_directories(eden_shader PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(eden_shader PRIVATE spirv_tools_opt)
 
-# Huella del traductor para la caché de SPIR-V de la SD (<datos>/spirv.bin, ver nnsdk/nvn/spirv_cache.h): el contenido
+# Huella del traductor para la caché de SPIR-V de la SD (<data>/spirv.bin, ver nnsdk/nvn/spirv_cache.h): el contenido
 # de todo lo que decide una traducción. Eden con nuestros cambios (runtime/eden), el puente y su
 # shim, sirit y SPIRV-Tools. Si cambia cualquiera, CMake se vuelve a configurar (CMAKE_CONFIGURE_DEPENDS; apk.sh configura siempre)
 # y con la huella nueva el fichero se vacía al arrancar. El .h solo se reescribe si cambia la huella.

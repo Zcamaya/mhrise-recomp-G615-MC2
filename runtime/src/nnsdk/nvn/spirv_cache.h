@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-// Caché de las traducciones Maxwell → SPIR-V, en memoria y en la SD (<datos>/spirv.bin).
+// Caché de las translations Maxwell → SPIR-V, en memoria y en la SD (<data>/spirv.bin).
 //
-// El juego crea varios programas con el mismo código (MH Rise: 1200 traducciones de 246 huellas por partida, 1800 de
+// El game crea varios programas con el mismo código (MH Rise: 1200 translations de 246 huellas por partida, 1800 de
 // 348 tras un cambio de shaders) y cada una costaba 2,2 ms en NvnSubmit, con el frame parado: 2,6-4,2 s de tirones por
 // partida, sobre todo al empezar y la primera vez que sale algo. Con la caché cada código distinto se traduce una vez
 // por versión del traductor: las repetidas salen de la memoria y las de partidas anteriores, del fichero.
 //
 // La clave (128 bits) la calcula program.cpp con todo lo que decide la traducción. El fichero lleva la huella del
 // traductor (Eden ya parcheado + el puente nvn_shader + sirit, ver runtime/recompiler/CMakeLists.txt): si no coincide
-// se vacía. Se añade al final, desde otro hilo y sin fsync: un registro a medias (el proceso murió escribiendo) se
+// se vacía. Se adds al final, desde otro hilo y sin fsync: un registro a medias (el proceso murió escribiendo) se
 // descarta al leer, con todo lo que vaya detrás.
 //
 // Formato (little endian): cabecera de 32 bytes "NVSPIRV1", u32 formato, u32 0, u64 huella del traductor, u64 0;
@@ -53,7 +53,7 @@ private:
     uint64_t a_ = 0xcbf29ce484222325ULL, b_ = 0x6a09e667f3bcc909ULL;
 };
 
-// Translated ⇄ bytes (sin el texto de error: solo se guardan traducciones buenas).
+// Translated ⇄ bytes (sin el texto de error: solo se guardan translations buenas).
 void serialize(const nvnshader::Translated& t, std::vector<uint8_t>& out);
 bool deserialize(const uint8_t* data, size_t size, nvnshader::Translated& out);
 
@@ -94,7 +94,7 @@ private:
 
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::unordered_map<Key, std::vector<uint8_t>, KeyHash> entries_;  // traducciones serializadas
+    std::unordered_map<Key, std::vector<uint8_t>, KeyHash> entries_;  // translations serializadas
     std::unordered_set<Key, KeyHash> on_disk_;
     std::deque<std::pair<Key, std::vector<uint8_t>>> queue_;
     bool opened_ = false, loaded_ = false, gave_up_ = false, stop_ = false, writing_ = false;

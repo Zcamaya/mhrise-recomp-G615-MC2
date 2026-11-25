@@ -67,6 +67,24 @@ final class Ini {
         save();
     }
 
+    void setAll(Map<String, String> updates) {
+        load();
+        for (Map.Entry<String, String> update : updates.entrySet()) {
+            String name = update.getKey();
+            String value = update.getValue();
+            if (value == null || value.isEmpty()) {
+                values.remove(name);
+            } else {
+                values.put(name, value);
+            }
+            if (folder != null) {
+                File legacy = new File(folder, name);
+                if (legacy.isFile()) legacy.delete();
+            }
+        }
+        save();
+    }
+
     void setOn(String name, boolean on) {
         set(name, on ? "1" : null);
     }

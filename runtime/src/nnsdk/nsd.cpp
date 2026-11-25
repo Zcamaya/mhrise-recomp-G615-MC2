@@ -1,7 +1,7 @@
 // nn::nsd: los ajustes de servidores de Nintendo. El entorno es "lp1", el de las consolas de venta, que es un
-// ajuste local (el juego lo mete con snprintf en nombres de servidor sin mirar si hubo error, así que tiene que
+// ajuste local (el game lo mete con snprintf en nombres de servidor sin mirar si hubo error, así que tiene que
 // quedar escrito). Resolve/ResolveEx no traducen nada: no hay ajustes de nsd, y quien pregunta (libcurl y la
-// librería de red del juego) corta la conexión antes de llegar al DNS.
+// librería de red del game) corta la conexión antes de llegar al DNS.
 
 #include <cstring>
 

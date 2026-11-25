@@ -109,7 +109,7 @@ Resultado simular(const Escenario& e, bool continuidad) {
     init(0);
     size_t ri = 0;
     std::vector<int16_t> dest(kBurst * kCh);
-    for (int64_t t = 0; t < e.duracion_ns; t += 100'000) {  // pasos de 0.1 ms
+    for (int64_t t = 0; t < e.duracion_ns; t += 100'000) {  // steps de 0.1 ms
         bool cb_ok = t >= e.aaudio_desde_ns;
         for (auto [a, b] : e.sin_callback)
             if (t >= a && t < b) cb_ok = false;

@@ -2,7 +2,7 @@
 #pragma once
 // Sustituto de common/assert.h de Eden: mismos macros. Una aserción fallida lanza una excepción en vez
 // de abortar: nvnshader::translate la recoge y ese shader se da por no traducible (en la Flip, abortar
-// mataría el juego).
+// mataría el game).
 
 #include <stdexcept>
 #include <string>

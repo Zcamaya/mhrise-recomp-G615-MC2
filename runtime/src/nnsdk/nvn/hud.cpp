@@ -55,10 +55,10 @@ constexpr int32_t kX = 8, kY = 8;          // esquina superior izquierda
 constexpr uint32_t kStatsW = 360, kStatsH = 170;
 constexpr int kStatsLine = 20, kStatsPad = 8, kStatsLines = 8;
 std::atomic<int> g_building{0};  // pipelines in the background threads (shader_queued / shader_done)
-// El panel de ajustes (ver hud.h): un cajón que sale del borde derecho, de un tercio del ancho de la pantalla y toda su
+// El panel de ajustes (ver hud.h): un cajón que sale del borde derecho, de un tercio del ancho de la screen y toda su
 // altura, con una fila por ajuste.
 constexpr int64_t kPanelSlideNs = 180'000'000;    // lo que tarda en salir o esconderse
-constexpr int64_t kPanelIdleNs = 8'000'000'000;   // sin tocarlo, se esconde solo
+constexpr int64_t kPanelIdleNs = 8'000'000'000;   // not touchinglo, se esconde solo
 constexpr int kPanelHeader = 150, kPanelRow = 132;  // alto de la cabecera y de cada fila, en píxeles
 
 // Fuente de 5x7: cada fila, 5 bits (el alto a la izquierda).
@@ -109,10 +109,10 @@ bool spanish() {
 #endif
 }
 
-// El último toque de la pantalla, como lo deja el loader en NnsdkInput (host.h).
+// El último toque de la screen, como lo deja el loader en NnsdkInput (host.h).
 struct Touch {
     uint32_t serial = 0, state = 0;  // state: 1 posado, 0 levantado, 2 cancelado
-    int sx = 0, sy = 0, x = 0, y = 0;  // dónde se posó y por dónde va (o dónde se levantó), en píxeles de la ventana
+    int sx = 0, sy = 0, x = 0, y = 0;  // dónde se posó y por dónde va (o dónde se levantó), en píxeles de la window
 };
 bool read_touch(Touch* t) {
     NnsdkInput* in = nnsdk::host().input;
@@ -211,7 +211,7 @@ private:
         }
     }
     // Las filas del panel, en orden: el contador de FPS y la generación de frames siempre; el modo TV si el port lo tiene;
-    // cambiar de carpeta si la app tiene pantalla de inicio.
+    // cambiar de carpeta si la app tiene screen de inicio.
     enum RowId { kRowFps, kRowFg, kRowTv, kRowFolder };
     static int rows(RowId* out) {
         int n = 0;
@@ -226,12 +226,12 @@ private:
         static const bool tv = getenv("NIER_TV_MODE") != nullptr;
         return tv;
     }
-    // <datos>/<name>.
+    // <data>/<name>.
     static std::string data_file(const char* name) {
         const char* data = getenv("NIER_DATA");
         return std::string(data ? data : ".") + "/" + name;
     }
-    // ¿La app tiene pantalla de inicio (la que pide la carpeta del juego)? El loader pone NIER_SETUP cuando la carpeta sale
+    // ¿La app tiene screen de inicio (la que pide la carpeta del game)? El loader pone NIER_SETUP cuando la carpeta sale
     // de ella. Solo entonces tiene sentido la fila "Cambiar carpeta".
     static bool has_setup() {
         static const bool setup = getenv("NIER_SETUP") != nullptr;
@@ -239,10 +239,10 @@ private:
     }
     // Los gestos, una vez por frame presentado.
     // Abrir: el gesto de "atrás" del sistema desde el borde derecho (el de la flecha; Android se queda con ese toque y al
-    // juego solo le llega la tecla, que el loader convierte en NnsdkInput::hud_gesture), o un dedo que se posa en la mitad
-    // derecha de la pantalla y va hacia la izquierda al menos un octavo de su ancho.
+    // game solo le llega la tecla, que el loader convierte en NnsdkInput::hud_gesture), o un dedo que se posa en la mitad
+    // derecha de la screen y va hacia la izquierda al menos un octavo de su ancho.
     // Con el panel fuera: un toque en una fila cambia su ajuste; un toque fuera del panel, deslizar hacia la derecha, el
-    // mismo gesto del borde o un rato sin tocarlo lo esconden.
+    // mismo gesto del borde o un rato not touchinglo lo esconden.
     void gestures(VkExtent2D extent, int64_t now) {
         const int w = static_cast<int>(extent.width);
         const int panel_w = w / 3;
@@ -301,8 +301,8 @@ private:
         nnsdk::ini::set("no_fps", hidden ? "1" : "0");
         NVN_LOG("hud: contador de FPS %s desde el panel\n", hidden ? "apagado" : "encendido");
     }
-    // "Cambiar carpeta": con el fichero <datos>/elegir_carpeta, la pantalla de inicio de la app (que normalmente arranca el
-    // juego directamente) vuelve a salir la próxima vez que se abra, para elegir otra carpeta; ella misma borra el fichero.
+    // "Cambiar carpeta": con el fichero <data>/elegir_carpeta, la screen de inicio de la app (que normalmente arranca el
+    // game directamente) vuelve a salir la próxima vez que se abra, para elegir otra carpeta; ella misma borra el fichero.
     void set_choose_folder(bool on) {
         choose_folder_ = on;
         panel_dirty_ = true;
@@ -392,10 +392,10 @@ private:
         const bool es = spanish();
         const int margin = 44;
         rect(0, 0, w, h, kBack);
-        rect(0, 0, 4, h, kEdge);  // el canto que da al juego
+        rect(0, 0, 4, h, kEdge);  // el canto que da al game
         text(margin, (kPanelHeader - 7 * 6) / 2, 6, es ? "AJUSTES" : "SETTINGS", kText);
         rect(4, kPanelHeader - 3, w - 4, 3, kEdge);
-        // Las filas de rows(): el contador de FPS, el modo TV y volver a elegir la carpeta del juego.
+        // Las filas de rows(): el contador de FPS, el modo TV y volver a elegir la carpeta del game.
         struct Row {
             const char* es;
             const char* en;
@@ -671,7 +671,7 @@ private:
     bool hidden_ = false, flag_ = false, flag_seen_ = false;  // the counter off; what no_fps said last
     bool panel_open_ = false, touch_seen_ = false, gesture_seen_ = false;
     bool panel_dirty_ = true, panel_drawn_hidden_ = false;  // hay que redibujarlo; el estado con el que se dibujó
-    bool choose_folder_ = false;                   // la fila "Cambiar carpeta" (el fichero <datos>/elegir_carpeta)
+    bool choose_folder_ = false;                   // la fila "Cambiar carpeta" (el fichero <data>/elegir_carpeta)
     bool tv_ = false;                              // the "TV mode" row (tv_mode in mhr.ini)
     bool fg_ = nnsdk::ini::on("lsfg");             // the "Frame gen" row (lsfg in mhr.ini)
     uint32_t panel_w_ = 0, panel_h_ = 0;           // el tamaño con el que se crearon sus buffers

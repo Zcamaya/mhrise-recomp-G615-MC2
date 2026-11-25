@@ -51,7 +51,7 @@ Fn game_fn(const Module& m, const char* name) {
 }
 
 // Orden de arranque del SDK: nninitStartup (monta el heap) antes de los constructores, luego nnMain.
-// Al empezar cada hilo del juego (el principal y los de nn::os).
+// Al empezar cada hilo del game (el principal y los de nn::os).
 void game_thread_start() {
     install_thread_altstack();
     tls::thread_start();
@@ -85,9 +85,9 @@ void* game_thread(void*) {
 
 }  // namespace
 
-// libunwind (el de nuestra libc++abi, la que lanza y captura por el juego) busca las tablas de cada pc con
-// dl_iterate_phdr. main no es un ELF cargado por bionic: se le añade a la lista con su text y su .eh_frame_hdr
-// (la tabla de búsqueda binaria de sus ~360k FDE), o una excepción del juego no cruzaría sus propios frames.
+// libunwind (el de nuestra libc++abi, la que lanza y captura por el game) busca las tablas de cada pc con
+// dl_iterate_phdr. main no es un ELF cargado por bionic: se le adds a la lista con su text y su .eh_frame_hdr
+// (la tabla de búsqueda binaria de sus ~360k FDE), o una excepción del game no cruzaría sus propios frames.
 // Oculta: solo la ve el libunwind enlazado en este mismo binario.
 extern "C" __attribute__((visibility("hidden"))) int dl_iterate_phdr(int (*cb)(dl_phdr_info*, size_t, void*),
                                                                     void* data) {
@@ -179,9 +179,9 @@ int nier_run(const RunConfig& cfg) {
     if (pthread_create(&thread, &attr, game_thread, nullptr) != 0) die("pthread_create");
 
     // Watchdog: cada watchdog_seconds vuelca dónde está el hilo principal, sin pararlo. En la
-    // segunda instantánea vuelca además todos los hilos del juego, uno detrás de otro.
+    // segunda instantánea vuelca además todos los hilos del game, uno detrás de otro.
     auto list_threads = reinterpret_cast<int (*)(pthread_t*, int)>(nnsdk_symbol("nnsdk_list_threads"));
-    // DEPURACIÓN: con el fichero <datos>/hilos se vuelcan todos los hilos del juego en ese momento (p. ej. uno que
+    // DEPURACIÓN: con el fichero <data>/hilos se vuelcan todos los hilos del game en ese momento (p. ej. uno que
     // gasta un núcleo entero) y se borra el fichero.
     const char* data = getenv("NIER_DATA");
     const std::string threads_request = std::string(data ? data : ".") + "/hilos";

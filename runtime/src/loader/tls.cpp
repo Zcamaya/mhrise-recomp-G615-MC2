@@ -47,7 +47,7 @@ void free_block(void* p) {
         std::lock_guard lock(g_m);
         g_blocks.erase(std::remove(g_blocks.begin(), g_blocks.end(), block), g_blocks.end());
     }
-    // Si otro destructor del hilo vuelve a leer el TLS del juego, el stub le da un bloque nuevo.
+    // Si otro destructor del hilo vuelve a leer el TLS del game, el stub le da un bloque nuevo.
     if (bionic_tp()[kSlot] == reinterpret_cast<uintptr_t>(block)) bionic_tp()[kSlot] = 0;
     free(block);
 }
@@ -99,13 +99,13 @@ void set_template(const void* image, size_t image_size, size_t total_size, size_
     g_tpl.image_size = image_size;
     g_tpl.total_size = total_size;
     g_tpl.align = align;
-    // Como musl con TLS_ABOVE_TP: 16 bytes de TCB y luego la imagen, alineada como su dirección en el módulo.
+    // Como musl con TLS_ABOVE_TP: 16 bytes de TCB y luego la image, alineada como su dirección en el módulo.
     g_tpl.offset = kTcbSize + ((reinterpret_cast<uintptr_t>(image) - kTcbSize) & (align - 1));
     g_tpl.known = true;
-    printf("TLS del juego: %zu bytes (%zu de .tdata), alineado a %zu, en TP+%#zx; %zu hilos ya tenían bloque\n",
+    printf("TLS del game: %zu bytes (%zu de .tdata), alineado a %zu, en TP+%#zx; %zu hilos ya tenían bloque\n",
            total_size, image_size, align, g_tpl.offset, g_blocks.size());
     if (g_tpl.offset + total_size > 4096) {
-        printf("[aviso] el TLS del juego no cabe en el bloque provisional de los hilos que ya existían\n");
+        printf("[aviso] el TLS del game no cabe en el bloque provisional de los hilos que ya existían\n");
         return;
     }
     for (uint8_t* block : g_blocks) fill(block);
@@ -140,7 +140,7 @@ bool patch(Module& mod, std::string& err) {
         uint32_t* site = &text[k];
         uint32_t* back = site + 1;
         stub[0] = insn;                              // mrs xN, tpidr_el0
-        stub[1] = 0xF9400800 | n << 5 | n;           // ldr xN, [xN, #16]: el TP del juego
+        stub[1] = 0xF9400800 | n << 5 | n;           // ldr xN, [xN, #16]: el TP del game
         stub[2] = 0xB4000040 | n;                    // cbz xN, +8: el hilo aún no tiene bloque
         stub[3] = branch(&stub[3], back, 0x14000000);
         if (n == 0) {
@@ -177,7 +177,7 @@ bool patch(Module& mod, std::string& err) {
     }
     __builtin___clear_cache(reinterpret_cast<char*>(mod.patch_area),
                             reinterpret_cast<char*>(mod.patch_area + Module::kPatchAreaSize));
-    printf("%s: %zu lecturas de tpidr_el0 van al TLS propio del juego\n", mod.name.c_str(), count);
+    printf("%s: %zu lecturas de tpidr_el0 van al TLS propio del game\n", mod.name.c_str(), count);
     return true;
 }
 

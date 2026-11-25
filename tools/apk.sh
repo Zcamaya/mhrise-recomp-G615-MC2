@@ -4,13 +4,12 @@
 # screen (or pass NIER_DATA=<folder on the device>).
 # Usage: tools/apk.sh            SECS=<n> max wait (default 60); TAIL=<n> log lines to show;
 #                               INSTALL_ONLY=1 builds and installs without starting.
-# Bucle de desarrollo: compila, instala por adb, arranca el juego y enseña su log.
+# Bucle de desarrollo: compila, instala por adb, arranca el game y enseña su log.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APK="$("$ROOT/tools/build_apk.sh")"
-
-PKG=${PACKAGE:-io.github.iamwilmar.mhriseport}
+PKG=${PACKAGE:-io.github.iamwilmar.mhriseport.camon50ultra}
+APK="$(PACKAGE="$PKG" LABEL="${LABEL:-MH Rise port (Camon)}" "$ROOT/tools/build_apk.sh")"
 adb shell am force-stop "$PKG" 2> /dev/null || true
 adb install -r "$APK" > /dev/null
 echo "installed: $(adb shell dumpsys package "$PKG" | grep -m1 lastUpdateTime | tr -d ' ')"
@@ -23,7 +22,7 @@ if [ -n "${INSTALL_ONLY:-}" ]; then exit 0; fi
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell rm -f "$DATA/log.txt"
 adb logcat -c
-adb shell am start -n "$PKG/.GameActivity" > /dev/null && echo "started"
+adb shell am start -n "$PKG/io.github.iamwilmar.mhriseport.GameActivity" > /dev/null && echo "started"
 
 # Wait until the game ends, crashes or the watchdog fires.
 for _ in $(seq "$(( ${SECS:-60} / 2 ))"); do

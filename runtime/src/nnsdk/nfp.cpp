@@ -1,7 +1,7 @@
 // nn::nfp: los amiibo (NFC del Joy-Con derecho). La Flip no tiene lector: la biblioteca se inicializa y no
 // hay ningún dispositivo. ListDevices devuelve 0 con el error del servicio cuando no hay lector
-// (NfcDeviceNotFound), que el juego trata igual que una lista vacía (main+0x73439f0) sin avisar de nada;
-// cualquier operación sobre un DeviceHandle, que el juego nunca llega a tener, da ese mismo error.
+// (NfcDeviceNotFound), que el game trata igual que una lista vacía (main+0x73439f0) sin avisar de nada;
+// cualquier operación sobre un DeviceHandle, que el game nunca llega a tener, da ese mismo error.
 
 #include <atomic>
 #include <cstdint>
@@ -35,7 +35,7 @@ namespace {
 
 // Módulo nfp (115). 64: no hay lector NFC (el que pone detail::CheckError). 208: el applet de ajustes
 // de amiibo volvió sin terminar (el valor por defecto de detail::StartAmiiboSettings).
-// Ojo: 80 (NFC desactivado) haría que el juego marque el lector como apagado (main+0x7343dac).
+// Ojo: 80 (NFC desactivado) haría que el game marque el lector como apagado (main+0x7343dac).
 constexpr Result kResultNfcDeviceNotFound{115 | (64 << 9)};
 constexpr Result kResultAmiiboSettingsNotCompleted{115 | (208 << 9)};
 

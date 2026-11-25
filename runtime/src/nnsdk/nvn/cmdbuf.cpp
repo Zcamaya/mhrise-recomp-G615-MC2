@@ -1,5 +1,5 @@
 // nvnCommandBuffer*: graba los comandos en una CommandList propia (commands.h). La memoria de
-// comandos y de control que aporta el juego no se usa; el handle que recibe es el puntero a la lista.
+// comandos y de control que aporta el game no se usa; el handle que recibe es el puntero a la lista.
 
 #include <atomic>
 #include <cstring>
@@ -16,9 +16,9 @@ using namespace nvn;
 
 namespace {
 
-// Las listas grabadas viven hasta que el juego recicla la memoria de control en la que (en NVN) estaría
+// Las listas grabadas viven hasta que el game recicla la memoria de control en la que (en NVN) estaría
 // su handle: al volver a dar esa memoria con AddControlMemory, sus handles dejan de ser válidos y se
-// liberan. Antes no se liberaban nunca: ~4 MB/s de fuga y Android acababa matando el juego.
+// liberan. Antes no se liberaban nunca: ~4 MB/s de fuga y Android acababa matando el game.
 struct Recorded {
     const uint8_t* control;  // memoria de control vigente al grabarla
     CommandList* list;
@@ -80,7 +80,7 @@ std::atomic<bool> g_recycle{true};
 size_t capacity_bytes(const CommandList& list) { return list.commands.capacity() * sizeof(Command); }
 
 // La lista del pool que mejor le viene a una grabación de unos `hint` comandos: la más pequeña en la que
-// caben o, si no cabe en ninguna, la más grande. nullptr si el pool está vacío.
+// caben o, si no cabe en no, la más grande. nullptr si el pool está vacío.
 CommandList* take_list(size_t hint) {
     // ¿Le viene mejor una lista de capacidad a que una de capacidad b?
     auto better = [hint](size_t a, size_t b) {
@@ -143,7 +143,7 @@ CommandList* new_list(size_t hint) {
 }
 
 // La lista que se graba está llena: se pasa a una mayor del pool (su memoria ya está en uso: sin fallos de
-// página ni munmap) copiando lo grabado, que es trivial de copiar. Si no hay ninguna mayor, el vector crece
+// página ni munmap) copiando lo grabado, que es trivial de copiar. Si no hay no mayor, el vector crece
 // como siempre. La lista (el handle) es la misma: solo cambia su memoria.
 void grow(CommandList& list) {
     if (!g_recycle.load(std::memory_order_relaxed)) return;
@@ -232,7 +232,7 @@ void nvnCommandBufferFinalize(void* cmd) {
         cb->recording = nullptr;
     }
     g_command_buffers.destroy(cmd);
-    g_generation.fetch_add(1, std::memory_order_acq_rel);  // tras destruirlo: ninguna búsqueda posterior lo recuerda
+    g_generation.fetch_add(1, std::memory_order_acq_rel);  // tras destruirlo: no búsqueda posterior lo recuerda
 }
 void nvnCommandBufferAddCommandMemory(void*, void*, int64_t, size_t) {}
 void nvnCommandBufferAddControlMemory(void* cmd, void* memory, size_t size) {
@@ -288,7 +288,7 @@ uint64_t nvnCommandBufferEndRecording(void* cmd) {
     return reinterpret_cast<uint64_t>(list);
 }
 
-// --- Render targets y borrados ---
+// --- Render targets y clears ---
 
 void nvnCommandBufferSetRenderTargets(void* cmd, int count, void* const* colors, const void* const* color_views,
                                       void* depth, const void* depth_view) {
@@ -387,7 +387,7 @@ void nvnCommandBufferSetStencilValueMask(void* cmd, int faces, int mask) {
     record(cmd, cmd::Stencil{cmd::Stencil::ValueMask, faces, mask});
 }
 
-// --- Objetos de estado (se copian: el juego puede reutilizar el struct) ---
+// --- Objetos de estado (se copian: el game puede reutilizar el struct) ---
 
 void nvnCommandBufferBindBlendState(void* cmd, const BlendState* s) { record(cmd, *s); }
 void nvnCommandBufferBindColorState(void* cmd, const ColorState* s) { record(cmd, *s); }

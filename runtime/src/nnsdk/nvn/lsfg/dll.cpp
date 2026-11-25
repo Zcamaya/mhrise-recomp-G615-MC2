@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Port de Eden (src/video_core/frame_gen/lossless_dll.cpp y lsfg_translate.cpp): el lector de .rsrc del PE y
-// la renumeración de bindings, con stdio en vez de Common::FS y los dos juegos de shaders (FP16 y FP32). Sin
+// la renumeración de bindings, con stdio en vez de Common::FS y los dos games de shaders (FP16 y FP32). Sin
 // caché en disco: leer y recorrer la DLL cuesta milisegundos y Eden la recorre igual en cada arranque.
 
 #include "nnsdk/nvn/lsfg/dll.h"
@@ -260,7 +260,7 @@ DllStatus load_shaders(const std::string& path, Modules& fp16, Modules& fp32, si
             auto hit = resources.find(id + offset);
             std::vector<uint32_t> words;
             if (hit != resources.end()) words = adopt(hit->second);
-            if (words.empty()) {  // falta uno: el juego entero no vale
+            if (words.empty()) {  // falta uno: el game entero no vale
                 out->clear();
                 break;
             }
@@ -355,7 +355,7 @@ bool audit_module(const std::vector<uint32_t>& w, bool float16, std::string* ent
         auto t = type_kind.find(pointee[v->second.type]);
         int kind = t == type_kind.end() ? -1 : t->second;
         if (kind == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && v->second.storage != 2) kind = -1;  // solo UBO (Uniform)
-        if (kind < 0) return fail("un binding no es UBO, sampler ni imagen");
+        if (kind < 0) return fail("un binding no es UBO, sampler ni image");
         (*bindings)[binding] = kind;
     }
     return true;

@@ -1,6 +1,6 @@
-// nn::settings: códigos de idioma. El juego compara el idioma que le da nn::oe::GetDesiredLanguage con los
+// nn::settings: códigos de idioma. El game compara el idioma que le da nn::oe::GetDesiredLanguage con los
 // suyos (LanguageCode::Make de cada Language). En la consola la tabla la tiene el servicio de settings; es la
-// fija de Nintendo, en el orden del enum Language.
+// fixed de Nintendo, en el orden del enum Language.
 
 #include <cstring>
 

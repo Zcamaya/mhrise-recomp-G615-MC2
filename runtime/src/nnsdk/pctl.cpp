@@ -1,5 +1,5 @@
 // nn::pctl: control parental. No hay restricciones: la comunicación libre (contenido de otros jugadores,
-// chat) está siempre permitida. Sin red el juego no tiene a quién mostrarle nada, pero no ve bloqueos.
+// chat) está siempre permitida. Sin red el game no tiene a quién mostrarle nada, pero no ve bloqueos.
 
 namespace nn::pctl {
 

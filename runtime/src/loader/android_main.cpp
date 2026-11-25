@@ -1,5 +1,5 @@
-// Entrada de la APK (NativeActivity): espera la ventana, manda stdout a <datos>/log.txt y
-// arranca el juego en su propio hilo. El hilo de android_main sigue atendiendo a Android y traduce
+// Entrada de la APK (NativeActivity): espera la window, manda stdout a <data>/log.txt y
+// arranca el game en su propio hilo. El hilo de android_main sigue atendiendo a Android y traduce
 // el mando de la Flip a botones de la Switch.
 
 #include <mutex>
@@ -36,15 +36,15 @@
 
 namespace {
 
-// <datos>: la carpeta del juego que eligió el usuario en la pantalla de inicio (SetupActivity, files/carpeta.txt).
+// <data>: la carpeta del game que eligió el usuario en la screen de inicio (SetupActivity, files/carpeta.txt).
 std::string g_data;
 RunConfig g_cfg;
 
 // El log pasa por una tubería de 1 MB que vacía un hilo propio ("LogSD"). Antes cada printf escribía en la SD (FUSE →
-// MediaProvider → exFAT) desde el hilo que lo hacía, y con <datos>/verbose_log línea a línea: ~100 escrituras por segundo
-// desde el executor, el hilo del juego (las instantáneas del vigilante, 100 líneas) y el del audio. Cuando la SD se
+// MediaProvider → exFAT) desde el hilo que lo hacía, y con <data>/verbose_log línea a línea: ~100 escrituras por segundo
+// desde el executor, el hilo del game (las instantáneas del vigilante, 100 líneas) y el del audio. Cuando la SD se
 // atascaba (guardando pipelines.bin, 4-7 s) esos hilos esperaban con ella: de 30 a 1-3 fps y el audio a saltos con el
-// juego quieto. Ahora solo espera si la tubería se llena (~100 s del log normal). <datos>/log_direct: como antes.
+// game quieto. Ahora solo espera si la tubería se llena (~100 s del log normal). <data>/log_direct: como antes.
 int g_log_file = -1;  // log.txt
 int g_log_pipe = -1;  // extremo de lectura de la tubería
 std::atomic<uint64_t> g_log_read{0}, g_log_written{0};  // bytes que LogSD sacó de la tubería y que ya escribió
@@ -149,7 +149,7 @@ enum : uint64_t {
 // Cualquier otro mando, y las teclas que inyecta adb: por posición, que es como Android entrega los mandos (BUTTON_A es el
 // botón de abajo también en los mandos de otras consolas). La consola sin esa propiedad (otro firmware): por nombre solo
 // si su mando se presenta como el del modo Retro (2022:3001, "Retroid Pocket Controller").
-// <datos>/xbox_buttons y <datos>/retro_buttons (en vivo) fuerzan una u otra para todos.
+// <data>/xbox_buttons y <data>/retro_buttons (live) fuerzan una u otra para todos.
 int forced_layout() {  // 1: Xbox (por posición), 0: Retro (por nombre), -1: sin forzar
     static int checks = 0, forced = -1;
     if (checks++ % 32 == 0) forced = nnsdk::ini::on("xbox_buttons") ? 1 : nnsdk::ini::on("retro_buttons") ? 0 : -1;
@@ -215,7 +215,7 @@ int retroid_pad_mode() {
 }
 constexpr int kRetroidVendor = 0x2022;
 // true: los botones de ese mando se leen por posición (Xbox). Se mira en cada tecla: el modo de la Flip cambia con el
-// juego abierto y sin que el mando cambie de id.
+// game abierto y sin que el mando cambie de id.
 PadInfo& pad_info(ANativeActivity* activity, int32_t device) {
     static std::map<int32_t, PadInfo> pads;
     auto it = pads.find(device);
@@ -236,7 +236,7 @@ bool xbox_layout(ANativeActivity* activity, int32_t device) {
     const int mode = console ? retroid_pad_mode() : -1;
     bool xbox;
     const char* why;
-    if (forced >= 0) xbox = forced == 1, why = "forzado por <datos>/xbox_buttons o retro_buttons";
+    if (forced >= 0) xbox = forced == 1, why = "forzado por <data>/xbox_buttons o retro_buttons";
     else if (!console) xbox = true, why = "no es el mando de la consola: los externos llegan por posición";
     else if (mode == 1) xbox = true, why = "modo Xbox de la consola";
     else if (mode == 0) xbox = false, why = "modo Retro de la consola";
@@ -277,8 +277,8 @@ uint64_t button_for(int32_t keycode, bool xbox) {
 
 int32_t to_stick(float v) { return static_cast<int32_t>(std::lround(std::fmax(-1.0f, std::fmin(1.0f, v)) * 32767.0f)); }
 
-uint64_t g_auto_buttons = 0;  // DEPURACIÓN: autojuego (NIER_AUTOJUEGO)
-// El jugador tocó el mando físico: el autojuego se retira para siempre (las teclas que inyecta adb vienen del
+uint64_t g_auto_buttons = 0;  // DEPURACIÓN: autogame (NIER_AUTOJUEGO)
+// El jugador tocó el mando físico: el autogame se retira para siempre (las teclas que inyecta adb vienen del
 // dispositivo virtual, id < 0, y no cuentan).
 std::atomic<bool> g_player_took_over{false};
 void take_over(AInputEvent* event) {
@@ -286,7 +286,7 @@ void take_over(AInputEvent* event) {
     // Solo un botón pulsado o un stick movido de verdad: el mando de la Flip manda eventos de ejes en reposo, y eso
     // paraba el paseo automático nada más empezar.
     const bool key = AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY && AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN;
-    // (la pantalla táctil también manda eventos de movimiento, con X e Y en píxeles: solo cuentan los de un joystick)
+    // (la screen táctil también manda eventos de movimiento, con X e Y en píxeles: solo cuentan los de un joystick)
     const bool stick = AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION &&
                        (AInputEvent_getSource(event) & AINPUT_SOURCE_JOYSTICK) == AINPUT_SOURCE_JOYSTICK &&
                        (std::fabs(AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_X, 0)) > 0.5f ||
@@ -295,12 +295,12 @@ void take_over(AInputEvent* event) {
                         std::fabs(AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_RZ, 0)) > 0.5f);
     if ((!key && !stick) || g_player_took_over.exchange(true)) return;
     g_auto_buttons = 0;
-    printf("[entrada] el jugador toma el mando: autojuego desactivado\n");
+    printf("[entrada] el jugador toma el mando: autogame desactivado\n");
 }
 
-// DEPURACIÓN: grabación del mando. Con <datos>/record al arrancar, cada cambio (botones y sticks) se apunta con su
-// segundo desde el arranque en <datos>/grabacion.txt ("t botones lx ly rx ry"); un hilo lo escribe cada segundo, así
-// ningún evento espera a la SD. Con <datos>/replay al arrancar, se vuelve a tocar igual desde el arranque (para
+// DEPURACIÓN: grabación del mando. Con <data>/record al arrancar, cada cambio (botones y sticks) se apunta con su
+// segundo desde el arranque en <data>/grabacion.txt ("t botones lx ly rx ry"); un hilo lo escribe cada segundo, así
+// ningún evento espera a la SD. Con <data>/replay al arrancar, se vuelve a tocar igual desde el arranque (para
 // repetir una sesión del jugador en las pruebas). Tocar el mando físico durante la reproducción la para.
 const auto g_boot = std::chrono::steady_clock::now();
 bool g_recording = false, g_replaying = false;
@@ -405,7 +405,7 @@ void publish() {
     record_input();
 }
 
-// Un botón tocado que se suelta antes de que el juego lo lea: que cuente unos frames (como las teclas)
+// Un botón tocado que se suelta antes de que el game lo lea: que cuente unos frames (como las teclas)
 void latch(uint64_t bits) {
     if (!bits) return;
     timespec ts;
@@ -494,10 +494,10 @@ void* autoplay(void*) {
     return nullptr;
 }
 
-// DEPURACIÓN: mientras exista <datos>/walk, el personaje camina en zigzag y la cámara gira despacio (para medir el
+// DEPURACIÓN: mientras exista <data>/walk, el personaje camina en zigzag y la cámara gira despacio (para medir el
 // mundo abierto sin el jugador). Al quitar el fichero se sueltan los sticks; tocar el mando físico lo para del todo.
-// DEPURACIÓN: <datos>/scripted_pad con "lx ly rx ry botones" (sticks de -1 a 1, botones en hex con los bits de NpadButton:
-// 1 = A, 2 = B, 0x400 = +…): el mando lo pone ese fichero mientras exista (pruebas sin tocar la consola; un evento de
+// DEPURACIÓN: <data>/scripted_pad con "lx ly rx ry botones" (sticks de -1 a 1, botones en hex con los bits de NpadButton:
+// 1 = A, 2 = B, 0x400 = +…): el mando lo pone ese fichero mientras exista (pruebas not touching la consola; un evento de
 // entrada de adb cuenta como el jugador y pararía esto).
 bool scripted_pad() {
     static const std::string file = g_data + "/scripted_pad";
@@ -556,13 +556,13 @@ void* walk(void*) {
 }
 
 
-// El último toque que se posó en el borde derecho de la pantalla (su hora de Android, en ns; 0 si no hay): la tecla BACK que
+// El último toque que se posó en el borde derecho de la screen (su hora de Android, en ns; 0 si no hay): la tecla BACK que
 // llega poco después es el gesto de "atrás" del sistema hecho desde ese borde.
 int64_t g_edge_touch_ns = 0;
 constexpr int32_t kEdgePixels = 160;                // lo que Android cuenta como borde, con margen (hasta 48 dp)
 constexpr int64_t kEdgeGestureNs = 3'000'000'000;  // de posar el dedo a soltarlo con el gesto hecho
 
-// Un toque de la pantalla para el panel del HUD, en píxeles de la ventana del juego (action: AMOTION_EVENT_ACTION_*)
+// Un toque de la screen para el panel del HUD, en píxeles de la window del game (action: AMOTION_EVENT_ACTION_*)
 void touch_point(int32_t action, float x, float y, int64_t time_ns, int32_t width) {
     const uint64_t point = static_cast<uint64_t>(static_cast<uint32_t>(std::lround(y))) << 32 |
                            static_cast<uint32_t>(std::lround(x));
@@ -592,7 +592,7 @@ int32_t on_input(android_app* app, AInputEvent* event) {
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY) {
         if (mod_ui_hotkey(event)) return 1;
         // El gesto de "atrás" del sistema desde el borde derecho (aparece una flecha): Android se queda con el toque y manda
-        // la tecla BACK. No es el botón del juego (antes hacía de "-"): abre o cierra el panel del HUD (nvn/hud.cpp). Se
+        // la tecla BACK. No es el botón del game (antes hacía de "-"): abre o cierra el panel del HUD (nvn/hud.cpp). Se
         // reconoce porque llega poco después de un toque que se posó en ese borde; el BACK de un botón físico o del borde
         // izquierdo sigue siendo "-".
         if (AKeyEvent_getKeyCode(event) == AKEYCODE_BACK) {
@@ -635,8 +635,8 @@ int32_t on_input(android_app* app, AInputEvent* event) {
         publish();
         return 1;  // si no, Android convierte B en "atrás" y cierra la app
     }
-    // La pantalla táctil: el toque de un dedo, para el panel del HUD (deslizar de derecha a izquierda: nvn/hud.cpp).
-    // Con los controles táctiles los toques los recibe su ventana (GameActivity) y los que no son de un control llegan
+    // La screen táctil: el toque de un dedo, para el panel del HUD (deslizar de derecha a izquierda: nvn/hud.cpp).
+    // Con los controles táctiles los toques los recibe su window (GameActivity) y los que no son de un control llegan
     // por nativeTouchPoint; sin ella (tools/apk.sh abre la NativeActivity sola), llegan aquí.
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION &&
         (AInputEvent_getSource(event) & AINPUT_SOURCE_TOUCHSCREEN) == AINPUT_SOURCE_TOUCHSCREEN) {
@@ -729,19 +729,19 @@ NnsdkWindow g_window_state;
 void on_cmd(android_app* app, int32_t cmd) {
     if (cmd == APP_CMD_INIT_WINDOW && app->window) {
         g_window_state.window = app->window;
-        if (!g_cfg.native_window) {  // la primera: arranca el juego
+        if (!g_cfg.native_window) {  // la primera: arranca el game
             g_cfg.native_window = app->window;
             g_window_state.serial = g_window_state.done = 1;
             pthread_t thread;
             pthread_create(&thread, nullptr, game_main, nullptr);
             pthread_detach(thread);
         } else {
-            g_window_state.serial++;  // al volver de segundo plano: el presentador crea el swapchain en la nueva
+            g_window_state.serial++;  // al volver de background: el presentador crea el swapchain en la nueva
         }
     } else if (cmd == APP_CMD_LOST_FOCUS) {
         forget_held_keys();  // (their releases go to the window that took the focus: the menu, the MOD UI)
     } else if (cmd == APP_CMD_TERM_WINDOW && g_cfg.native_window) {
-        // Android destruye la ventana en cuanto volvemos de aquí: el presentador tiene que soltarla antes (como mucho
+        // Android destruye la window en cuanto volvemos de aquí: el presentador tiene que soltarla antes (como mucho
         // 1,5 s, para no bloquear la app; presenta cada 33 ms).
         g_window_state.window = nullptr;
         const uint32_t serial = ++g_window_state.serial;
@@ -860,7 +860,7 @@ jstring utf16(JNIEnv* env, const char16_t* s, size_t max) {
     return env->NewString(reinterpret_cast<const jchar*>(s), static_cast<jsize>(n));
 }
 
-// La pregunta, desde un hilo propio (la pide un hilo del juego, que no se engancha a Java): la actividad abre el cuadro en
+// La pregunta, desde un hilo propio (la pide un hilo del game, que no se engancha a Java): la actividad abre el cuadro en
 // su hilo y contesta por nativeTextAnswer. Sin el método (una app sin TextPrompt), la respuesta es "no hay cuadro".
 void* text_asker(void*) {
     pthread_setname_np(pthread_self(), "Teclado");
@@ -1010,13 +1010,13 @@ void android_main(android_app* app) {
         fclose(f);
     }
     if (g_data.empty()) {
-        __android_log_print(ANDROID_LOG_ERROR, "NieR", "sin carpeta del juego: abre la app desde su icono");
+        __android_log_print(ANDROID_LOG_ERROR, "NieR", "sin carpeta del game: abre la app desde su icono");
         ANativeActivity_finish(app->activity);
         pump(app);
     }
     setenv("NIER_DATA", g_data.c_str(), 1);
     setenv("NIER_INTERNO", app->activity->internalDataPath, 1);  // files/ de la app: los drivers de GPU (nvn/driver.h)
-    setenv("NIER_SETUP", "1", 1);  // la carpeta sale de la pantalla de inicio: el panel del HUD ofrece cambiarla
+    setenv("NIER_SETUP", "1", 1);  // la carpeta sale de la screen de inicio: el panel del HUD ofrece cambiarla
     setenv("NIER_TRAZA_DESDE", "94", 1);  // DEPURACIÓN: también vuelca los shaders de los draws trazados desde aquí
     setenv("NIER_VOLCAR_TRAS", "", 1);  // DEPURACIÓN: RT tras esos draws
     setenv("NIER_VOLCAR_TAM", "", 1);  // DEPURACIÓN: RT tras los draws a ese tamaño
@@ -1027,8 +1027,8 @@ void android_main(android_app* app) {
     setenv("NIER_SONDA_MEMORIA", "", 1);  // DEPURACIÓN: "1": mide los límites del driver al arrancar  // DEPURACIÓN: trazas sin volcar render targets ni shaders
     std::string log = g_data + "/log.txt";
     if (freopen(log.c_str(), "w", stdout)) {
-        // Por bloques: línea a línea, cada printf era una escritura en la SD. <datos>/verbose_log o <datos>/log_lines: línea
-        // a línea (para leerlo en vivo, y lo último no se pierde si el proceso se cae).
+        // Por bloques: línea a línea, cada printf era una escritura en la SD. <data>/verbose_log o <data>/log_lines: línea
+        // a línea (para leerlo live, y lo último no se pierde si el proceso se cae).
         static char buffer[1 << 16];
         const bool verbose = nnsdk::ini::on("verbose_log") || nnsdk::ini::on("log_lines");
         setvbuf(stdout, verbose ? nullptr : buffer, verbose ? _IOLBF : _IOFBF, verbose ? 0 : sizeof buffer);
@@ -1049,8 +1049,8 @@ void android_main(android_app* app) {
     }
     g_cfg.exefs = rutas::get().exefs;
     g_cfg.nnsdk = "libnnsdk.so";
-    // DEPURACIÓN: el vigilante interrumpe el hilo del juego cada 15 s para volcar su pila (un tirón y más de 100 líneas en
-    // la SD cada vez): solo con <datos>/verbose_log.
+    // DEPURACIÓN: el vigilante interrumpe el hilo del game cada 15 s para volcar su pila (un tirón y más de 100 líneas en
+    // la SD cada vez): solo con <data>/verbose_log.
     g_cfg.watchdog_seconds = access((g_data + "/verbose_log").c_str(), F_OK) == 0 ? 15 : 0;
     g_cfg.input = &g_input;
     g_cfg.window_state = &g_window_state;
@@ -1067,7 +1067,7 @@ void android_main(android_app* app) {
         pthread_t thread;
         pthread_create(&thread, nullptr, recorder, nullptr);
         pthread_detach(thread);
-        printf("[entrada] grabando el mando en <datos>/grabacion.txt\n");
+        printf("[entrada] grabando el mando en <data>/grabacion.txt\n");
     }
     if (g_replaying) {
         pthread_t thread;
@@ -1080,7 +1080,7 @@ void android_main(android_app* app) {
         pthread_detach(thread);
     }
 
-    // Como cualquier juego: la pantalla no se apaga mientras corre.
+    // Como cualquier game: la screen no se apaga mientras corre.
     ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_KEEP_SCREEN_ON, 0);
     app->onAppCmd = on_cmd;
     app->onInputEvent = on_input;

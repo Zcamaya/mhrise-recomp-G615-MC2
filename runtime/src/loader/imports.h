@@ -1,5 +1,5 @@
 #pragma once
-// Enlace de los imports del juego: libnnsdk.so > bionic/compiler-rt/libc++abi > datos del sdk > stub.
+// Enlace de los imports del game: libnnsdk.so > bionic/compiler-rt/libc++abi > datos del sdk > stub.
 
 #include <cstdio>
 #include <string>
@@ -10,10 +10,10 @@
 // Abre libnnsdk.so y prepara la memoria de los stubs.
 bool init_imports(const std::string& nnsdk_path, std::string& err);
 
-// Dirección para un import de main. sdk (opcional) aporta los datos que el juego importa.
+// Dirección para un import de main. sdk (opcional) aporta los datos que el game importa.
 uint64_t resolve_import(const ElfSym& sym, const Module* sdk);
 
-// Stub con nombre creado en caliente (p. ej. funciones NVN pedidas por nombre); devuelve ret.
+// Stub con nombre created en caliente (p. ej. funciones NVN pedidas por nombre); devuelve ret.
 void* make_named_stub(const char* name, uint64_t ret);
 
 void report_imports(bool list_stubs);

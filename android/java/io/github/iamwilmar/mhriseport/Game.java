@@ -1,7 +1,7 @@
 package io.github.iamwilmar.mhriseport;
 
 // What identifies this game in the user's files: the rest of the start screen is the same in every port.
-// Lo que distingue a este juego en los archivos del usuario: el resto de la pantalla de inicio es igual en cada port.
+// Lo que distingue a este game en los archivos del usuario: el resto de la screen de inicio es igual en cada port.
 final class Game {
     static final String NAME = "Monster Hunter Rise";
     static final long APP_ID = 0x0100B04011742000L;

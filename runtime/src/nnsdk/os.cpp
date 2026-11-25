@@ -1,5 +1,5 @@
-// nn::os (y su API en C, nnos*) sobre pthreads. Cada objeto del juego se asocia por su
-// dirección a un objeto nuestro; si el juego usa uno sin inicializarlo (inicializador
+// nn::os (y su API en C, nnos*) sobre pthreads. Cada objeto del game se asocia por su
+// dirección a un objeto nuestro; si el game usa uno sin inicializarlo (inicializador
 // estático), se crea al vuelo con valores seguros (mutex recursivo, evento manual).
 // Aparte: los objetos que el SDK implementa en su propia memoria (SdkMutex, LightEvent) en os_sync.cpp, las
 // fibras en os_fiber.cpp y el heap de la aplicación en os_memory.cpp.
@@ -54,13 +54,13 @@ timespec deadline_after(int64_t ns) {
     return {static_cast<time_t>(t / 1'000'000'000), static_cast<long>(t % 1'000'000'000)};
 }
 
-// Plazo absoluto (CLOCK_MONOTONIC) a partir de un TimeSpan, sin desbordar con los "infinitos" del juego.
+// Plazo absoluto (CLOCK_MONOTONIC) a partir de un TimeSpan, sin desbordar con los "infinitos" del game.
 int64_t deadline_of(TimeSpan t) {
     const int64_t now = now_ns();
     return t.ns >= kForever - now ? kForever : now + std::max<int64_t>(t.ns, 0);
 }
 
-// Objeto del juego (por dirección) -> objeto nuestro. 64 trozos para no serializar todo.
+// Objeto del game (por dirección) -> objeto nuestro. 64 trozos para no serializar todo.
 template <typename T>
 class Registry {
 public:
@@ -133,12 +133,12 @@ struct HostCond {
     }
 };
 
-// La variable de condición que ve el juego. En Horizon (svcWaitProcessWideKeyAtomic) una espera solo vuelve por un
+// La variable de condición que ve el game. En Horizon (svcWaitProcessWideKeyAtomic) una espera solo vuelve por un
 // Signal o Broadcast hecho después de empezarla, o por plazo; pthread_cond_wait puede volver sin nada. MH Rise espera
 // una sola vez sin volver a mirar la condición en el relevo de frames entre GameThread y el render (main+0x792dbe0 y
 // main+0x7924064, contadores comparados con !=): un despertar de más adelantaba un frame a uno de los dos y acababan
 // esperándose el uno al otro (se colgaba al salir el aviso de crear partida). Aquí cada espera se apunta y lee el
-// número de secuencia antes de soltar el mutex del juego; Signal da un permiso a quien esté apuntado (Broadcast, uno
+// número de secuencia antes de soltar el mutex del game; Signal da un permiso a quien esté apuntado (Broadcast, uno
 // a cada uno) y cambia la secuencia, así que ni se pierde un aviso ni se vuelve sin él.
 struct GameCond {
     std::mutex state;
@@ -154,7 +154,7 @@ struct GameCond {
         }
         syscall(SYS_futex, &seq, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
     }
-    // m es el mutex del juego, tomado. false si venció el plazo (end: kForever o absoluto en ns monotónicos).
+    // m es el mutex del game, tomado. false si venció el plazo (end: kForever o absoluto en ns monotónicos).
     bool wait(pthread_mutex_t* m, int64_t end) {
         uint32_t s;
         {
@@ -311,7 +311,7 @@ struct HostRwLock {
     }
 };
 
-// Cola de mensajes sobre el buffer que da el juego (circular, como en el SDK).
+// Cola de mensajes sobre el buffer que da el game (circular, como en el SDK).
 struct HostMessageQueue {
     HostMutex lock{false};
     HostCond not_full, not_empty;
@@ -349,7 +349,7 @@ struct HostThread {
     int priority = 16, ideal_core = 0;
     uint64_t core_mask = 0;  // 0: solo el núcleo ideal
     const char* name = "";
-    char name_buffer[32] = {};  // SetThreadName copia el nombre (el juego puede pasar uno temporal)
+    char name_buffer[32] = {};  // SetThreadName copia el nombre (el game puede pasar uno temporal)
     pthread_t pthread{};
     pid_t tid = 0;
     bool started = false, joined = false;
@@ -383,7 +383,7 @@ std::unordered_map<uintptr_t, size_t> g_regions;
 
 thread_local ThreadType* t_current = nullptr;
 
-// Byte de estado dentro del ThreadType del juego. Hay código que lo lee en línea (cabeceras del
+// Byte de estado dentro del ThreadType del game. Hay código que lo lee en línea (cabeceras del
 // SDK) en vez de preguntar a nn::os: el device de E/S de Wwise guarda su ThreadType en +0x10 y,
 // tras StartThread, da el hilo por válido si el byte +0x50 del device (ThreadType+0x40) no es 0.
 // En el SDK 11.4 de MH Rise sigue en +0x40 (MultiWaitHolderOfThread::IsSignaled compara ese byte con 4).
@@ -393,7 +393,7 @@ enum ThreadState : uint8_t { NotInitialized = 0, Initialized = 1, Started = 3, T
 void set_state(ThreadType* type, ThreadState state) {
     reinterpret_cast<volatile uint8_t*>(type)[kThreadStateOffset] = state;
 }
-// Lo que el SDK deja en el ThreadType al crear el hilo y el juego lee en línea: el handle del hilo en el kernel
+// Lo que el SDK deja en el ThreadType al crear el hilo y el game lee en línea: el handle del hilo en el kernel
 // (+0x1b0, u32) y su id (+0x1b8, lo que devuelve GetThreadId). MH Rise guarda el handle de un hilo concreto y con
 // él decide si un lector de archivo avanza su posición (main+0x6c3f0fc): con todos a 0 ningún hilo la avanzaba y
 // el lector de los .pak se quedaba saltando hacia atrás para siempre. Cada hilo lleva uno distinto y no nulo.
@@ -415,7 +415,7 @@ constexpr int kIdealCoreUseDefault = -2, kIdealCoreNoUpdate = -3;
 constexpr int kDefaultCore = 0;  // el núcleo por defecto de una aplicación (el del hilo principal)
 
 // --- TLS de nn::os (TlsSlot) ---
-// No es el thread_local ELF del juego (eso lo lleva el loader): son 32 valores por hilo, 16 para la aplicación
+// No es el thread_local ELF del game (eso lo lleva el loader): son 32 valores por hilo, 16 para la aplicación
 // (AllocateTlsSlot, del 0 hacia arriba) y 16 para el SDK (SdkAllocateTlsSlot, del 31 hacia abajo), como el
 // TlsManager del SDK. Un slot nuevo vale 0 en todos los hilos. Al terminar un hilo se llama al destructor de
 // cada slot ocupado (aunque el valor sea 0, como el SDK) y hasta cuatro pasadas más con los valores que esos
@@ -517,13 +517,13 @@ Result allocate_tls_slot(TlsSlot* slot, TlsDestructor destructor, bool sdk) {
 }
 
 // --- Afinidad de los hilos críticos ---
-// El frame es una cadena: el hilo principal del juego (envía y presenta), MainDraw (graba los comandos) y
+// El frame es una cadena: el hilo principal del game (envía y presenta), MainDraw (graba los comandos) y
 // NvnSubmit (los reproduce en Vulkan). Sin afinidad, el planificador los podía dejar en los núcleos pequeños:
 // se limitan a los grandes (los de frecuencia máxima por encima de la mínima; en el SD865, cpu4-7) con una
 // máscara y no un núcleo fijo, porque core_ctl puede aislar alguno. Los demás hilos no se tocan, salvo que un
 // hilo nuevo hereda la máscara de quien lo crea: los de nn::os que no son críticos vuelven a la completa al
 // arrancar, y los demás en la revisión de cada segundo. Android rehace la afinidad al mover el proceso de
-// cpuset (segundo plano y vuelta): refresh_critical_threads la vuelve a poner. Interruptor no_affinity:
+// cpuset (background y loop): refresh_critical_threads la vuelve a poner. Interruptor no_affinity:
 // máscara completa para los hilos críticos; lo mira refresh_critical_threads como mucho una vez por segundo,
 // desde el hilo que presenta, y lo aplica a todos (sched_setaffinity admite el tid de otro hilo del proceso).
 struct CpuMasks {
@@ -671,7 +671,7 @@ void* thread_entry(void* p) {
         release_inherited_affinity();
     nnsdk::on_thread_start();
     t->fn(t->arg);
-    // Como el SDK al acabar la función del hilo: destructores de los TlsSlot (con el TLS del juego aún vivo),
+    // Como el SDK al acabar la función del hilo: destructores de los TlsSlot (con el TLS del game aún vivo),
     // estado Terminated (lo miran el código en línea y MultiWaitHolderOfThread) y aviso a los MultiWait.
     finish_thread_tls();
     unpin_current_thread();
@@ -712,7 +712,7 @@ Result create_thread(ThreadType* type, ThreadFunction fn, void* arg, size_t stac
 }
 
 // El núcleo en el que "está" el hilo. En la Switch un hilo solo corre en los núcleos de su máscara (por defecto,
-// solo su núcleo ideal), y el juego usa el número como bit de una máscara (1 << núcleo, guardado en un TlsSlot
+// solo su núcleo ideal), y el game usa el número como bit de una máscara (1 << núcleo, guardado en un TlsSlot
 // por cada worker): se contesta dentro de la máscara del hilo y de los núcleos 0-2 de la aplicación, nunca el
 // núcleo real de la Flip (0-7).
 int current_core(const HostThread& t) {
@@ -830,7 +830,7 @@ int64_t wait_clock_ns() {
     return int64_t{ts.tv_sec} * 1'000'000'000 + ts.tv_nsec;
 }
 
-// DEPURACIÓN (con <datos>/verbose_log): las esperas de más de 150 ms, con el objeto y quién la llamó (dirección
+// DEPURACIÓN (con <data>/verbose_log): las esperas de más de 150 ms, con el objeto y quién la llamó (dirección
 // absoluta: restarle la base de main que sale al principio del log). Para ver qué espera se come un frame.
 // Objetos con esperas largas recientes: quién los señala lo registra log_signal.
 std::atomic<const void*> g_hot_objects[8];
@@ -1141,7 +1141,7 @@ Result CreateThread(ThreadType* t, ThreadFunction fn, void* arg, void*, size_t s
     return create_thread(t, fn, arg, stack_size, priority, core);
 }
 
-// La pila que da el juego no se usa: bionic reserva la suya del mismo tamaño.
+// La pila que da el game no se usa: bionic reserva la suya del mismo tamaño.
 void StartThread(ThreadType* type) {
     HostThread& t = g_threads.get(type);
     // Ya corre: el vídeo reintenta Configure + StartThread si su Start falla, y un segundo pthread_create
@@ -1380,7 +1380,7 @@ void refresh_critical_threads() {
 
 extern "C" {
 
-// Para el watchdog del loader: los hilos del juego vivos.
+// Para el watchdog del loader: los hilos del game vivos.
 int nnsdk_list_threads(pthread_t* out, int max) {
     int n = 0;
     g_threads.for_each([&](HostThread& t) {

@@ -11,7 +11,7 @@
   appears when the port changes it.
 - **`N shaders traducidos … M de la caché de SPIR-V`:** translations so far, how many came from the cache, and how many
   failed.
-- **`ritmo:`** every few seconds: fps, slow frames, the game's GPU time per frame (`GPU del juego`) and the port's CPU
+- **`pace:`** every few seconds: fps, slow frames, the game's GPU time per frame (`GPU del game`) and the port's CPU
   time per frame (`ejecutor … ms/frame`). The slowest submit is broken down by cause: pipelines compiled
   (`pipelines del driver`), shaders translated, copies to mirrors (`copia a espejos`), texture uploads.
 - **`perfil …`** (only with `perf_stats` or `verbose_log`): where the executor's time goes per frame (textures,
@@ -37,7 +37,7 @@ The frame goes to `/storage/emulated/0/NieR-volcados/`:
 
 | File | What |
 |---|---|
-| `fNNNN_ventana.ppm` | The final window image. |
+| `fNNNN_window.ppm` | The final window image. |
 | `fNNNN_rtK.ppm`, `_a.pgm` | Render target K: colour, and alpha as greyscale. |
 | `fNNNN_rtK_p16.pgm` | A depth target as 16-bit greyscale. |
 | `fNNNN_rtK_cL…` | Layer L of an array target, such as the shadow cascades. |

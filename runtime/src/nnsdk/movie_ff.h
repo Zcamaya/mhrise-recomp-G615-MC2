@@ -1,5 +1,5 @@
 // Demuxer de MP4 con FFmpeg (solo libavformat; la decodificación sigue en MediaCodec). Se usa cuando
-// AMediaExtractor abre el vídeo pero no encuentra ninguna pista (visto en un Snapdragon 7+ Gen 2: el juego se
+// AMediaExtractor abre el vídeo pero no encuentra no pista (visto en un Snapdragon 7+ Gen 2: el game se
 // quedaba esperando el vídeo para siempre). Si el proyecto se compila sin FFmpeg (MHRISE_FFMPEG sin definir),
 // open() devuelve nullptr y todo queda como antes.
 #pragma once

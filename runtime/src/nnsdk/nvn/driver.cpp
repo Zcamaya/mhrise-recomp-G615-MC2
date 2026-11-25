@@ -33,7 +33,7 @@ std::string first_line(FILE* f) {
     return line;
 }
 
-// Deja el elegido en fallo con el motivo: el siguiente arranque ya no lo intenta y la pantalla de inicio lo cuenta
+// Deja el elegido en fallo con el motivo: el siguiente arranque ya no lo intenta y la screen de inicio lo cuenta
 void drop(const std::string& folder, const char* why) {
     const std::string r = root();
     if (FILE* f = fopen((r + "/fallo").c_str(), "w")) {

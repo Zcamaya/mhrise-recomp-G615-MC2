@@ -35,7 +35,7 @@ struct CalendarAdditionalInfo {
 struct LocationName {
     char value[36];
 };
-// En la consola son 0x4000 bytes opacos que el juego copia con memcpy (main+0x6b3dfb8): aquí solo se usa el
+// En la consola son 0x4000 bytes opacos que el game copia con memcpy (main+0x6b3dfb8): aquí solo se usa el
 // principio, el nombre de la zona, sin punteros.
 struct TimeZoneRule {
     LocationName location;
@@ -67,7 +67,7 @@ std::string device_location() {
     return __system_property_get("persist.sys.timezone", zone) > 0 ? zone : "UTC";
 }
 
-// Hora local en una zona. La del teléfono es la de localtime_r; otra (rara: el juego carga la del teléfono)
+// Hora local en una zona. La del teléfono es la de localtime_r; otra (rara: el game carga la del teléfono)
 // se calcula cambiando TZ un momento.
 void local_in(const char* zone, time_t t, tm* out) {
     if (!*zone || device_location() == zone) {

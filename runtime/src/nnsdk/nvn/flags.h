@@ -1,12 +1,12 @@
 #pragma once
-// Live switches: a line "name = 1" in <datos>/mhr.ini (what the settings menu writes; ini.h), or an empty file with that
-// name in the data folder (`adb shell touch <datos>/<name>`, `rm` to go back), changes a behaviour without reinstalling
+// Live switches: a line "name = 1" in <data>/mhr.ini (what the settings menu writes; ini.h), or an empty file with that
+// name in the data folder (`adb shell touch <data>/<name>`, `rm` to go back), changes a behaviour without reinstalling
 // or restarting the game. The ini wins when it names the switch. Handy to compare an optimisation with and without it
 // in the same scene, and to turn it off if something goes wrong.
 // Cada interruptor mira su fichero al usarse la primera vez; después los mira todos un hilo propio ("Interruptores")
 // una vez por segundo, con un solo readdir de la carpeta de datos, y anota los cambios en el log. Antes cada uno hacía
 // su access() en el hilo que lo leía: ~75 búsquedas por segundo en la SD (FUSE → MediaProvider → exFAT) desde el
-// executor, el hilo del juego y el del audio, de 0,2-3 ms cada una y paradas del todo cuando la SD se atasca.
+// executor, el hilo del game y el del audio, de 0,2-3 ms cada una y paradas del todo cuando la SD se atasca.
 
 #include <dirent.h>
 #include <pthread.h>
@@ -41,7 +41,7 @@ private:
     std::atomic<bool> value_{false};
 };
 
-// Los interruptores creados y el hilo que los mira. Nunca se destruye: el hilo sigue hasta que muere el proceso.
+// Los interruptores createds y el hilo que los mira. Nunca se destruye: el hilo sigue hasta que muere el proceso.
 class LiveFlags {
 public:
     static LiveFlags& instance() {

@@ -1,10 +1,10 @@
-// nn::hid: la Flip es una consola portátil, así que el juego ve un solo mando, en modo portátil (NpadIdType Handheld =
+// nn::hid: la Flip es una consola portátil, así que el game ve un solo mando, en modo portátil (NpadIdType Handheld =
 // 0x20, estilo Handheld) con los botones y sticks que traduce el loader (host.h). MH Rise recorre No1..No8 y Handheld
 // con GetNpadStyleSet y crea un mando por cada id conectado (main+0x6f8fa30): con el portátil como único conectado, la
 // Flip es el jugador 1 y no salta el applet de "conecta un mando".
 //
 // Lo que la Flip no tiene responde como una Switch sin ello: ratón y teclado USB desconectados (estados con los
-// atributos a 0), pantalla táctil sin toques ni gestos, y los sensores de movimiento del portátil quietos. La vibración
+// atributos a 0), screen táctil sin toques ni gestos, y los sensores de movimiento del portátil quietos. La vibración
 // acepta handles y valores pero no tiene motor; el grafo de VibrationNode está en hid_vibration.cpp.
 
 #include <time.h>
@@ -61,7 +61,7 @@ struct VibrationDeviceHandle {
 };
 struct VibrationDeviceInfo {
     uint32_t device_type;  // 1: actuador lineal (Joy-Con, Pro), 2: motor excéntrico (mando de GameCube)
-    uint32_t position;     // 0: ninguna, 1: izquierda, 2: derecha
+    uint32_t position;     // 0: no, 1: izquierda, 2: derecha
 };
 
 // Colores del mando (nn::util::Color4u8: r, g, b, a).
@@ -116,8 +116,8 @@ struct SixAxisSensorState {
     int64_t delta_time;  // ns
     int64_t sampling_number;
     float acceleration[3];      // en G
-    float angular_velocity[3];  // en vueltas por segundo
-    float angle[3];             // en vueltas
+    float angular_velocity[3];  // en loops por segundo
+    float angle[3];             // en loops
     float direction[9];         // ejes x, y, z del mando en el sistema del mundo
     uint32_t attributes;        // bit 0: conectado, bit 1: interpolado
     uint32_t reserved;
@@ -138,7 +138,7 @@ constexpr uint32_t kStyleFullKey = 1u << 0, kStyleHandheld = 1u << 1, kStyleJoyD
 // Atributos del estado: conectado, con cable, mitad izquierda y derecha conectadas y con cable.
 constexpr uint32_t kHandheldAttributes = 0x3F;
 
-// Errores del módulo hid (202) que el SDK deja pasar al juego en vez de abortar.
+// Errores del módulo hid (202) que el SDK deja pasar al game en vez de abortar.
 constexpr Result kResultNpadIsDualJoyCon{202 | 601 << 9};
 constexpr Result kResultNpadIsSameType{202 | 602 << 9};
 constexpr Result kResultNpadControllerNotConnected{202 | 604 << 9};
@@ -165,7 +165,7 @@ uint32_t style_of(NpadIdType id) {
 }
 
 // El estado de un estilo solo trae datos si es el que tiene el mando: GetNpadState(NpadFullKeyState*, Handheld) da en
-// una Switch un mando desconectado, y así no se cuenta dos veces la misma pulsación si el juego lee varios estilos.
+// una Switch un mando desconectado, y así no se cuenta dos veces la misma pulsación si el game lee varios estilos.
 void fill_state(void* state, NpadIdType id, uint32_t style) {
     static std::atomic<int> total{0};  // DEPURACIÓN: cada 100 lecturas, la última y lo que hay en la entrada
     if (++total % 100 == 0) {
@@ -174,7 +174,7 @@ void fill_state(void* state, NpadIdType id, uint32_t style) {
                total.load(), id, style, static_cast<void*>(in), in ? static_cast<unsigned long long>(in->buttons.load()) : 0ull,
                in ? static_cast<unsigned long long>(in->latched.load()) : 0ull);
     }
-    static std::atomic<int> calls{0};  // DEPURACIÓN: qué mandos y estilos lee el juego mientras hay una pulsación
+    static std::atomic<int> calls{0};  // DEPURACIÓN: qué mandos y estilos lee el game mientras hay una pulsación
     if (NnsdkInput* in = nnsdk::host().input; in && (in->latched.load() || in->buttons.load()) && calls++ < 40)
         printf("[hid] GetNpadState id %#x estilo %#x (conectado %#x) con botones %#llx\n", id, style, style_of(id),
                static_cast<unsigned long long>(in->buttons.load() | in->latched.load()));
@@ -193,7 +193,7 @@ void fill_state(void* state, NpadIdType id, uint32_t style) {
             in->latched.fetch_and(~latched);
     }
     out->buttons = buttons;
-    static uint64_t last = 0;  // DEPURACIÓN: qué ve el juego cuando cambian los botones
+    static uint64_t last = 0;  // DEPURACIÓN: qué ve el game cuando cambian los botones
     if (buttons != last) {
         static int logged = 0;
         if (logged++ < 60) printf("[hid] botones 0x%llx\n", static_cast<unsigned long long>(buttons));
@@ -232,11 +232,11 @@ void InitializeMouse() {}
 void InitializeKeyboard() {}
 
 void SetSupportedNpadIdType(const NpadIdType* ids, size_t count) {
-    char list[128] = "";  // DEPURACIÓN: qué mandos acepta el juego en cada momento
+    char list[128] = "";  // DEPURACIÓN: qué mandos acepta el game en cada momento
     for (size_t k = 0, n = 0; k < count && n < sizeof list - 8; k++) n += snprintf(list + n, sizeof list - n, " %#x", ids[k]);
     printf("[hid] SetSupportedNpadIdType:%s\n", list);
 }
-// El juego pide 0x1f (todos los estilos de Joy-Con y Pro) y, con el agarre en horizontal, solo Joy-Con sueltos (0x18).
+// El game pide 0x1f (todos los estilos de Joy-Con y Pro) y, con el agarre en horizontal, solo Joy-Con sueltos (0x18).
 // No se hace caso: en una Switch eso desconectaría el portátil, y la Flip no tiene otro mando que ofrecer.
 void SetSupportedNpadStyleSet(NpadStyleSet styles) { printf("[hid] SetSupportedNpadStyleSet %#x\n", styles.storage[0]); }
 void SetNpadJoyHoldType(NpadJoyHoldType) {}
@@ -244,7 +244,7 @@ void SetNpadHandheldActivationMode(NpadHandheldActivationMode) {}
 
 // Solo hay mando en el modo portátil.
 NpadStyleSet GetNpadStyleSet(const NpadIdType& id) {
-    static std::atomic<int> calls{0};  // DEPURACIÓN: qué ids pregunta el juego (cada 500 llamadas, la última)
+    static std::atomic<int> calls{0};  // DEPURACIÓN: qué ids pregunta el game (cada 500 llamadas, la última)
     if (++calls % 500 == 0)
         printf("[hid] %d GetNpadStyleSet (último id %#x, desde %p)\n", calls.load(), id, __builtin_return_address(0));
     return {{style_of(id)}};
@@ -256,10 +256,10 @@ void GetNpadState(NpadJoyDualState* out, const NpadIdType& id) { fill_state(out,
 void GetNpadState(NpadJoyLeftState* out, const NpadIdType& id) { fill_state(out, id, kStyleJoyLeft); }
 void GetNpadState(NpadJoyRightState* out, const NpadIdType& id) { fill_state(out, id, kStyleJoyRight); }
 
-// El juego solo desconecta No1..No8 (al portátil no lo toca, main+0x6f910a4), que nunca están conectados.
+// El game solo desconecta No1..No8 (al portátil no lo toca, main+0x6f910a4), que nunca están conectados.
 void DisconnectNpad(const NpadIdType&) {}
 
-// Asignación de Joy-Con (menú de mandos del juego): no hay Joy-Con sueltos que juntar, separar ni intercambiar.
+// Asignación de Joy-Con (menú de mandos del game): no hay Joy-Con sueltos que juntar, separar ni intercambiar.
 NpadJoyAssignmentMode GetNpadJoyAssignment(const NpadIdType& id) {
     return id < 8 ? static_cast<NpadJoyAssignmentMode>(g_assignment[id].load()) : NpadJoyAssignmentMode_Dual;
 }
@@ -275,7 +275,7 @@ void StartLrAssignmentMode() {}
 void StopLrAssignmentMode() {}
 
 // Solo se juntan dos Joy-Con sueltos de distinto lado; con el portátil y huecos vacíos el hid contesta "son del mismo
-// tipo" (los dos vacíos) o "ya es un par" (el portátil), que el juego trata como que no se pudo (main+0x6f8ff20).
+// tipo" (los dos vacíos) o "ya es un par" (el portátil), que el game trata como que no se pudo (main+0x6f8ff20).
 Result MergeSingleJoyAsDualJoy(const NpadIdType& a, const NpadIdType& b) {
     return style_of(a) == style_of(b) ? kResultNpadIsSameType : kResultNpadIsDualJoyCon;
 }
@@ -319,9 +319,9 @@ void ControllerSupportArg::SetDefault() {
     memset(storage + 5, 0, sizeof storage - 5);
 }
 
-// --- Pantalla táctil, gestos, ratón y teclado: presentes pero sin nada que contar ---
+// --- Screen táctil, gestos, ratón y teclado: presentes pero sin nada que contar ---
 
-// Una sola muestra, sin toques: el juego recorre las muestras más nuevas que la última que vio (main+0x7c6c44c) y se
+// Una sola muestra, sin toques: el game recorre las muestras más nuevas que la última que vio (main+0x7c6c44c) y se
 // queda con el número de la primera.
 template <size_t N>
 int GetTouchScreenStates(TouchScreenState<N>* out, int count);
@@ -333,7 +333,7 @@ int GetTouchScreenStates<16>(TouchScreenState<16>* out, int count) {
     return 1;
 }
 
-// Sin toques no hay gestos: ninguna muestra, y el juego no procesa nada (main+0x7c6c380).
+// Sin toques no hay gestos: no muestra, y el game no procesa nada (main+0x7c6c380).
 int GetGestureStates(GestureState*, int) { return 0; }
 
 void GetMouseState(MouseState* out) {

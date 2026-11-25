@@ -14,7 +14,7 @@ import android.view.View;
 
 import io.github.iamwilmar.mhriseport.Controls.Ctl;
 
-// Los controles táctiles, en una ventana transparente encima del juego (GameActivity): la disposición tradicional de un
+// Los controles táctiles, en una window transparente encima del game (GameActivity): la disposición tradicional de un
 // mando con todo (los dos sticks, la cruceta, A B X Y, L R ZL ZR, − +, L3 y R3) y los combos que haya. Cada dedo es de
 // un control: un botón se pulsa mientras el dedo esté encima, un stick sigue al dedo desde su centro, y un toque corto en
 // un stick (sin moverlo) es L3 / R3. Con "deslizar" un dedo que pasa a otro botón suelta el primero y pulsa el segundo.
@@ -579,7 +579,7 @@ final class TouchPad extends View {
         if (on == 0 && (rx != 0 || ry != 0)) on |= 2;  // (the last swipe's stick going back to the middle)
         sticksOn = on;
         if (buttons != lastButtons || on != 0 || lastSticks != on) {
-            host.send(buttons, on, lx, -ly, rx, -ry);  // (al juego, hacia arriba positivo)
+            host.send(buttons, on, lx, -ly, rx, -ry);  // (al game, hacia arriba positivo)
             lastButtons = buttons;
             lastSticks = on;
         }
@@ -661,7 +661,7 @@ final class TouchPad extends View {
         super.onDetachedFromWindow();
     }
 
-    // Suelta todo (al abrir el menú o al irse la app a segundo plano)
+    // Suelta todo (al abrir el menú o al irse la app a background)
     void releaseAll() {
         for (Finger f : fingers) {
             if (f.modWindow) {

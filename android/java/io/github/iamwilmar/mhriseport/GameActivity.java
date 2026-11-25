@@ -19,9 +19,9 @@ import android.view.WindowManager;
 
 import java.io.File;
 
-// El juego: la NativeActivity de siempre (libnier.so, android_main.cpp), con los controles táctiles encima.
-// La NativeActivity se queda con la superficie de su ventana y con su entrada, así que una vista suya no se vería: los
-// controles van en una ventana propia, un panel transparente pegado a la del juego (TYPE_APPLICATION_PANEL). No toma el
+// El game: la NativeActivity de siempre (libnier.so, android_main.cpp), con los controles táctiles encima.
+// La NativeActivity se queda con la superficie de su window y con su entrada, así que una vista suya no se vería: los
+// controles van en una window propia, un panel transparente pegado a la del game (TYPE_APPLICATION_PANEL). No toma el
 // foco (FLAG_NOT_FOCUSABLE): las teclas y los ejes del mando siguen yendo al loader. Los toques sí son suyos; los que no
 // caen en un control se los pasa al loader para el panel del HUD (nativeTouchPoint).
 public final class GameActivity extends NativeActivity implements TouchPad.Host {
@@ -164,7 +164,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
         pad.setGameFps(gameFps());
         luaAtLaunch = luaScripts();
         pad.setModsAvailable(luaAtLaunch);
-        // La ventana del juego tiene que estar puesta para colgarle el panel: después del primer paso por la cola.
+        // La window del game tiene que estar puesta para colgarle el panel: después del primer step por la cola.
         getWindow().getDecorView().post(this::showPad);
         showSaveMessage();
     }
@@ -218,7 +218,7 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
     private void showPad() {
         if (shown || isFinishing()) return;
         View decor = getWindow().getDecorView();
-        if (decor.getWindowToken() == null) {  // (aún no: otra vuelta)
+        if (decor.getWindowToken() == null) {  // (aún no: otra loop)
             decor.postDelayed(this::showPad, 50);
             return;
         }
@@ -239,8 +239,8 @@ public final class GameActivity extends NativeActivity implements TouchPad.Host 
             }
             showCapture();
         } catch (RuntimeException e) {
-            // (sin panel el juego sigue con el mando físico y el panel del HUD, como antes)
-            System.err.println("[controles] no se pudo poner la ventana de los controles: " + e);
+            // (sin panel el game sigue con el mando físico y el panel del HUD, como antes)
+            System.err.println("[controles] no se pudo poner la window de los controles: " + e);
         }
     }
 

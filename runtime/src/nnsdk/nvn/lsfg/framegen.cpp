@@ -5,16 +5,16 @@
 // a un anillo de 2 entradas, el calentamiento, el apagado por carga con reintentos 5/15/30/60 s).
 //
 // Por frame real N, con LSFG encendido y listo (todo en el hilo que presenta, bajo vk_queue_mutex()):
-//   1. un envío propio: copia exacta de la textura de la ventana a input(N), las pasadas compartidas de N y,
-//      con la historia ya llena, las de generación: G(N-1, N) en la imagen de salida de la cadena (1280x720);
-//   2. si hay G: blit de la salida a una imagen del swapchain y vkQueuePresentKHR;
-//   3. window.cpp presenta N como siempre (blit de la textura del juego), justo después, sin dormir.
-// FIFO pone uno por vsync: G y luego N, dos por cada 33,3 ms. El ritmo del juego no cambia (una llamada a
+//   1. un envío propio: copia exacta de la textura de la window a input(N), las pasadas compartidas de N y,
+//      con la historia ya llena, las de generación: G(N-1, N) en la image de salida de la cadena (1280x720);
+//   2. si hay G: blit de la salida a una image del swapchain y vkQueuePresentKHR;
+//   3. window.cpp presenta N como siempre (blit de la textura del game), justo después, sin dormir.
+// FIFO pone uno por vsync: G y luego N, dos por cada 33,3 ms. El ritmo del game no cambia (una llamada a
 // nvn::present por frame real), así que su lógica sigue a 30.
 //
-// Interruptores (flags.h): <datos>/lsfg enciende;
-// <datos>/lsfg_flow_50 / lsfg_flow_100 el flujo óptico a la mitad / entero (por defecto un cuarto: Quality en la pantalla
-// del driver); <datos>/lsfg_fp32 fuerza
+// Interruptores (flags.h): <data>/lsfg enciende;
+// <data>/lsfg_flow_50 / lsfg_flow_100 el flujo óptico a la mitad / entero (por defecto un cuarto: Quality en la screen
+// del driver); <data>/lsfg_fp32 fuerza
 // los shaders FP32 (se mira al compilar, una vez por sesión).
 
 #include "nnsdk/nvn/lsfg/framegen.h"
@@ -57,7 +57,7 @@ constexpr uint64_t kAcquireNs = 100'000'000;
 constexpr uint64_t kRetireWaitNs = 50'000'000;   // al apagar: espera acotada antes de soltar la cadena
 constexpr uint64_t kWarmFrames = 3;              // se genera desde el 4.º frame seguido: beta lee 3 de historia
 constexpr double kHitchMs = 100.0;               // un hueco así (carga, tirón): no se interpola a través de él
-constexpr double kTooFastMs = 25.0;              // el juego presenta a más de ~40 fps: no cabe un frame generado
+constexpr double kTooFastMs = 25.0;              // el game presenta a más de ~40 fps: no cabe un frame generado
 
 double ms_between(Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); }
 
@@ -141,7 +141,7 @@ private:
     Pipelines pipelines_;     // los escribe solo el hilo de fondo, antes de la primera cadena
     bool compiled_ = false;   // ídem; se lee con el trabajo ya terminado
     const char* variant_ = "";
-    // The built-in generator (motion.h) instead of LSFG: chosen (<datos>/fg_builtin), or LSFG couldn't run here (no DLL,
+    // The built-in generator (motion.h) instead of LSFG: chosen (<data>/fg_builtin), or LSFG couldn't run here (no DLL,
     // or its chain can't be built on this GPU), which holds until the game restarts
     bool lsfg_unusable_ = false;
     bool want_builtin() const { return lsfg_unusable_ || NVN_FLAG("fg_builtin"); }
@@ -184,8 +184,8 @@ uint32_t FrameGen::swapchain_images(const VkSurfaceCapabilitiesKHR& caps) {
     return caps.maxImageCount ? std::min(n, caps.maxImageCount) : n;
 }
 
-// Un error de Vulkan o de la DLL: sin LSFG hasta reiniciar el juego. Lo que hubiera en vuelo se queda (no se
-// sabe si la GPU lo sigue leyendo); el juego sigue con el camino de siempre.
+// Un error de Vulkan o de la DLL: sin LSFG hasta reiniciar el game. Lo que hubiera en vuelo se queda (no se
+// sabe si la GPU lo sigue leyendo); el game sigue con el camino de siempre.
 void FrameGen::disable(const std::string& why) {
     if (state_ == State::Failed) return;
     state_ = State::Failed;
@@ -320,7 +320,7 @@ void FrameGen::start_job(VkExtent2D extent, VkFormat format, float flow) {
     const bool builtin = want_builtin();
     const bool need_compile = !compiled_ && !builtin;
     state_ = State::Waiting;
-    if (need_compile) NVN_LOG("lsfg: compilando los shaders en segundo plano (hasta entonces, sin generar)\n");
+    if (need_compile) NVN_LOG("lsfg: compilando los shaders en background (hasta entonces, sin generar)\n");
     std::thread([this, extent, format, flow, need_compile, builtin] {
         pthread_setname_np(pthread_self(), "NvnLsfg");
         const Clock::time_point t0 = Clock::now();
@@ -379,7 +379,7 @@ void FrameGen::poll_job() {
     }
     if (fell_back) lsfg_unusable_ = true;  // (no more tries with LSFG this session)
     if (missing) {  // sin DLL: se reintenta al apagar y volver a encender
-        NVN_LOG("lsfg: %s; se reintenta al quitar y volver a poner <datos>/lsfg\n", why.c_str());
+        NVN_LOG("lsfg: %s; se reintenta al quitar y volver a poner <data>/lsfg\n", why.c_str());
         missing_dll_ = true;
         state_ = State::Off;
         return;
@@ -396,14 +396,14 @@ void FrameGen::poll_job() {
 }
 
 // En el hilo de fondo: la DLL, las auditorías y los 25 pipelines. FP16 si el dispositivo tiene shaderFloat16; si
-// el driver no lo acepta, FP32. Una marca en <datos> antes de crear cada juego: si el driver tira el proceso
-// compilando, la vez siguiente se salta ese juego en vez de caer otra vez.
+// el driver no lo acepta, FP32. Una marca en <data> antes de crear cada game: si el driver tira el proceso
+// compilando, la vez siguiente se salta ese game en vez de caer otra vez.
 bool FrameGen::compile(std::string* why, bool* missing) {
     VkContext* c = vk();
     const std::string path = find_dll();
     if (path.empty()) {
         *missing = true;
-        *why = "Lossless.dll not found (import it from the GPU driver screen, or put it in <datos>/lsfg/ or Download/)";
+        *why = "Lossless.dll not found (import it from the GPU driver screen, or put it in <data>/lsfg/ or Download/)";
         return false;
     }
     Modules fp16, fp32;
@@ -430,7 +430,7 @@ bool FrameGen::compile(std::string* why, bool* missing) {
     std::string reason16;
     const bool force32 = NVN_FLAG("lsfg_fp32");
     if (fp16.empty() || !c->shader_float16 || force32) {
-        NVN_LOG("lsfg: uso FP32 (%s)\n", force32 ? "lo pide <datos>/lsfg_fp32"
+        NVN_LOG("lsfg: uso FP32 (%s)\n", force32 ? "lo pide <data>/lsfg_fp32"
                                          : fp16.empty() ? "a la DLL le faltan shaders FP16"
                                                         : "el dispositivo no tiene shaderFloat16");
     } else if (access(crumb16.c_str(), F_OK) == 0) {
@@ -467,12 +467,12 @@ void FrameGen::log_stats(Clock::time_point now) {
     if (NVN_FLAG("verbose_log")) {  // DEPURACIÓN
         if (gpu_n_)
             NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u tirón, "
-                    "%u ritmo, %u GPU ocupada, %u sin imagen; GPU %.2f ms de media (máx %.2f)\n",
+                    "%u ritmo, %u GPU ocupada, %u sin image; GPU %.2f ms de media (máx %.2f)\n",
                     real_ / secs, generated_, warming_, skip_hold_, skip_pace_, skip_busy_, skip_image_,
                     gpu_sum_ / gpu_n_, gpu_max_);
         else
             NVN_LOG("lsfg: %.1f fps reales, %u generados; sin generar: %u calentando, %u tirón, "
-                    "%u ritmo, %u GPU ocupada, %u sin imagen\n",
+                    "%u ritmo, %u GPU ocupada, %u sin image\n",
                     real_ / secs, generated_, warming_, skip_hold_, skip_pace_, skip_busy_, skip_image_);
     }
     stats_start_ = now;
@@ -489,7 +489,7 @@ bool FrameGen::record_lsfg(int index, const Texture& t, const VkRect2D& crop, ui
     vkResetCommandBuffer(cmd, 0);
     if (VkResult r = vkBeginCommandBuffer(cmd, &bi); r != VK_SUCCESS)
         return disable(std::string("vkBeginCommandBuffer: ") + vk_result_name(r)), false;
-    {  // después del frame del juego (en vuelo, misma cola) y de lo que leyeron el LSFG y los blits anteriores
+    {  // después del frame del game (en vuelo, misma cola) y de lo que leyeron el LSFG y los blits anteriores
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
@@ -498,7 +498,7 @@ bool FrameGen::record_lsfg(int index, const Texture& t, const VkRect2D& crop, ui
                              VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr,
                              0, nullptr);
     }
-    if (queries_) {  // el primero, cuando acaba todo lo anterior (el frame del juego): mide solo lo nuestro
+    if (queries_) {  // el primero, cuando acaba todo lo anterior (el frame del game): mide solo lo nuestro
         vkCmdResetQueryPool(cmd, queries_, 2 * index, 2);
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_, 2 * index);
     }
@@ -544,7 +544,7 @@ bool FrameGen::record_lsfg(int index, const Texture& t, const VkRect2D& crop, ui
     return true;
 }
 
-// La salida de la cadena (1280x720) escalada a la imagen del swapchain, igual que window.cpp hace con el real.
+// La salida de la cadena (1280x720) escalada a la image del swapchain, igual que window.cpp hace con el real.
 bool FrameGen::record_blit(hud::Uploads& uploads, VkCommandBuffer blit, const Window& w, VkImage image) {
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -569,7 +569,7 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     if (state_ == State::Failed || (!on && !enabled_ && !chain_ && !retired_)) return;  // apagado: casi gratis
     VkContext* c = vk();
     if (!c || !w.swapchain) return;
-    // Primero el del ejecutor (lee t->image, que el juego puede rehacer) y luego el de la cola: el mismo orden que
+    // Primero el del ejecutor (lee t->image, que el game puede rehacer) y luego el de la cola: el mismo orden que
     // el resto (ejecutor -> cola), sin cruces.
     std::lock_guard executor_lock(executor_mutex());
     Texture* t = source.get();
@@ -585,8 +585,8 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
         if (chain_) retire();
         return;
     }
-    // Más barato (para que quepa en las zonas pesadas): <datos>/lsfg_flujo_25 (flujo óptico a un cuarto) y
-    // <datos>/lsfg_medium (el frame generado a 3/4 de resolución, 960x540; el real sigue a la suya).
+    // Más barato (para que quepa en las zonas pesadas): <data>/lsfg_flujo_25 (flujo óptico a un cuarto) y
+    // <data>/lsfg_medium (el frame generado a 3/4 de resolución, 960x540; el real sigue a la suya).
     // Flujo a un cuarto por defecto: medido en las Ruinas, 3,5 ms por frame generado frente a 6,5 a la mitad, y así cabe
     // con el frame real en zonas abiertas. lsfg_flow_50 / lsfg_flow_100 para comparar.
     const float flow = NVN_FLAG("lsfg_flow_100") ? 1.0f : NVN_FLAG("lsfg_flow_50") ? 0.5f : 0.25f;
@@ -599,7 +599,7 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     log_stats(now);
     if (missing_dll_ || !setup()) return;
 
-    // La cadena es para la textura de la ventana de ahora y el flujo pedido; si cambia, se monta otra en el hilo
+    // La cadena es para la textura de la window de ahora y el flujo pedido; si cambia, se monta otra en el hilo
     // de fondo (la primera vez, con los pipelines) y hasta entonces se presenta como siempre.
     if (!t || !t->image || t->vk_format == VK_FORMAT_UNDEFINED || t->desc.width <= 0 || t->desc.height <= 0) {
         warm_ = 0;
@@ -624,13 +624,13 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     }
     if (w.images.size() < 4) {  // la DLL apareció después de crear el swapchain: el segundo present podría esperar
         if (!few_images_logged_)
-            NVN_LOG("lsfg: el swapchain tiene %zu imágenes (no había Lossless.dll al arrancar): reinicia el juego\n",
+            NVN_LOG("lsfg: el swapchain tiene %zu imágenes (no había Lossless.dll al arrancar): reinicia el game\n",
                     w.images.size());
         few_images_logged_ = true;
         return;
     }
 
-    // ¿Toca? Solo con el juego a ~30 fps (intervalo 2) y sin tirones recientes. When real frames run late (the phone
+    // ¿Toca? Solo con el game a ~30 fps (intervalo 2) y sin tirones recientes. When real frames run late (the phone
     // below 30) it keeps generating: the picture stays doubled.
     if (dt > 0) ema_ = ema_ > 0 ? ema_ + (dt - ema_) * 0.1 : dt;
     // The pace the presenter keeps (window.cpp: the FPS limit, or the game's own MaxFps): 30 or slower. A 40 or 60 that
@@ -667,7 +667,7 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     if (pace_ok == pace_logged_) {
         pace_logged_ = !pace_ok;
         if (!pace_ok)
-            NVN_LOG("lsfg: el juego no va a 30 fps (intervalo %d, %.1f ms por frame, ritmo %.1f ms): sin generar\n",
+            NVN_LOG("lsfg: el game no va a 30 fps (intervalo %d, %.1f ms por frame, ritmo %.1f ms): sin generar\n",
                     w.present_interval, ema_, frame_period_ns() / 1e6);
     }
     if (!pace_ok) {
@@ -726,7 +726,7 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     } else if (n < kWarmFrames) {
         warming_++;
     }
-    // Sin imagen se graba igual la copia y lo compartido: la historia sigue llena para el frame siguiente.
+    // Sin image se graba igual la copia y lo compartido: la historia sigue llena para el frame siguiente.
     if (!record_lsfg(index, *t, crop, n, generate) ||
         (generate && !record_blit(s.hud, s.blit, w, w.images[image].image))) {
         if (generate) w.rebuild = true;
@@ -737,7 +737,7 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     VkSubmitInfo si[2] = {{VK_STRUCTURE_TYPE_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_SUBMIT_INFO}};
     si[0].commandBufferCount = 1;
     si[0].pCommandBuffers = &s.cmd;
-    si[1].waitSemaphoreCount = 1;  // solo el blit espera a la imagen; la copia y el compute no
+    si[1].waitSemaphoreCount = 1;  // solo el blit espera a la image; la copia y el compute no
     si[1].pWaitSemaphores = &s.acquired;
     si[1].pWaitDstStageMask = &wait_stage;
     si[1].commandBufferCount = 1;
@@ -754,7 +754,7 @@ void FrameGen::present(Window& w, ResourceRef<Texture> source) {
     warm_++;
     if (!generate) return;
 
-    // presentID impar (2k+1): window.cpp pregunta luego cuándo salió en pantalla (VK_GOOGLE_display_timing).
+    // presentID impar (2k+1): window.cpp pregunta luego cuándo salió en screen (VK_GOOGLE_display_timing).
     VkPresentTimeGOOGLE when{static_cast<uint32_t>(2 * total_generated_ + 1), 0};
     const int64_t queued_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
     VkResult r = w.queue_image(image, &when);
@@ -796,7 +796,7 @@ int64_t FrameGen::refresh_ns(const Window& w) {
         if (get && get(c->device, w.swapchain, &d) == VK_SUCCESS && d.refreshDuration >= 4000000 &&
             d.refreshDuration <= 50000000)
             refresh_ns_ = static_cast<int64_t>(d.refreshDuration);
-        NVN_LOG("lsfg: la pantalla refresca cada %.2f ms (%.0f Hz)\n", refresh_ns_ / 1e6, 1e9 / refresh_ns_);
+        NVN_LOG("lsfg: la screen refresca cada %.2f ms (%.0f Hz)\n", refresh_ns_ / 1e6, 1e9 / refresh_ns_);
     }
     return refresh_ns_;
 }

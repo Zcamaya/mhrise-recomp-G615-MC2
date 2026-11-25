@@ -1,10 +1,10 @@
-// nn::ngc: el filtro de palabras malsonantes. Sin diccionarios del sistema todo texto sale limpio: ninguna palabra
+// nn::ngc: el filtro de palabras malsonantes. Sin diccionarios del sistema todo texto sale limpio: no palabra
 // marcada y nada enmascarado.
 //
-// El juego reserva el objeto (0x30 bytes, con su operator new) y solo importa el constructor, Initialize y
+// El game reserva el objeto (0x30 bytes, con su operator new) y solo importa el constructor, Initialize y
 // Finalize; el resto lo llama por la vtable: +0x30 CheckProfanityWords (char16_t), +0x40 MaskProfanityWordsInText
 // (char16_t) y +0x08 el destructor que borra. La clase tiene las funciones virtuales del SDK en su orden, así la
-// vtable que pone nuestro constructor tiene las mismas posiciones, y el delete va al allocator del juego.
+// vtable que pone nuestro constructor tiene las mismas posiciones, y el delete va al allocator del game.
 
 #include <cstddef>
 #include <cstdint>
@@ -45,7 +45,7 @@ Result clean(uint32_t* results, size_t count) {
 }
 
 Result unmasked(int* count) {
-    if (count) *count = 0;  // el juego pasa nullptr
+    if (count) *count = 0;  // el game pasa nullptr
     return ResultSuccess;
 }
 

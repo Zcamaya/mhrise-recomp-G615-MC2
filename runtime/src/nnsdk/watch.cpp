@@ -83,7 +83,7 @@ T* table(size_t count) {
     return p == MAP_FAILED ? nullptr : static_cast<T*>(p);
 }
 
-// La página del heap que se ve en a: >= 0, -2 si es un hueco de un pool virtual (ceros), -1 si no es del juego.
+// La página del heap que se ve en a: >= 0, -2 si es un hueco de un pool virtual (ceros), -1 si no es del game.
 int64_t heap_page(uintptr_t a, bool* is_virtual = nullptr) {
     if (is_virtual) *is_virtual = false;
     if (a >= g_map && a < g_map + g_size) return static_cast<int64_t>((a - g_map) / kPage);
@@ -277,7 +277,7 @@ void collect(uintptr_t address, size_t size, std::vector<uint64_t>& keys, std::v
     // señal de cualquier hilo que escribiera en memoria vigilada esperaba detrás). Perfil del 4-11: 21700 en el envío que
     // carga el selector de personaje ("724.1 tramos cerrados por frame"), 10800 en la aldea y 60600 al entrar en la
     // misión. Ahora el rango va seguido (un tramo si no tiene huecos) y lo del heap se ordena y se junta (16 páginas
-    // seguidas por tile de 64 KB como poco). <datos>/watch_per_page: como antes.
+    // seguidas por tile de 64 KB como poco). <data>/watch_per_page: como antes.
     const bool per_page = NVN_FLAG("watch_per_page");
     std::vector<std::pair<uintptr_t, size_t>> close, close_heap;
     {

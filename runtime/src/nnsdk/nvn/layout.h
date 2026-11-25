@@ -1,5 +1,5 @@
 #pragma once
-// Disposición de texturas en memoria de la GPU Tegra X1 (la que asume el juego al escribir sus
+// Disposición de texturas en memoria de la GPU Tegra X1 (la que asume el game al escribir sus
 // texturas ya "swizzleadas", tal como vienen en sus archivos): block-linear con GOBs de 64 bytes x 8
 // filas y bloques de 1..32 GOBs de alto, o lineal con stride (flag LINEAR).
 
@@ -31,7 +31,7 @@ struct TextureLayout {
     size_t total_size() const { return layer_size * layers; }
 };
 
-// block_height_log2 >= 0: el alto de bloque del nivel 0 lo fija la textura (NVNpackagedTextureLayout, byte 0) en vez de
+// block_height_log2 >= 0: el alto de bloque del nivel 0 lo fixed la textura (NVNpackagedTextureLayout, byte 0) en vez de
 // salir del alto; tile_width_log2: alineación del pitch en GOBs (byte 1; el tile_width_spacing del TIC de Maxwell).
 TextureLayout compute_layout(uint32_t width, uint32_t height, uint32_t depth, uint32_t layers, uint32_t levels,
                              uint32_t bytes_per_block, uint32_t block_w, uint32_t block_h, bool linear, uint32_t stride,
@@ -47,7 +47,7 @@ void deswizzle_level(const LevelLayout& level, uint32_t bytes_per_block, const u
 // independientes, para repartir un nivel grande entre hilos.
 void deswizzle_rows(const LevelLayout& level, uint32_t bytes_per_block, const uint8_t* src, uint8_t* dst, size_t row_begin,
                     size_t row_end, size_t* zero_chunks = nullptr);
-// La de antes (un memcpy de tamaño variable por cada trozo de 16 bytes), para <datos>/upload_v1.
+// La de antes (un memcpy de tamaño variable por cada trozo de 16 bytes), para <data>/upload_v1.
 void deswizzle_level_v1(const LevelLayout& level, uint32_t bytes_per_block, const uint8_t* src, uint8_t* dst);
 // Trozos de 16 bytes todo ceros en [p, p + size) (size múltiplo de 16).
 size_t count_zero_chunks(const uint8_t* p, size_t size);

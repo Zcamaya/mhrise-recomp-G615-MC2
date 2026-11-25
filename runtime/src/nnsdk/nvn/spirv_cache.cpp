@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Caché de traducciones Maxwell → SPIR-V (ver spirv_cache.h).
+// Caché de translations Maxwell → SPIR-V (ver spirv_cache.h).
 
 #include "nnsdk/nvn/spirv_cache.h"
 
@@ -246,7 +246,7 @@ void Cache::load() {
     }
     if (!valid && fd >= 0) close(fd);
     cv_.notify_all();
-    NVN_LOG("caché de SPIR-V: %zu traducciones leídas de %s (%llu KB%s%s) en %lld ms\n", loaded, path_.c_str(),
+    NVN_LOG("caché de SPIR-V: %zu translations leídas de %s (%llu KB%s%s) en %lld ms\n", loaded, path_.c_str(),
             static_cast<unsigned long long>(valid >> 10), rebuilt ? ", rehecha: otro traductor o rota" : "",
             cut ? ", final roto cortado" : "",
             static_cast<long long>(
@@ -265,7 +265,7 @@ void Cache::write_loop() {
         if (fd_ < 0 || on_disk_.count(key)) continue;
         const uint64_t size = kRecordHeader + bytes.size();
         if (file_bytes_ + size > kMaxFile) {
-            if (!full_logged) NVN_LOG("caché de SPIR-V: %s llegó a %llu MB, no se añade más\n", path_.c_str(),
+            if (!full_logged) NVN_LOG("caché de SPIR-V: %s llegó a %llu MB, no se adds más\n", path_.c_str(),
                                       static_cast<unsigned long long>(kMaxFile >> 20));
             full_logged = true;
             continue;

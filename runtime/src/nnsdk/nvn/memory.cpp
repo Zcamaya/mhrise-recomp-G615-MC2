@@ -1,11 +1,11 @@
-// nvnMemoryPool*: la memoria la pone el juego (SetStorage). Como dirección de GPU usamos la
-// misma dirección de CPU: así cualquier dirección que el juego pase en un comando se lee directo.
+// nvnMemoryPool*: la memoria la pone el game (SetStorage). Como dirección de GPU usamos la
+// misma dirección de CPU: así cualquier dirección que el game pase en un comando se lee directo.
 //
 // Pools virtuales (MH Rise los usa para la memoria de texturas: trozos de 4 MB de pools físicos que mapea seguidos en
 // un pool virtual con nvnMemoryPoolMapVirtual): no tienen memoria propia. Les damos una reserva de direcciones y
-// MapVirtual hace que esas direcciones vean las mismas páginas que el trozo físico (el heap del juego es un memfd
+// MapVirtual hace que esas direcciones vean las mismas páginas que el trozo físico (el heap del game es un memfd
 // compartido, os_memory.cpp), así la CPU, las subidas del ejecutor y las texturas creadas en el pool virtual leen lo
-// que el juego escribe por el físico. Lo no mapeado se lee como ceros.
+// que el game escribe por el físico. Lo no mapeado se lee como ceros.
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -142,7 +142,7 @@ nvn::Boolean nvnMemoryPoolInitialize(void* pool, const MemoryPoolBuilder* b) {
     if (((b->flags & (nvn::kPoolFlagPhysical | nvn::kPoolFlagVirtual)) || reserved) && logged++ < 12)
         NVN_LOG("memory pool %p %s: %zu KB, flags 0x%x, memoria %p%s\n", pool,
                 reserved ? "virtual" : (b->flags & nvn::kPoolFlagPhysical) ? "físico" : "", b->size >> 10, b->flags,
-                static_cast<void*>(storage), reserved && b->storage ? " (la del juego no se usa)" : "");
+                static_cast<void*>(storage), reserved && b->storage ? " (la del game no se usa)" : "");
     nvn::MemoryPool& p = nvn::g_memory_pools.create(pool);
     p.storage = storage;
     p.size = b->size;
@@ -266,7 +266,7 @@ int nvnMemoryPoolGetFlags(const void* pool) {
     nvn::MemoryPool* p = nvn::g_memory_pools.get(pool);
     return p ? p->flags : 0;
 }
-// La GPU lee la memoria del juego al ejecutar los comandos: no hay cachés que sincronizar.
+// La GPU lee la memoria del game al ejecutar los comandos: no hay cachés que sincronizar.
 void nvnMemoryPoolFlushMappedRange(const void*, int64_t, size_t) {}
 void nvnMemoryPoolInvalidateMappedRange(const void* pool, int64_t, size_t size) {
     const auto* p = nvn::g_memory_pools.get(pool);

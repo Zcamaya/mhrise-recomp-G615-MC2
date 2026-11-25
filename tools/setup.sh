@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetches third_party/ (not in git): what Eden's shader recompiler (runtime/eden) builds with, all pinned to known
 # versions.
-# Prepara third_party/ (no va en git): lo que usa el recompilador de shaders de Eden (runtime/eden), fijado a versiones
+# Prepara third_party/ (no va en git): lo que usa el recompilador de shaders de Eden (runtime/eden), fixeddo a versiones
 # conocidas.
 set -euo pipefail
 

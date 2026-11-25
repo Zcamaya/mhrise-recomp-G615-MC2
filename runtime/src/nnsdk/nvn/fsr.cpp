@@ -44,7 +44,7 @@ public:
         if (failed_ || !src || format != VK_FORMAT_R8G8B8A8_UNORM || NVN_FLAG("no_fsr")) return false;
         if (!setup() || !images(out)) return false;
 
-        // Lo de antes en la cola (el frame del juego, el FSR del frame anterior que leía estas imágenes) antes que esto.
+        // Lo de antes en la cola (el frame del game, el FSR del frame anterior que leía estas imágenes) antes que esto.
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -132,7 +132,7 @@ private:
         pl.pPushConstantRanges = &pc;
         if (vkCreatePipelineLayout(c->device, &pl, nullptr, &layout_) != VK_SUCCESS) return fail("vkCreatePipelineLayout");
         // En FP16 si el dispositivo lo tiene (shaderFloat16 y shaderInt16, que vk.cpp enciende si están): el Adreno 650 hace
-        // el doble de FP16 por ciclo y el EASU es casi todo aritmética. <datos>/fsr_fp32 (al arrancar): los de FP32.
+        // el doble de FP16 por ciclo y el EASU es casi todo aritmética. <data>/fsr_fp32 (al arrancar): los de FP32.
         bool half = vk()->shader_float16 && !NVN_FLAG("fsr_fp32");
         if (half && !(pipeline(easu_, k_fsr_easu_h_spv, sizeof k_fsr_easu_h_spv) &&
                       pipeline(rcas_, k_fsr_rcas_h_spv, sizeof k_fsr_rcas_h_spv)))

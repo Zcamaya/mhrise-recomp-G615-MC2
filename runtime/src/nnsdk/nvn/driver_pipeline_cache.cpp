@@ -19,9 +19,9 @@ std::string pipeline_cache_path() {
     return std::string(data ? data : "/sdcard/NieR") + "/pipelines.bin";
 }
 
-// data en path, por path.tmp y rename (con fsync antes: un corte deja el fichero de antes entero), a ritmo: trozos de 1
+// data en path, por path.tmp y rename (con fsync antes: un corte deja el fichero de antes entero), a pace: trozos de 1
 // MB con una pausa entre ellos y fdatasync cada 4 MB. De un tirón, los ~25 MB de pipelines.bin llenaban la cola de la SD
-// y lo demás que la toca (los paks que lee el juego, el log) esperaba detrás; así nunca hay más de unos MB nuestros por
+// y lo demás que la toca (los paks que lee el game, el log) esperaba detrás; así nunca hay más de unos MB nuestros por
 // delante. Tarda algo más (las pausas: ~0,2 s en 25 MB), pero en un hilo que nadie espera.
 bool write_file_paced(const std::string& path, const uint8_t* data, size_t size) {
     constexpr size_t kChunk = 1u << 20, kSyncEvery = 4u << 20;
@@ -90,31 +90,33 @@ void DriverPipelineCache::load() {
     if (!NVN_FLAG("no_warmup")) warm_cache_data_ = std::move(data);  // la caché del precalentado empieza igual
 }
 
-// En otro hilo (escribir en la SD es lento) y solo cuando lleva un rato sin crearse ninguno. La caché la
+// En otro hilo (escribir en la SD es lento) y solo cuando lleva un rato not createdse ninguno. La caché la
 // sincroniza el driver: se puede leer mientras el ejecutor crea pipelines (Vulkan solo pide sincronizarla por fuera al
 // mezclar en ella y al destruirla: pipeline_cache_lock_, exclusivo para la mezcla del precalentado).
 // Cada guardado reescribe la caché entera (21 MB en MH Rise). Antes bastaban 2 s sin pipelines nuevas: jugando se
 // guardaba hasta 10 veces por minuto (59 en 16 min del 4-11, 1,2 GB a la SD). A ratos la SD no daba abasto (un guardado
 // tardaba 4-7 s en vez de 0,6) y mientras todo lo que la toca esperaba (el log, los interruptores, los paks): de 30 a
-// 1-3 fps con el juego quieto, con 0 pipelines y 0 traducciones nuevas en esos frames. Ahora: 4 s sin pipelines nuevas
+// 1-3 fps con el game quieto, con 0 pipelines y 0 translations nuevas en esos frames. Ahora: 4 s sin pipelines nuevas
 // y como mucho un guardado cada 3 min (cada 30 s si hay 300 nuevas: tras cambiar los shaders salen miles).
-// <datos>/fast_pipeline_save: como antes.
+// <data>/fast_pipeline_save: como antes.
 // El hilo: nunca dos a la vez (cache_saving_). Lee los datos del driver con prioridad normal (con el cerrojo compartido:
 // con menos, la mezcla del precalentado podría quedarse esperando a un hilo que no corre, y el ejecutor detrás de ella)
 // y escribe el fichero con la prioridad más baja y a ritmo (write_file_paced). El log da cada parte por
 // separado: "driver" (lo que el ejecutor podría esperar dentro del driver si crea una pipeline a la vez: lo dice
 // note_pipeline_during_save) y "SD".
 void DriverPipelineCache::save(uint64_t frame) {
-    if (const uint64_t warm = warm_new_.exchange(0)) {  // mezcladas desde la caché del precalentado
+    if (const uint64_t warm = warm_new_.exchange(0)) {  // mixed in from the warm-up cache
         pipelines_created_ += warm;
         last_pipeline_frame_ = frame;
     }
     if (!pipeline_cache_ || pipelines_created_ == pipelines_saved_) return;
     const bool quick = NVN_FLAG("fast_pipeline_save");
-    if (frame < last_pipeline_frame_ + (quick ? 60 : 120)) return;
+    // Persist sooner after a burst of new pipelines settles, so first-use fight/area compilations are more likely to
+    // survive short sessions without frequent SD thrashing (writes still run paced in a low-priority background thread).
+    if (frame < last_pipeline_frame_ + 60) return;
     const auto now = std::chrono::steady_clock::now();
     const uint64_t fresh = pipelines_created_ - pipelines_saved_;
-    if (!quick && now - pipelines_saved_at_ < std::chrono::seconds(fresh >= 300 ? 30 : 180)) return;
+    if (!quick && now - pipelines_saved_at_ < std::chrono::seconds(fresh >= 300 ? 30 : (fresh >= 40 ? 60 : 90))) return;
     if (cache_saving_.exchange(true)) return;
     const uint64_t snapshot = pipelines_created_;
     pipelines_saved_at_ = now;
@@ -123,7 +125,7 @@ void DriverPipelineCache::save(uint64_t frame) {
     std::thread([this, device, cache, fresh, snapshot] {
         pthread_setname_np(pthread_self(), "GuardaPipelines");
         // Lo crea NvnSubmit (presenta y llama a profile_frame): hereda su nice -10 (kSubmitNice) y su máscara de núcleos
-        // grandes (esta la devuelve os.cpp en la revisión de cada segundo). Para leer la caché, como un hilo del juego.
+        // grandes (esta la devuelve os.cpp en la revisión de cada segundo). Para leer la caché, como un hilo del game.
         setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 0);
         const auto start = std::chrono::steady_clock::now();
         std::vector<uint8_t> data;
@@ -145,7 +147,7 @@ void DriverPipelineCache::save(uint64_t frame) {
             return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(d).count());
         };
         // Para medir: lo que tarda cada guardado (0,5-0,9 s con la SD sana) y cuántos hay.
-        NVN_LOG("caché de pipelines %s: %zu KB (%llu nuevas) en %lld ms (driver %lld ms, SD %lld ms, en segundo plano)\n",
+        NVN_LOG("caché de pipelines %s: %zu KB (%llu nuevas) en %lld ms (driver %lld ms, SD %lld ms, en background)\n",
                 written ? "guardada" : "SIN guardar", data.size() >> 10, static_cast<unsigned long long>(fresh),
                 ms(std::chrono::steady_clock::now() - start), ms(got - start), ms(std::chrono::steady_clock::now() - got));
         if (written) pipelines_saved_ = snapshot;

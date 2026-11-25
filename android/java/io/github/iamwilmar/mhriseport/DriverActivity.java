@@ -43,18 +43,18 @@ import static io.github.iamwilmar.mhriseport.SettingsMenu.ROW;
 // "Driver de GPU": un driver Vulkan propio para una Adreno (Turnip, o una versión de Qualcomm más nueva), en vez del
 // del sistema. Acepta los .zip de siempre de estos drivers (meta.json y la librería .so, como los de AdrenoTools). Cada uno
 // se descomprime en files/drivers/<carpeta>/ (el linker no carga librerías de la SD) y el elegido se apunta en
-// files/drivers/elegido, que lee el juego al arrancar (runtime/src/nnsdk/nvn/driver.h). Si con él no llega a dibujar, el
-// juego vuelve solo al del sistema y deja files/drivers/fallo, que esta pantalla enseña y borra.
-// Se abre desde la pantalla de inicio y desde el menú de ajustes del juego; el cambio vale desde el siguiente arranque.
+// files/drivers/elegido, que lee el game al arrancar (runtime/src/nnsdk/nvn/driver.h). Si con él no llega a dibujar, el
+// game vuelve solo al del sistema y deja files/drivers/fallo, que esta screen enseña y borra.
+// Se abre desde la screen de inicio y desde el menú de ajustes del game; el cambio vale desde el siguiente arranque.
 public final class DriverActivity extends Activity {
-    static final String FROM_GAME = "desde_juego";
+    static final String FROM_GAME = "desde_game";
     private static final int PICK = 1;
     private static final int PICK_DLL = 2;
     private static final int PANEL = 0xFF201010;
 
     private LinearLayout list;
     private TextView status;
-    private String startedWith;  // el elegido al abrir: si cambia y venimos del juego, se ofrece cerrarlo
+    private String startedWith;  // el elegido al abrir: si cambia y venimos del game, se ofrece cerrarlo
 
     @Override
     protected void onCreate(Bundle state) {
@@ -92,7 +92,7 @@ public final class DriverActivity extends Activity {
         build();
     }
 
-    // ---- pantalla -------------------------------------------------------------------------------------------------------
+    // ---- screen -------------------------------------------------------------------------------------------------------
 
     private void build() {
         list.removeAllViews();

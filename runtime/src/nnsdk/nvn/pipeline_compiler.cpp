@@ -204,7 +204,7 @@ VkResult make_graphics_pipeline(const PipelineKey& key, const VkShaderModule* mo
     // Con el viewport invertido (ver draw) el giro coincide con el de NVN: CW es CW.
     rs.frontFace = key.polygon.front_face ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
     // Depth bias where the game turns it on for this polygon mode (NVN: POINT 1, LINE 2, FILL 4); its values are
-    // dynamic (cmd::PolygonOffset). <datos>/no_depth_bias at start-up: never, as before.
+    // dynamic (cmd::PolygonOffset). <data>/no_depth_bias at start-up: never, as before.
     static const bool no_bias = NVN_FLAG("no_depth_bias");
     rs.depthBiasEnable = !no_bias && (key.polygon.offset_enables & (1u << std::min<uint8_t>(key.polygon.polygon_mode, 2)))
                              ? VK_TRUE : VK_FALSE;

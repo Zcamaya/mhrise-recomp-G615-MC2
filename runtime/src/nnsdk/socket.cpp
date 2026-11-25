@@ -1,5 +1,5 @@
 // nn::socket (y su API en C, nnsocket*): una consola sin red. Los descriptores son fds reales de bionic, así
-// Poll/Select/Close valen igual para sockets y para los eventfd que el juego sí necesita sin red: el
+// Poll/Select/Close valen igual para sockets y para los eventfd que el game sí necesita sin red: el
 // PhysicalSocketServer de WebRTC aborta si EventFd falla y gRPC despierta su poller con otro.
 //
 // Los sockets AF_INET se crean si Android deja (la APK no pide INTERNET: sin el permiso socket() falla y se
@@ -9,7 +9,7 @@
 //
 // Las constantes son las del servicio bsd de la consola (FreeBSD: SOL_SOCKET 0xffff, sockaddr con sa_len,
 // MSG_DONTWAIT 0x80, EAI_*) salvo errno y O_NONBLOCK, que ya llegan con los valores de Linux. errno es el de
-// bionic: __errno_location (libc.cpp) es el mismo para el juego.
+// bionic: __errno_location (libc.cpp) es el mismo para el game.
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -89,7 +89,7 @@ struct AddrInfo {
 };
 static_assert(offsetof(AddrInfo, addr) == 0x18 && offsetof(AddrInfo, next) == 0x28);
 
-// hostent y HostEnt comparten disposición; el juego lee h_addr_list[0] en +0x18.
+// hostent y HostEnt comparten disposición; el game lee h_addr_list[0] en +0x18.
 struct HostEnt {
     char* name;
     char** aliases;
@@ -728,7 +728,7 @@ HostEnt* host_by_name(const char* name) {
     return &e.h;
 }
 
-// Claves del resolver que el SDK atiende sin servicio: 10001 da un id de petición nuevo (libcurl y el juego lo usan
+// Claves del resolver que el SDK atiende sin servicio: 10001 da un id de petición nuevo (libcurl y el game lo usan
 // luego como asa de cancelación, claves 20001 y 30002) y 0x11171..0x11176 son opciones int64 locales. El resto
 // iría al servicio: se aceptan y no cambian nada sin red. ResolverSetOption no debe fallar nunca con EAGAIN:
 // libcurl lo reintenta en bucle cada 10 ms.
@@ -968,7 +968,7 @@ hostent* nnsocketGetHostByNameWithOptions(const char* name, const ResolverOption
 int nnsocketResolverGetOption(ResolverOption* out, uint32_t key) { return resolver_get_option(out, key); }
 int nnsocketResolverSetOption(const ResolverOption* opt) { return resolver_set_option(opt); }
 
-// El juego lo usa como getifaddrs de BSD (sysctl NET_RT_IFLIST, 6 niveles): sin red no hay interfaces que dar.
+// El game lo usa como getifaddrs de BSD (sysctl NET_RT_IFLIST, 6 niveles): sin red no hay interfaces que dar.
 // ENOENT y no ENOMEM, con el que reintenta.
 int nnsocketSysctl(int*, unsigned long, void*, unsigned long*, void*, unsigned long) { return fail(ENOENT); }
 

@@ -1,9 +1,9 @@
 // nn::account: el usuario de la consola. NieR pide el usuario preseleccionado al arrancar (sin él se
 // queda en "Loading system data..." reintentando) y con su Uid monta la partida guardada. Hay un único
-// usuario local; las funciones de cuenta de red (Nintendo Account) responden que no hay, y el juego
+// usuario local; las funciones de cuenta de red (Nintendo Account) responden que no hay, y el game
 // sigue sin las funciones en línea.
 //
-// El apodo del usuario sale de <datos>/nombre.txt (la primera línea), o "Hunter".
+// El apodo del usuario sale de <data>/nombre.txt (la primera línea), o "Hunter".
 //
 // The user's ID is the data folder's own (<data>/user_id.txt, 32 hex digits): two copies of the game with their own
 // data folders are two different consoles' users to each other in Local Play. A data folder that already has saves
@@ -88,7 +88,7 @@ const Uid& user() {
     static const Uid uid = load_user();
     return uid;
 }
-// Resultado de "no hay cuenta de red" (módulo account, 124): cualquier error sirve, el juego
+// Resultado de "no hay cuenta de red" (módulo account, 124): cualquier error sirve, el game
 // solo distingue éxito de fallo.
 constexpr Result kResultNoNetworkAccount{124 | (280 << 9)};
 // El usuario cerró el applet sin elegir (2124-0001): lo que da el sdk cuando el applet no devuelve
@@ -126,7 +126,7 @@ public:
     Result GetSystemEvent(os::SystemEvent* event);
 
 private:
-    uint8_t storage_[0x20];  // el juego reserva el objeto; no guardamos estado
+    uint8_t storage_[0x20];  // el game reserva el objeto; no guardamos estado
 };
 
 void Initialize() {}

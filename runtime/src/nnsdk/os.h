@@ -21,7 +21,7 @@ void FinalizeConditionVariable(ConditionVariableType* c);
 
 namespace nnsdk {
 
-// Señala un SystemEvent que crea el "sistema" (nosotros) y que el juego solo espera. El juego lo puede esperar
+// Señala un SystemEvent que crea el "sistema" (nosotros) y que el game solo espera. El game lo puede esperar
 // con Wait/TryWait/TimedWaitSystemEvent o en un MultiWait (InitializeMultiWaitHolder con el SystemEventType).
 void signal_system_event(nn::os::SystemEventType* event);
 // Crea (o reinicia) uno de esos SystemEvent con su modo; si nadie la llama, el primer uso lo crea ManualClear y

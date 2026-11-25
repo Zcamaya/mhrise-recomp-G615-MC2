@@ -26,7 +26,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntConsumer;
 import java.util.function.IntSupplier;
 
@@ -303,6 +305,12 @@ final class SettingsMenu {
                 tr("The size of the shadow maps, as a share of the game's own. Lower: blurrier shadow edges and a lot less "
                         + "GPU work in one of the heaviest passes. Applies at once.", "相对于游戏默认值的阴影贴图大小。调低后阴影边缘更模糊，阴影绘制的 GPU 开销也会降低。立即生效。"),
                 new String[] {tr("Game's", "游戏默认"), tr("Half", "二分之一"), tr("Quarter", "四分之一")}, new String[] {null, "shadow_half", "shadow_quarter"});
+        flag(tr("Adaptive shadow quality", "自适应阴影质量"),
+                tr("Uses measured GPU and executor frame times. Under sustained overload, it lowers shadow-map resolution "
+                        + "and can disable shadows from moving objects; it restores quality only after sustained headroom. "
+                        + "It may temporarily lower your chosen shadow quality. Requires MH Rise 16.0.1 and GPU timestamps.",
+                        "根据 GPU 和执行器帧时间自动调节阴影。持续超负荷时会降低阴影贴图分辨率，必要时关闭移动物体的阴影；只有性能持续有余量后才恢复。开启时可能暂时低于手动选择的阴影质量。需要 MH Rise 16.0.1 和 GPU 时间戳。"),
+                "adaptive_shadows", false);
         exclusive(tr("Tessellation", "曲面细分"),
                 tr("The extra detail the game adds to some ground. Fast: a cheap version that leaves most of that detail "
                         + "out (on ARM's older drivers, which crash on it, the same as Off). Accurate: drawn as the game "
@@ -527,17 +535,41 @@ final class SettingsMenu {
     }
 
     private void buildPerformance() {
+        if (folder != null && gpu.known && gpu.vendor == 0x13B5
+                && gpu.name.toLowerCase(java.util.Locale.ROOT).contains("mali-g615 mc2")) {
+            header(tr("Mali-G615 MC2", "Mali-G615 MC2"));
+            action(tr("Apply 30 fps profile", "应用 30 帧配置"),
+                    tr("A best-effort profile based on a Mali-G615 MC2 performance report: 432p with dynamic resolution and FSR, "
+                            + "thermal-aware resolution and adaptive shadow quality, the game's 30 fps limit, no frame generation, "
+                            + "GPU texture unswizzling to reduce area and monster load stutter, and automatic Mali "
+                            + "workarounds. You can change any setting afterward.",
+                            "根据 Mali-G615 MC2 性能报告提供的建议配置：432p、动态分辨率和 FSR、热感应分辨率调节、自适应阴影、游戏默认 30 帧、不启用帧生成、GPU 纹理重排以减少区域加载卡顿，以及自动 Mali 兼容修复。之后可自行调整。"),
+                    this::applyMaliG615Mc2Profile);
+        }
         header(tr("GPU work", "GPU 负载"));
+        flag(tr("Thermal-aware resolution (experimental)", "热感应分辨率调节（实验性）"),
+                tr("On Android 12+, lowers the dynamic render resolution in gradual steps as thermal headroom rises, then restores it "
+                        + "after the phone cools. It keeps the FPS limit unchanged and cannot help CPU- or asset-loading stalls. "
+                        + "Requires dynamic resolution and an available Android thermal reading. Samples arrive about every 11 seconds.",
+                        "Android 12 及以上设备在热压力升高时逐步降低动态渲染分辨率，冷却后再恢复。不会更改帧率上限，也无法解决 CPU 或资源加载卡顿。"
+                                + "需要开启动态分辨率并且系统提供热状态数据；读数约每 11 秒更新一次。"),
+                "thermal_resolution", false);
+        flag(tr("Thermal FPS fallback (experimental)", "热压力下调帧率（实验性）"),
+                tr("If Android's thermal headroom reaches 80%, temporarily caps gameplay at 25 fps; at 95%, at 20 fps. "
+                        + "It restores the game's 30 fps target after the phone cools, with hysteresis to avoid toggling. "
+                        + "Loading scenes retain their 60 fps behavior. Requires Android 12+ thermal readings; manual FPS caps take priority.",
+                        "Android 热压力达到 80% 时，游戏期间临时限制为 25 帧；达到 95% 时限制为 20 帧。手机冷却后恢复游戏的 30 帧目标，并带有滞回以避免频繁切换。"
+                                + "加载场景仍保持 60 帧；需要 Android 12 及以上设备提供热读数，手动帧率限制优先。"),
+                "thermal_fps", false);
         flag(tr("Skip empty GPU barriers", "跳过空 GPU 屏障"),
                 tr("About half of the GPU's full stops in a frame come right after another one with nothing in between, and "
                         + "still make the GPU wait and flush. On: those are skipped (less waiting, a little less heat). Off "
                         + "by default: if graphics glitch with it on, turn it off. Applies at once.", "省略中间没有任务的连续 GPU 屏障，减少等待与发热。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "tight_barriers", false);
-        flag(tr("Lighter GPU barriers", "更轻的 GPU 屏障"),
-                tr("Many of the game's GPU stops in a hunt only ask the GPU to finish drawing pixels before drawing more. "
-                        + "On: those wait for the pixel work only instead of the whole GPU (less waiting, a little "
-                        + "less heat). Off by default: if graphics glitch with it on, turn it off. Applies at once.",
-                        "狩猎中游戏的许多 GPU 屏障只要求先画完像素。开启后这些屏障只等待像素部分，而不是整个 GPU（等待更少，发热略低）。默认关闭，若开启后画面异常可关闭。立即生效。"),
+        flag(tr("Skip cache-only GPU barriers", "跳过仅刷新缓存的 GPU 屏障"),
+                tr("Some of the game's GPU stops only ask to refresh caches that don't exist on a phone's GPU, and order "
+                        + "nothing. On: those are skipped. Off by default: if graphics glitch with it on, turn it off. "
+                        + "Applies at once.", "游戏的部分 GPU 屏障只要求刷新手机 GPU 上不存在的缓存，并不保证顺序。开启后跳过这些屏障。默认关闭，若开启后画面异常可关闭。立即生效。"),
                 "barrier_bits", false);
         flag(tr("Fast textures", "快速纹理"),
                 tr("For speed over accuracy: each draw's textures are looked up by where the game keeps them ("
@@ -558,8 +590,9 @@ final class SettingsMenu {
         flag(tr("GPU texture unswizzle", "GPU 纹理重排"),
                 tr("Switch textures are stored in a tiled order, and each one is put back in plain rows before the GPU gets "
                         + "it. On: the GPU does that instead of the CPU, which then only copies each texture as it is, so "
-                        + "loading an area or a monster stutters less (like Eden's option). Off by default until it's been "
-                        + "tried on more phones. Applies at once.", "使用 GPU 将 Switch 的分块纹理重排为行布局，CPU 只需复制原始数据，可减轻区域或怪物加载时的卡顿。默认关闭，立即生效。"),
+                        + "loading an area or a monster stutters less (like Eden's option). It is enabled by the Mali-G615 "
+                        + "MC2 profile after a positive device test; it shifts work to the GPU and can raise GPU load. "
+                        + "Off by default elsewhere. Applies at once.", "使用 GPU 将 Switch 的分块纹理重排为行布局，CPU 只需复制原始数据，可减轻区域或怪物加载时的卡顿。Mali-G615 MC2 配置已在设备测试后启用此选项；它会将部分工作转移到 GPU，可能增加 GPU 负载。其他情况下默认关闭，立即生效。"),
                 "gpu_unswizzle", false);
         if (gpu.adreno()) {
             header("GPU");
@@ -591,10 +624,39 @@ final class SettingsMenu {
                 tr("A shader the game hasn't used before is translated in the background, and what needs it shows a moment "
                         + "late the first time. Off: the game stops until it's translated (a short freeze).", "后台翻译首次出现的着色器，对应物体可能稍晚显示。关闭后游戏会等待翻译完成。"),
                 "no_async_shaders", true);
+        flag(tr("Preload compute shaders (experimental)", "预加载计算着色器（实验性）"),
+                tr("After the game loads a compute shader, a low-priority worker translates it and builds its pipeline ahead "
+                        + "of first use. May reduce freezes when new attacks or effects appear. Long sessions can grow shader "
+                        + "and pipeline caches and increase storage I/O or memory pressure. Off by default. Applies at once.",
+                        "游戏加载计算着色器后，低优先级后台线程会在首次使用前翻译并构建管线，可能减少新攻击或特效首次出现时的卡顿。"
+                                + "长时间游玩可能增大着色器和管线缓存，并加重存储 I/O 或内存压力。默认关闭，立即生效。"),
+                "shader_preload", false);
         flag(tr("Pipelines on one thread", "单线程管线编译"),
                 tr("No background threads or warm-up: more stutter, but some drivers crash building several at once "
                         + "(PowerVR is like that by itself). Takes effect on the next start.", "关闭后台编译及预热，可能增加卡顿，适用于并行编译会崩溃的驱动。PowerVR 默认启用。下次启动生效。"),
                 "single_thread_pipelines", false);
+    }
+
+    private void applyMaliG615Mc2Profile() {
+        Map<String, String> updates = new LinkedHashMap<>();
+        for (String name : new String[] {
+                "resolution_240", "resolution_360", "resolution_480", "resolution_576", "resolution_648", "resolution_720",
+                "dock_mode", "no_dynamic_resolution", "no_fsr",
+                "fps_20", "fps_25", "fps_40", "fps_45", "60fps",
+                "merged_passes", "no_merged_passes",
+                "fg_target_60", "fg_target_90", "fg_target_120",
+                "short_subgroups", "no_short_subgroups", "tight_barriers", "count_check", "no_count_check", "fast_depth",
+                "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4"
+        }) updates.put(name, null);
+        updates.put("lsfg", "0");
+        updates.put("resolution_432", "1");
+        updates.put("adaptive_shadows", "1");
+        updates.put("thermal_resolution", "1");
+        updates.put("thermal_fps", "1");
+        updates.put("gpu_unswizzle", "1");
+        ini.setAll(updates);
+        changed();
+        build();
     }
 
     // Local Play over the internet (runtime/src/nnsdk/ldn.cpp): hubs created in the game's Local Play are listed on the
@@ -2085,7 +2147,7 @@ final class SettingsMenu {
 
     // Every switch the menu has ever written as its own file, so Restore default settings clears old folders too.
     private static final String[] SWITCHES = {
-        "60fps", "adreno_turbo", "fast_textures", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "barrier_bits", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
+        "60fps", "adaptive_shadows", "adreno_turbo", "fast_textures", "cutout", "system_bars", "cool_down", "no_hud_heat", "no_tight_barriers", "tight_barriers", "thermal_resolution", "thermal_fps", "merged_passes", "no_merged_passes", "barrier_bits", "int_attribs", "gpu_unswizzle", "async_present", "pipeline_threads_1", "pipeline_threads_3", "pipeline_threads_4", "fg_target_60", "fg_target_90", "fg_target_120", "dynamic_state", "vertex_input_state",
         "no_dynamic_state", "astc_cache_in_data_folder", "bc_astc", "aspect_16_10", "aspect_21_9", "aspect_4_3", "aspect_stretch", "bindless_arrays", "breadcrumbs",
         "capture_button", "count_check", "depth_gequal", "dock_mode", "effects_lower", "effects_lowest", "fast_depth", "fps_20", "fps_25", "fps_40",
         "fps_45", "gpu_occlusion", "hud_battery", "hud_cpu", "hud_frametime", "hud_gpu", "hud_ram", "hud_shaders", "no_hud_battery", "no_hud_cpu",
@@ -2096,7 +2158,7 @@ final class SettingsMenu {
         "no_gpu_occlusion", "no_int_attribs", "no_lens_flare", "no_motion_blur", "no_quad_derivatives", "no_readback_copies",
         "no_return_mali", "no_return_qualcomm", "no_robust", "no_count_check", "no_safe_translation", "no_shadows", "no_short_subgroups",
         "no_shuffle_qualcomm", "no_spirv_opt_brx", "no_tess", "tess_accurate", "tess_fast", "no_area", "no_deferred_clear", "no_store_ops", "no_ubwc", "no_warmup", "perf_stats", "resolution_240", "resolution_360",
-        "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache",
+        "resolution_432", "resolution_480", "resolution_576", "resolution_648", "resolution_720", "shadow_cache", "shader_preload",
         "shadow_half", "shadow_quarter", "short_subgroups", "single_thread_pipelines", "small_object_culling",
         "texture_bias_1", "texture_bias_2", "tv_mode", "ultrawide", "verbose_log", "wide_view",
     };

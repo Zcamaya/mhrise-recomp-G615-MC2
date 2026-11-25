@@ -1,5 +1,5 @@
 // nn::audio. Wwise (el motor de sonido de NieR) pregunta primero por el dispositivo de salida: con
-// 0 canales se queda en modo suspendido esperando a que se conecte uno, y el juego no avanza
+// 0 canales se queda en modo suspendido esperando a que se conecte uno, y el game no avanza
 // (el hilo principal espera a que Wwise arranque). La Flip tiene salida estéreo.
 
 #include <aaudio/AAudio.h>
@@ -28,7 +28,7 @@ class SystemEvent;  // su primer miembro es el SystemEventType: misma dirección
 namespace nn::audio {
 
 namespace {
-void preparar_salida();  // abre AAudio en segundo plano (más abajo)
+void preparar_salida();  // abre AAudio en background (más abajo)
 }
 
 struct AudioDeviceName {
@@ -89,7 +89,7 @@ struct AudioOutParameter {  // lo que rellena el sink tras InitializeAudioOutPar
     uint16_t reserved;
     uint32_t magic;
 };
-struct AudioOutBuffer {  // 40 bytes en el juego (stride de su array); el formato interno es nuestro
+struct AudioOutBuffer {  // 40 bytes en el game (stride de su array); el formato interno es nuestro
     void* next;
     void* buffer;
     size_t buffer_size;
@@ -113,7 +113,7 @@ int64_t ahora_ns() {
     return int64_t(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
 }
 
-// Interruptor audio_v1: cola de antes (Stop tira el audio ya mezclado sin tocar, el cebado suena como silencio y
+// Interruptor audio_v1: cola de antes (Stop tira el audio ya mezclado not touching, el cebado suena como silencio y
 // sin reloj de reserva).
 bool continuidad() { return !NVN_FLAG("audio_v1"); }
 
@@ -132,7 +132,7 @@ public:
 };
 
 // Una sola salida de AAudio para todo el proceso, siempre en marcha: toca la cola (lo que mezcló Wwise o
-// silencio). Se abre en segundo plano al primer uso de nn::audio (Wwise pregunta por el dispositivo al arrancar):
+// silencio). Se abre en background al primer uso de nn::audio (Wwise pregunta por el dispositivo al arrancar):
 // abrir y arrancar AAudio tarda ~65 ms y antes lo hacía el primer OpenDefaultAudioOut, dentro del hilo de audio
 // de Wwise. Mientras no hay AAudio, o si deja de llamar (desconexión, su hilo sin CPU), el reloj de reserva
 // libera los buffers a tiempo real: Wwise nunca ve una salida parada.
@@ -258,7 +258,7 @@ private:
             reloj_.umbral_ns = std::max<int64_t>(40'000'000, 3 * periodo * 1'000'000'000 / kSampleRate);
         }
         printf("[audio] salida AAudio %d Hz, %d canales, ráfaga %d frames, búfer %d frames (una para todo el "
-               "proceso, abierta en segundo plano en %.1f ms; requestStart %s)\n",
+               "proceso, abierta en background en %.1f ms; requestStart %s)\n",
                AAudioStream_getSampleRate(s), AAudioStream_getChannelCount(s), AAudioStream_getFramesPerBurst(s),
                AAudioStream_getBufferSizeInFrames(s), (ahora_ns() - t0) / 1e6, AAudio_convertResultToText(r));
         stream_.store(s);
@@ -294,7 +294,7 @@ private:
         });
     }
     // DEPURACIÓN (registro): cada 5 s de reloj (no por salida: antes el informe solo salía si una salida duraba
-    // 5 s, y durante el juego no salía nunca).
+    // 5 s, y durante el game no salía nunca).
     void informe_locked(int64_t t, char* out, size_t size) {
         const double s = (t - next_report_ns_ + kInformeNs) / 1e9;
         AAudioStream* st = stream_.load();

@@ -1,7 +1,7 @@
 #pragma once
-// Dónde está cada parte del volcado del juego. La pantalla de inicio de la APK (SetupActivity) busca el volcado en la
-// carpeta que elige el usuario y lo apunta en <datos>/rutas.txt ("exefs=", "romfs=", "aoc <índice>="); sin ese
-// archivo, lo de siempre: <datos>/exefs, <datos>/romfs y <datos>/aoc/<índice>. Solo cabecera: la usan el loader y
+// Dónde está cada parte del volcado del game. La screen de inicio de la APK (SetupActivity) busca el volcado en la
+// carpeta que elige el usuario y lo apunta en <data>/rutas.txt ("exefs=", "romfs=", "aoc <índice>="); sin ese
+// archivo, lo de siempre: <data>/exefs, <data>/romfs y <data>/aoc/<índice>. Solo cabecera: la usan el loader y
 // libnnsdk.so, cada uno con su copia (NIER_DATA tiene que estar puesta antes de la primera llamada).
 
 #include <cstdio>

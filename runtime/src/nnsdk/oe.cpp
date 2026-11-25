@@ -1,10 +1,10 @@
-// nn::oe: estado de la aplicación en el sistema. Lo que el juego usa como reloj tiene que avanzar:
+// nn::oe: estado de la aplicación en el sistema. Lo que el game usa como reloj tiene que avanzar:
 // CRI Mana (los vídeos) mide la reproducción con GetProgramTotalActiveTime (main+0xa5154c), y con 0
 // fijo el vídeo se queda en los primeros frames.
 //
 // La Flip es una consola en modo portátil que nunca cambia de estado: rendimiento normal, siempre en primer
 // plano y sin mensajes del sistema (los eventos de aviso existen pero no se señalan nunca). Grabación, capturas
-// y la imagen de copyright no tienen dónde ir.
+// y la image de copyright no tienen dónde ir.
 
 #include <sys/system_properties.h>
 #include <jni.h>
@@ -72,9 +72,9 @@ alignas(16) unsigned char g_message_event[0x40];
 // Configuración de rendimiento por modo (la de serie del portátil: 1020 MHz de CPU, 384 de GPU).
 int g_performance_config[2] = {0x00010000, 0x00020000};
 
-// El idioma que pide el juego: el de Android traducido a los que trae MH Rise en su control.nacp (japonés,
+// El idioma que pide el game: el de Android traducido a los que trae MH Rise en su control.nacp (japonés,
 // inglés de EE. UU., francés, alemán, italiano, español de España y de Latinoamérica, ruso, coreano y chino
-// tradicional y simplificado). Se puede forzar con <datos>/idioma.txt (un código de Nintendo: "es", "es-419"…).
+// tradicional y simplificado). Se puede forzar con <data>/idioma.txt (un código de Nintendo: "es", "es-419"…).
 std::string desired_language() {
     const char* env = getenv("NIER_DATA");
     std::string path = std::string(env ? env : "/sdcard/NieR") + "/idioma.txt";

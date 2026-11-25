@@ -1,6 +1,6 @@
-// nn::codec::HardwareOpusDecoder. El juego solo importa el constructor: el resto va por vtable, y
+// nn::codec::HardwareOpusDecoder. El game solo importa el constructor: el resto va por vtable, y
 // el orden de los métodos virtuales es el del vtable que exporta el sdk (tools/vtable.py), así el
-// compilador genera uno idéntico. El juego reserva 64 bytes para el objeto (main+0xd8d734).
+// compilador genera uno idéntico. El game reserva 64 bytes para el objeto (main+0xd8d734).
 //
 // De momento decodifica silencio de la duración correcta: cada paquete trae la cabecera de Nintendo
 // (tamaño y rango final, big-endian) y la duración sale del byte TOC de Opus. Así el reloj de audio
@@ -49,7 +49,7 @@ public:
     virtual Result Reset();
     virtual Result DecodeInterleaved(size_t* consumed, int* samples, int16_t* out, size_t out_size, const void* in,
                                      size_t in_size);
-    // La memoria del objeto la reserva el juego: el destructor con delete no la libera.
+    // La memoria del objeto la reserva el game: el destructor con delete no la libera.
     static void operator delete(void*) {}
 
 private:

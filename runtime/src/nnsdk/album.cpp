@@ -1,6 +1,6 @@
-// nn::album: el álbum de capturas de la consola. El modo foto del juego (main+0x6bb96ac) entrega la captura en
+// nn::album: el álbum de capturas de la consola. El modo foto del game (main+0x6bb96ac) entrega la captura en
 // RGBA 1280x720 y mira el Result: 0 es "guardada", y unos pocos errores del módulo 214 (desc 100..199, 500..599) los
-// enseña al jugador. Aquí no hay álbum: la captura se guarda como PNG en <datos>/capturas, así el modo foto sigue
+// enseña al jugador. Aquí no hay álbum: la captura se guarda como PNG en <data>/capturas, así el modo foto sigue
 // funcionando. Compartir (SaveAndShareScreenshot) necesita red: se guarda igual y se da por hecho, como si el jugador
 // cerrara el diálogo de publicar.
 
@@ -33,7 +33,7 @@ enum AlbumReportOption {};
 namespace {
 
 constexpr int kWidth = 1280, kHeight = 720;
-// Error genérico del álbum (módulo 214, desc 100..199): el juego lo enseña como "no se pudo guardar".
+// Error genérico del álbum (módulo 214, desc 100..199): el game lo enseña como "no se pudo guardar".
 constexpr Result kResultAlbumError{214 | (100 << 9)};
 
 std::string capture_dir() {
@@ -124,7 +124,7 @@ void Finalize() {}
 int GetImageWidth(ImageSize size) { return size == ImageSize_1280x720 ? kWidth : 0; }
 int GetImageHeight(ImageSize size) { return size == ImageSize_1280x720 ? kHeight : 0; }
 
-// La orientación solo es un dato para el visor del álbum: la imagen llega ya como se ve.
+// La orientación solo es un dato para el visor del álbum: la image llega ya como se ve.
 Result SaveScreenshot(const void* image, size_t size, ImageSize image_size, ImageOrientation, AlbumReportOption) {
     return save(image, size, image_size);
 }
@@ -134,7 +134,7 @@ Result SaveAndShareScreenshot(const void* image, size_t size, ImageSize image_si
     return save(image, size, image_size);
 }
 
-// El applet del álbum no existe: vuelve enseguida, como si el jugador lo hubiera cerrado (el juego ignora el Result).
+// El applet del álbum no existe: vuelve enseguida, como si el jugador lo hubiera cerrado (el game ignora el Result).
 Result ShowAlbumFiles() {
     printf("[album] ShowAlbumFiles: no hay applet del álbum\n");
     return ResultSuccess;

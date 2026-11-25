@@ -1,6 +1,6 @@
 // nn::ec: la eShop (contenido descargable, consumibles). Sin internet no hay tienda: lo local (reservar la
 // biblioteca, crear el accesor) funciona, y cada petición al servidor falla al momento con el error que da
-// el SDK cuando nifm no tiene conexión, que el juego guarda y trata como "tienda no disponible"
+// el SDK cuando nifm no tiene conexión, que el game guarda y trata como "tienda no disponible"
 // (main+0x79814ec). Los applets de la tienda se cierran sin comprar nada.
 
 #include <cstdint>
@@ -37,8 +37,8 @@ struct ShopService {
 
 namespace {
 
-// Módulo ec (164). 56: ninguna petición de internet aceptada (lo primero que mira Request).
-// 200: el AsyncResponse no tiene ninguna petición detrás.
+// Módulo ec (164). 56: no petición de internet aceptada (lo primero que mira Request).
+// 200: el AsyncResponse no tiene no petición detrás.
 constexpr Result kResultInternetRequestNotAccepted{164 | (56 << 9)};
 constexpr Result kResultNotRequested{164 | (200 << 9)};
 
@@ -47,8 +47,8 @@ constexpr Result kResultNotRequested{164 | (200 << 9)};
 class ShopServiceAccessor {
 public:
     struct PostData;
-    // El juego lo reserva (0x50 bytes en el SDK: nodo de lista, la petición en +0x18, su evento). Como
-    // ninguna petición sale, responde siempre como uno sin usar.
+    // El game lo reserva (0x50 bytes en el SDK: nodo de lista, la petición en +0x18, su evento). Como
+    // no petición sale, responde siempre como uno sin usar.
     class AsyncResponse {
     public:
         AsyncResponse();

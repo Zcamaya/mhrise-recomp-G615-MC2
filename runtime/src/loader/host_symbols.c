@@ -1,6 +1,6 @@
 // Funciones de bionic, libm, compiler-rt y libc++abi con la misma ABI que la libc de
-// Nintendo (musl, AArch64): el juego las llama directo. Lo que no coincide (errno,
-// fpclassify, strdup con el malloc del juego, rutas "rom:/", pthreads sobre nn::os…) lo
+// Nintendo (musl, AArch64): el game las llama directo. Lo que no coincide (errno,
+// fpclassify, strdup con el malloc del game, rutas "rom:/", pthreads sobre nn::os…) lo
 // define libnnsdk.so, que tiene prioridad (libc*.cpp).
 // Coinciden también struct stat, dirent, tm, lconv, ldiv_t y va_list; FILE* y DIR* son
 // siempre los de bionic (fopen y opendir de libnnsdk los crean con bionic).

@@ -39,7 +39,7 @@ std::string find_dll();
 // como los espera la tabla de descriptores (UBO, samplers, imágenes muestreadas, imágenes de storage).
 using Modules = std::map<uint32_t, std::vector<uint32_t>>;
 
-// Lee la DLL y saca los dos juegos (FP16 y FP32). Un juego al que le falta algún shader queda vacío.
+// Lee la DLL y saca los dos games (FP16 y FP32). Un game al que le falta algún shader queda vacío.
 DllStatus load_shaders(const std::string& path, Modules& fp16, Modules& fp32, size_t* dll_bytes);
 
 // Comprueba que el módulo vale en nuestro dispositivo (SPIR-V <= 1.3, modelo de memoria GLSL450, solo

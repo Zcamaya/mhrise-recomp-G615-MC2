@@ -1,5 +1,5 @@
-// nn::crypto: los hashes que importa el juego (SHA-1, SHA-256, SHA-512, MD5) y el generador aleatorio. Los
-// *Impl son objetos del juego (los Sha256Generator… inline de la cabecera los tienen dentro), así que todo el estado
+// nn::crypto: los hashes que importa el game (SHA-1, SHA-256, SHA-512, MD5) y el generador aleatorio. Los
+// *Impl son objetos del game (los Sha256Generator… inline de la cabecera los tienen dentro), así que todo el estado
 // vive en ellos con el layout del SDK: buffer, bytes pendientes, bits ya procesados y estado (1 iniciado, 2 con el
 // hash calculado; GetHash vuelve a dar el mismo). Implementación propia (no hay OpenSSL en el NDK), comprobada con
 // los vectores de FIPS 180 y RFC 1321.
@@ -30,7 +30,7 @@ void store_be64(uint8_t* p, uint64_t v) {
     for (int i = 0; i < 8; i++) p[i] = static_cast<uint8_t>(v >> (56 - 8 * i));
 }
 
-// ClearMemory del SDK: que el compilador no se salte el borrado de un objeto que muere.
+// ClearMemory del SDK: que el compilador no se salte el clear de un objeto que muere.
 void clear_memory(void* p, size_t size) {
     volatile uint8_t* b = static_cast<volatile uint8_t*>(p);
     while (size--) *b++ = 0;

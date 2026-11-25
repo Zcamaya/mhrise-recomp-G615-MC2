@@ -1,13 +1,13 @@
 // movie:: (la librería de vídeo de Nintendo, subsdk0) sobre AMediaCodec y AMediaExtractor. Es un envoltorio fino
 // de Stagefright: el Extractor es un NuMediaExtractor (el mismo que hay detrás de AMediaExtractor), el Decoder un
 // MediaCodec, con las mismas claves de formato ("mime", "width", "csd-0"…), los mismos índices de buffer y el
-// mismo flag de fin de stream (4). El juego solo importa los constructores y unas pocas funciones; el resto lo
+// mismo flag de fin de stream (4). El game solo importa los constructores y unas pocas funciones; el resto lo
 // llama por vtable, y el orden de los métodos virtuales es el del vtable que exporta subsdk0 (tools/vtable.py),
 // así el compilador genera uno idéntico.
 //
 // MH Rise reproduce MP4 (H.264 + AAC) que RE Engine guarda dentro de sus pak: el Extractor lee el contenedor a
-// través de un movie::ClientStreamReader del juego, cada pista va a su Decoder con el formato tal cual sale del
-// extractor, y el juego copia los frames NV12 a sus texturas (main+0x71315a8).
+// través de un movie::ClientStreamReader del game, cada pista va a su Decoder con el formato tal cual sale del
+// extractor, y el game copia los frames NV12 a sus texturas (main+0x71315a8).
 
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaDataSource.h>
@@ -38,7 +38,7 @@ enum DecoderMode : int {};
 enum ContainerType : int {};
 
 // movie::Status: lo que da NnMediaCommon::AndroidErrorToNnError (subsdk0+0x111fbc) a partir del status_t de
-// Stagefright. El juego mira kEndOfStream (bit 13) tras Extractor::Read y GetTrackIndexForAvailableData para
+// Stagefright. El game mira kEndOfStream (bit 13) tras Extractor::Read y GetTrackIndexForAvailableData para
 // mandar el fin de stream a los decoders; del resto solo distingue cero de no cero.
 using Status = int;
 constexpr Status kOk = 0;
@@ -62,7 +62,7 @@ static Status from_media(media_status_t s) {
 }
 
 // Layout de subsdk0 (64 bytes): offset/tamaño en +0, "es dueño" en +0x10, capacidad en +0x18,
-// datos en +0x28. El juego reserva el objeto; Base()/Capacity()/SetRange se leen de aquí.
+// datos en +0x28. El game reserva el objeto; Base()/Capacity()/SetRange se leen de aquí.
 class Buffer {
 public:
     Buffer();
@@ -99,9 +99,9 @@ size_t Buffer::Capacity() const { return capacity_; }
 int Buffer::Offset() const { return offset_; }
 int Buffer::Size() const { return size_; }
 
-// En subsdk0 es un puntero a su almacén interno (un AMessage de Stagefright); el juego le reserva solo esos 8
+// En subsdk0 es un puntero a su almacén interno (un AMessage de Stagefright); el game le reserva solo esos 8
 // bytes (main+0x712de0c: la variable siguiente está en +0xc). Aquí apunta a un mapa de claves y, si viene del
-// extractor, al AMediaFormat de la pista entero: el juego se lo pasa sin tocar a Decoder::Configure, y el
+// extractor, al AMediaFormat de la pista entero: el game se lo pasa not touching a Decoder::Configure, y el
 // decoder necesita todo lo que trae (csd-0/csd-1 con el SPS/PPS de H.264 o la config de AAC, max-input-size…).
 class MediaData {
 public:
@@ -159,7 +159,7 @@ bool MediaData::FindInt64(const char* key, long* out) const {
     *out = v;
     return true;
 }
-// La cadena tiene que vivir lo que el MediaData (el juego guarda el puntero): la del AMediaFormat se copia al
+// La cadena tiene que vivir lo que el MediaData (el game guarda el puntero): la del AMediaFormat se copia al
 // mapa, que no se toca hasta el próximo Clear.
 bool MediaData::FindString(const char* key, const char** out) const {
     auto it = store_->values.find(key);
@@ -196,9 +196,9 @@ void set_string(MediaData* d, const char* key, const char* v) {
     value.s = v;
 }
 
-// Lo que el juego lee del formato de salida (main+0xa689cc): enteros, el rectángulo "crop" y las
-// claves nv12-* que añade la librería de Nintendo (posición y stride de los planos Y y UV dentro del
-// buffer; sin ellas el juego copia el plano UV desde un puntero basura).
+// Lo que el game lee del formato de salida (main+0xa689cc): enteros, el rectángulo "crop" y las
+// claves nv12-* que adds la librería de Nintendo (posición y stride de los planos Y y UV dentro del
+// buffer; sin ellas el game copia el plano UV desde un puntero basura).
 void fill_from(MediaData* d, AMediaFormat* f) {
     d->Clear();
     for (const char* key : {"width", "height", "stride", "slice-height", "color-format", "sample-rate",
@@ -255,7 +255,7 @@ void SetCoreMask(uint64_t) {}
 int GetThreadPriority() { return 16; }
 void SetThreadPriority(int) {}
 
-// Eventos que el juego espera con WaitAny (main+0xa68a54). El orden sale de qué rama atiende cada
+// Eventos que el game espera con WaitAny (main+0xa68a54). El orden sale de qué rama atiende cada
 // holder en su hilo de vídeo (main+0xa68944): el 1º lleva a AcquireInputBufferIndex, el 2º a
 // AcquireOutputBufferIndex, el 3º a GetOutputFormat; el 4º es el de error.
 struct DecoderEvents {
@@ -377,7 +377,7 @@ struct Decoder::Impl {
     }
     // Los eventos de entrada y salida dicen si su cola tiene algo (se ponen y se quitan con m tomado). MH Rise espera
     // con WaitAny los cuatro y atiende el primero que esté señalado: WaitAny no consume el evento (como en el SDK), así
-    // que si la entrada se quedaba puesta con la cola vacía, el juego pedía entradas para siempre y nunca recogía los
+    // que si la entrada se quedaba puesta con la cola vacía, el game pedía entradas para siempre y nunca recogía los
     // frames de vídeo; el decoder se llenaba y dejaba de aceptar entradas.
     void clear_queues() {
         std::lock_guard lock(m);
@@ -417,7 +417,7 @@ FrameLayout layout_of(AMediaFormat* f) {
 size_t pack_nv12(const FrameLayout& l, const uint8_t* src, size_t src_size, uint8_t* dst, size_t capacity) {
     int w = (l.crop[2] - l.crop[0] + 1) & ~1, h = (l.crop[3] - l.crop[1] + 1) & ~1;
     if (w <= 0 || h <= 0 || l.stride < w) return 0;
-    h = std::min<int64_t>(h, capacity * 2 / 3 / w) & ~1;  // si el juego reservó menos, las filas que quepan
+    h = std::min<int64_t>(h, capacity * 2 / 3 / w) & ~1;  // si el game reservó menos, las filas que quepan
     size_t chroma = size_t(l.stride) * l.slice;           // inicio del plano UV (o U en I420)
     bool planar = l.color == kColorYuv420Planar;
     size_t c_stride = planar ? l.stride / 2 : l.stride, c_rows = (l.slice + 1) / 2;
@@ -525,7 +525,7 @@ Status Decoder::Configure(MediaData* format) {
     const char* mime = nullptr;
     if (!format->FindString("mime", &mime)) return kError;
     std::string type = mime;
-    // Reconfigurar (el juego lo repite si Start falla, y al reutilizar el decoder tras Stop) no puede dejar el
+    // Reconfigurar (el game lo repite si Start falla, y al reutilizar el decoder tras Stop) no puede dejar el
     // codec anterior vivo: es una sesión de vídeo por hardware con sus buffers, y sus callbacks seguían
     // metiendo índices viejos en las colas.
     if (impl_->codec) {
@@ -738,7 +738,7 @@ Status Decoder::AcquireOutputBufferIndex(int* index, long* time_us, unsigned* fl
     return kOk;
 }
 
-// Como en la API de Nintendo, el frame se copia en la memoria del juego, que lo pasa ya preparado con
+// Como en la API de Nintendo, el frame se copia en la memoria del game, que lo pasa ya preparado con
 // SetDataAndCapacity. NieR pregunta antes el tamaño con GetOutputBufferSize (main+0xa676a0) y lee los planos
 // con los offsets nv12-* del formato de salida: se le copia tal cual. MH Rise reserva justo el NV12 compacto
 // del vídeo (menos que el frame con relleno) y lo lee sin preguntar: se recoloca.
@@ -767,7 +767,7 @@ Status Decoder::GetOutputBuffer(int index, Buffer* out) {
         info = impl_->given[index];
         layout = impl_->layout;
     }
-    if (!out->Base() || !out->Capacity()) {  // sin memoria del juego: se le da la del decoder
+    if (!out->Base() || !out->Capacity()) {  // sin memoria del game: se le da la del decoder
         out->SetDataAndCapacity(data + info.offset, info.size);
         out->SetRange(0, info.size);
         return kOk;
@@ -778,7 +778,7 @@ Status Decoder::GetOutputBuffer(int index, Buffer* out) {
                              out->Capacity());
         static int logged = 0;
         if (logged++ < 2)
-            printf("[movie] frame recolocado en NV12 compacto: %zu de %zu bytes (el juego da %zu)\n", n,
+            printf("[movie] frame recolocado en NV12 compacto: %zu de %zu bytes (el game da %zu)\n", n,
                    static_cast<size_t>(info.size), out->Capacity());
         out->SetRange(0, static_cast<int>(n));
         return n ? kOk : kError;
@@ -789,7 +789,7 @@ Status Decoder::GetOutputBuffer(int index, Buffer* out) {
     return kOk;
 }
 
-// Tamaño del buffer que el juego debe reservar para un frame: NV12 con el stride y el alto de corte
+// Tamaño del buffer que el game debe reservar para un frame: NV12 con el stride y el alto de corte
 // del decoder, redondeado a 4 KB como lo entrega el de Qualcomm (1600x904 -> 2170880). En audio no hay
 // dimensiones: manda el tamaño de los buffers de PCM que ya ha dado el decoder.
 Status Decoder::GetOutputBufferSize(int* size, int* count) {
@@ -851,7 +851,7 @@ Status Decoder::GetOutputBuffer(int index, Buffer* out, MediaData* format) {
 
 Status Decoder::GetOutputBufferFormat(int, MediaData* format) { return GetOutputFormat(format); }
 
-// El origen de datos que el juego implementa para el Extractor. Los slots salen del vtable del lector de MH
+// El origen de datos que el game implementa para el Extractor. Los slots salen del vtable del lector de MH
 // Rise (main+0x1263c078) y de cómo los llama android::FileSource de subsdk0 (+0x2c7c0c): Open guarda el handle
 // si devuelve true, ReadAt devuelve los bytes leídos (0 si el handle no vale), Close al destruir la fuente.
 // RE Engine sirve los bytes del vídeo desde su pak (en memoria o por su sistema de archivos) y el nombre que
@@ -883,7 +883,7 @@ public:
     virtual Status GetSampleMetaData(MediaData* out);
     virtual Status GetBufferedRange(long* start_us, long* end_us);
     virtual Status SetDataSource(ClientStreamReader* reader, const char* path);
-    // El juego reserva el objeto (16 bytes, como el de subsdk0: vtable + implementación) con su operator new
+    // El game reserva el objeto (16 bytes, como el de subsdk0: vtable + implementación) con su operator new
     // (main+0x7130c14) y lo borra por el destructor virtual.
     static void operator delete(void* p) { nnsdk::host().game_delete(p); }
 
@@ -896,10 +896,10 @@ static_assert(sizeof(Extractor) == 0x10);
 
 namespace {
 
-// Lo que lee el AMediaExtractor: el lector del juego o un bloque de memoria. AMediaExtractor parsea en el
+// Lo que lee el AMediaExtractor: el lector del game o un bloque de memoria. AMediaExtractor parsea en el
 // proceso media.extractor y pide los bytes por binder; el driver entrega esas llamadas al hilo que está
-// esperando la respuesta (el hilo de vídeo del juego, que es quien llama al extractor), así que el lector del
-// juego corre en su hilo como en la Switch. El NDK no lo promete: si llegan por otro hilo, el mutex las ordena.
+// esperando la respuesta (el hilo de vídeo del game, que es quien llama al extractor), así que el lector del
+// game corre en su hilo como en la Switch. El NDK no lo promete: si llegan por otro hilo, el mutex las ordena.
 // Vive hasta que lo sueltan los dos dueños (el Extractor y el primer close del framework): una lectura tardía
 // nunca toca memoria liberada, y sin lector (el vídeo ya se cerró) cualquier lectura es fin de stream.
 struct Source {
@@ -930,7 +930,7 @@ ssize_t source_read(void* user, off64_t offset, void* buffer, size_t size) {
     } else if (s->reader) {
         n = s->reader->ReadAt(s->handle, offset, buffer, size);
     }
-    // Diagnóstico: las primeras lecturas por el lector del juego (hilo, offset, tamaño, resultado).
+    // Diagnóstico: las primeras lecturas por el lector del game (hilo, offset, tamaño, resultado).
     static std::atomic<int> logged{0};
     if (s->reader && logged++ < 24)
         printf("[movie] source_read tid %d offset %lld size %zu -> %ld\n", gettid(), (long long)offset, size, n);
@@ -1061,7 +1061,7 @@ Status Extractor::SetDataSource(ClientStreamReader* reader, const char* path) {
     impl_->reset();  // el handle anterior se cierra antes de abrir el nuevo
     void* handle = nullptr;
     if (!reader->Open(path, &handle) || !handle) {
-        printf("[movie] el lector del juego no abre %s\n", path ? path : "(sin nombre)");
+        printf("[movie] el lector del game no abre %s\n", path ? path : "(sin nombre)");
         return kIoError;
     }
     long size = -1;
@@ -1070,8 +1070,8 @@ Status Extractor::SetDataSource(ClientStreamReader* reader, const char* path) {
     s->reader = reader;
     s->handle = handle;
     s->size = size;
-    // Copia el vídeo entero a memoria desde ESTE hilo (el del juego) y se lo da al extractor como bloque. Así
-    // AMediaExtractor nunca llama de vuelta al lector del juego por binder desde otro hilo, que según el
+    // Copia el vídeo entero a memoria desde ESTE hilo (el del game) y se lo da al extractor como bloque. Así
+    // AMediaExtractor nunca llama de loop al lector del game por binder desde otro hilo, que según el
     // Android/ROM deja el vídeo con 0 pistas. Los vídeos de Rise son pequeños; los enormes siguen por streaming.
     constexpr long kMaxSlurp = 128L << 20;
     if (size > 0 && size <= kMaxSlurp) {
@@ -1096,7 +1096,7 @@ Status Extractor::SetDataSource(ClientStreamReader* reader, const char* path) {
         }
         printf("[movie] copia a memoria incompleta (%ld de %ld bytes): se lee por streaming\n", got, size);
     }
-    printf("[movie] extractor sobre el lector del juego (%s, %ld bytes)\n", path ? path : "", size);
+    printf("[movie] extractor sobre el lector del game (%s, %ld bytes)\n", path ? path : "", size);
     return impl_->open(s);
 }
 
@@ -1149,7 +1149,7 @@ Status Extractor::SeekTo(long time_us) {
     return from_media(AMediaExtractor_seekTo(impl_->ex, time_us, mode));
 }
 
-// La pista de la próxima muestra; al acabarse todas, fin de stream (el juego lo manda entonces a los
+// La pista de la próxima muestra; al acabarse todas, fin de stream (el game lo manda entonces a los
 // decoders). AMediaExtractor da -1 tanto al final como si falla la lectura: las dos cierran el vídeo.
 Status Extractor::GetTrackIndexForAvailableData(size_t* index) {
     if (impl_->ff) {

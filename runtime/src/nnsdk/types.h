@@ -1,6 +1,6 @@
 #pragma once
 // Tipos del SDK de Nintendo con los nombres exactos que usa el mangling de los imports.
-// Los tipos de objetos (MutexType, ThreadType…) son opacos: el juego reserva su memoria y
+// Los tipos de objetos (MutexType, ThreadType…) son opacos: el game reserva su memoria y
 // libnnsdk guarda el estado real en tablas propias indexadas por su dirección.
 
 #include <cstdint>

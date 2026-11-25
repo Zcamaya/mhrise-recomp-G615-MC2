@@ -63,8 +63,8 @@ int64_t ns_until(const timespec& deadline) {
 }
 
 // ReaderWriterLockType: el que tiene la escritura puede volver a entrar, no puede pedir lectura (EDEADLK) y unlock
-// suelta la escritura si la tiene este hilo y si no una lectura. El juego no mezcla estos con la API de nn::os:
-// estado propio por dirección, creado al vuelo (los de BoringSSL son estáticos, sin pthread_rwlock_init).
+// suelta la escritura si la tiene este hilo y si no una lectura. El game no mezcla estos con la API de nn::os:
+// estado propio por dirección, created al vuelo (los de BoringSSL son estáticos, sin pthread_rwlock_init).
 struct RwLock {
     std::shared_mutex m;
     std::atomic<pid_t> writer{0};

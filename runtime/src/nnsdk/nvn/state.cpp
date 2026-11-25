@@ -198,7 +198,7 @@ void nvnVertexAttribStateSetStreamIndex(VertexAttribState* s, int stream) { s->s
 // Los getters de estado no son de adorno: el renderer de MH Rise compara el layout nuevo con el enlazado a través de
 // ellos (main+0x77178b0 para los streams) y solo vuelve a enlazar si difieren. Con GetStride/GetDivisor como stubs a 0
 // (hasta 3d8197d) todos los layouts con el mismo número de streams eran "iguales" y las cabezas con skinning en compute
-// (la del cazador) heredaban las zancadas del cuerpo anterior. El juego también pide estos dos por nombre: mejor el
+// (la del cazador) heredaban las zancadas del cuerpo anterior. El game también pide estos dos por nombre: mejor el
 // valor de verdad que un 0 si alguna ruta (diálogos, vista de equipo) los usa para lo mismo con los atributos.
 void nvnVertexAttribStateGetFormat(const VertexAttribState* s, int* format, ptrdiff_t* offset) {
     if (format) *format = s->format;

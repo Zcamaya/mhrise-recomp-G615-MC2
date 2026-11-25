@@ -4,8 +4,8 @@
 //    there for players with the same matchmaking key, the game's Scan shows the listed ones, and Connect joins one
 //    through the server, which splices the player's connection to one the host opens for it. Nobody forwards a port.
 //    Hubs are listed under this port's own link protocol (kLinkProtocol), so MH Rise only ever sees MH Rise hubs.
-//  - directly: the host also listens on a TCP port (<datos>/hub_port, 0: off), and Scan asks the addresses in
-//    <datos>/hub_hosts (one host[:port] per line) for their network.
+//  - directly: the host also listens on a TCP port (<data>/hub_port, 0: off), and Scan asks the addresses in
+//    <data>/hub_hosts (one host[:port] per line) for their network.
 // The game's packets go by UDP when that gets through, else down the same connection (the host relays them between its
 // players; see "game packets by UDP" below): socket.cpp hands every datagram for a 169.254.x.x address to
 // ldn_net::send, and the ones that arrive are delivered to the game's socket by a loopback helper (ldn_net.h).

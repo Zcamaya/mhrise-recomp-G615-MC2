@@ -2,16 +2,16 @@
 // Cola continua de la salida de audio (audio.cpp). Sin dependencias de AAudio ni de nn::os, para probarla fuera
 // del dispositivo (tools/audio_cola_prueba.cpp).
 //
-// El sink de Wwise de MH Rise cierra y vuelve a abrir su AudioOut muchas veces durante el juego (Term + Init del
+// El sink de Wwise de MH Rise cierra y vuelve a abrir su AudioOut muchas veces durante el game (Term + Init del
 // dispositivo: Stop, Close, Open, 4 Append de silencio de cebado, Start). Con la cola de antes, cada reapertura
 // tiraba el audio ya mezclado que quedaba en cola (hasta 4 buffers, 85 ms) y tocaba en su lugar los 4 buffers de
-// silencio del cebado: con reaperturas frecuentes no se oía casi nada, y solo sonaba seguido cuando el juego se
+// silencio del cebado: con reaperturas frecuentes no se oía casi nada, y solo sonaba seguido cuando el game se
 // atascaba (sin mensajes nuevos para Wwise no hay reaperturas).
 //
 // Aquí el PCM de cada buffer se copia al encolarlo y la cola es una sola para todo el proceso:
-//  - un buffer se devuelve al juego cuando la lectura (el callback de AAudio, o el reloj de reserva) pasa de su
+//  - un buffer se devuelve al game cuando la lectura (el callback de AAudio, o el reloj de reserva) pasa de su
 //    final: el ritmo al que se devuelven sigue siendo el reloj del audio de Wwise;
-//  - al parar una salida, sus buffers sin tocar se devuelven ya (como en la Switch), pero su audio se queda en la
+//  - al parar una salida, sus buffers not touching se devuelven ya (como en la Switch), pero su audio se queda en la
 //    cola y se sigue oyendo ("huérfano");
 //  - los buffers de cebado (silencio encolado antes de Start) se cubren con ese audio huérfano: se devuelven al
 //    ritmo de la lectura como si sonaran, pero suena lo que quedaba de la salida anterior. La latencia y el reloj
@@ -34,7 +34,7 @@ public:
         pcm_.resize(cap_ * canales_);
     }
 
-    // Encola un buffer del juego de `frames` frames. `cebado`: silencio encolado antes de arrancar la salida.
+    // Encola un buffer del game de `frames` frames. `cebado`: silencio encolado antes de arrancar la salida.
     void encolar(void* out, void* buffer, const int16_t* datos, size_t frames, bool cebado, bool continuidad) {
         uint64_t fin;
         if (cebado && continuidad && v_ < w_) {
@@ -97,7 +97,7 @@ public:
     }
 
     size_t en_cola() const { return size_t(w_ - r_); }     // frames por tocar
-    size_t marcas() const { return marcas_.size(); }       // buffers del juego sin devolver
+    size_t marcas() const { return marcas_.size(); }       // buffers del game sin devolver
     uint64_t leidos() const { return r_; }
     uint64_t perdidos() const { return perdidos_; }        // frames tirados por desbordar la cola
     uint64_t cubiertos() const { return cubiertos_; }      // buffers de cebado cubiertos con audio huérfano
@@ -170,7 +170,7 @@ struct RelojDeReserva {
             resto = 0;
             return 0;
         }
-        if (!ultimo_ns) ultimo_ns = ahora_ns;  // nunca ha habido ritmo: se empieza a contar ahora
+        if (!ultimo_ns) ultimo_ns = ahora_ns;  // nunca ha habido pace: se empieza a contar ahora
         if (ahora_ns <= ultimo_ns) return 0;
         double f = double(ahora_ns - ultimo_ns) * hz / 1e9 + resto;
         ultimo_ns = ahora_ns;

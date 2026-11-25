@@ -1,5 +1,5 @@
 #pragma once
-// <datos>/mhr.ini: the settings menu's choices, one "name = value" per line ('#' or ';' starts a comment, [sections]
+// <data>/mhr.ini: the settings menu's choices, one "name = value" per line ('#' or ';' starts a comment, [sections]
 // are only for reading it). A switch is on when its value is 1 / on / true / yes; for the ones without a value in the
 // file, the old way still works: an empty file with the switch's name in the data folder (handy with adb).
 // Header only: the loader and libnnsdk both use it.

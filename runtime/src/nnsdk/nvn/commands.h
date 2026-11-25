@@ -1,6 +1,6 @@
 #pragma once
 // Comandos que graba un NVNcommandBuffer. Se guardan tal cual (con copias de los objetos de estado
-// y de las vistas, que el juego puede reutilizar); el ejecutor los reproduce al enviar a la cola, con
+// y de las vistas, que el game puede reutilizar); el ejecutor los reproduce al enviar a la cola, con
 // el estado de la cola persistiendo entre listas, como en NVN.
 
 #include <chrono>
@@ -195,7 +195,7 @@ struct ReportCounter {
     int type;
     uint64_t address;
 };
-// Imagen (storage image) del handle de nvnDeviceGetImageHandle en la ranura `index` de la etapa.
+// Image (storage image) del handle de nvnDeviceGetImageHandle en la ranura `index` de la etapa.
 struct BindImage {
     int stage, index;
     uint64_t handle;
@@ -237,7 +237,7 @@ using Command = std::variant<cmd::SetRenderTargets, cmd::ClearColor, cmd::ClearD
 
 // Las listas se reciclan (cmdbuf.cpp) y vaciarlas no recorre sus ~35k comandos: que siga siendo así.
 static_assert(std::is_trivially_destructible_v<Command> && std::is_trivially_copyable_v<Command>);
-// Las listas cortas no hacen crecer Command (lo fija SetRenderTargets).
+// Las listas cortas no hacen crecer Command (lo fixed SetRenderTargets).
 static_assert(sizeof(cmd::BindVertexBuffers) <= sizeof(cmd::SetRenderTargets) &&
               sizeof(cmd::BindUniformBuffers) <= sizeof(cmd::SetRenderTargets) &&
               sizeof(cmd::BindVertexAttribs) <= sizeof(cmd::SetRenderTargets) &&
@@ -270,9 +270,9 @@ struct CommandList {
     }
 };
 
-// Ejecuta en Vulkan las listas que el juego envía a la cola (executor.cpp).
+// Ejecuta en Vulkan las listas que el game envía a la cola (executor.cpp).
 void execute(const std::vector<const CommandList*>& lists);
-// Presentar en orden con los envíos (la cola de envíos asíncrona) y soltar una lista que el juego recicla.
+// Presentar en orden con los envíos (la cola de envíos asíncrona) y soltar una lista que el game recicla.
 void queue_present(Window& window, int index);
 void release_command_list(CommandList* list);
 // Una lista que ya no se va a reproducir (la cola ya la soltó): vuelve al pool de cmdbuf.cpp para que la
@@ -280,39 +280,41 @@ void release_command_list(CommandList* list);
 // libera nada ahí; con el interruptor no_recycle la borra, como antes).
 void recycle_command_list(CommandList* list);
 // Afinidad (os.cpp): el hilo que llama pasa a los núcleos grandes junto con los demás hilos críticos (el
-// principal del juego, MainDraw y NvnSubmit). refresh_critical_threads, una vez por frame desde el hilo que
+// principal del game, MainDraw y NvnSubmit). refresh_critical_threads, una vez por frame desde el hilo que
 // presenta: como mucho una vez por segundo mira el interruptor no_affinity, rehace las máscaras que se hayan
 // perdido o cambiado y devuelve la completa a los hilos no críticos que heredaron la de los grandes.
 void pin_critical_thread();
-// Los hilos de trabajo de fondo (precarga de shaders, pipelines en segundo plano) a los núcleos pequeños: su CPU no se
+// Los hilos de trabajo de fondo (precarga de shaders, pipelines en background) a los núcleos pequeños: su CPU no se
 // la quita a los críticos ni calienta los grandes (el SoC caliente baja la GPU). no_affinity: como estén.
 void pin_background_thread();
 void refresh_critical_threads();
 // Los tids de los hilos críticos de ahora (los que sigan vivos)
 std::vector<pid_t> critical_threads();
-// Lo que dura un frame ahora (window.cpp: el límite de FPS del menú, o el intervalo que pide el juego), en ns
+// Lo que dura un frame ahora (window.cpp: el límite de FPS del menú, o el intervalo que pide el game), en ns
 int64_t frame_period_ns();
 // How close the phone is to thermal throttling (perf_hint.cpp: Android's thermal headroom, 0 cool .. 1 throttling hard;
 // above 1 it already is), for the overlay's HEAT line; read every 10 s on its own thread; negative where Android
 // doesn't give it (before 12)
 float thermal_headroom();
-// Pistas de rendimiento de Android (perf_hint.cpp): una vez por frame del juego, desde el hilo que presenta.
+// A new thermal-headroom sample (Android limits this to about once every 10 s).
+bool new_thermal_headroom(uint64_t& serial, float& value);
+// Pistas de rendimiento de Android (perf_hint.cpp): una vez por frame del game, desde el hilo que presenta.
 void perf_hint_frame(int64_t period_ns);
 // Shadow, model and texture detail settings inside the game (game_tweaks.cpp), once per present
 void game_tweaks();
-// Copia la textura de la ventana a la imagen del swapchain (la llama window.cpp al presentar).
+// Copia la textura de la window a la image del swapchain (la llama window.cpp al presentar).
 // Con FSR 1 (fsr.cpp) si el formato lo permite; si no, un blit lineal.
 PicturePath blit_to_swapchain(Texture& texture, const VkRect2D& crop, VkImage swapchain_image, VkFormat format, VkExtent2D extent,
                        VkCommandBuffer cmd);
 // Se presentó un frame (window.cpp): las texturas que escribe la CPU se revisan una vez por frame.
 void next_frame();
-// Para la resolución dinámica (window.cpp): la GPU del último frame del juego que ya se leyó (sus timestamps de
+// Para la resolución dinámica (window.cpp): la GPU del último frame del game que ya se leyó (sus timestamps de
 // ReportCounter), con un número que sube con cada uno (true si hay uno más nuevo que `serial`), y el ejecutor del último
 // frame presentado (la suma de sus envíos).
 bool game_gpu_frame(uint64_t& serial, int64_t& ns);
 uint64_t last_frame_run_ns();
 // DEPURACIÓN: traza del frame siguiente pedida desde el código (el detector de destellos de window.cpp); full: con los
-// render targets, como <datos>/trazar con "completa".
+// render targets, como <data>/trazar con "completa".
 void request_trace(bool full);
 // DEPURACIÓN: en ciertos frames vuelca a la SD la textura presentada y los render targets del frame.
 void debug_dump_frame(Texture* presented);
@@ -329,15 +331,15 @@ bool sync_texture_storage(Texture& texture, const Texture::TexelWrite& region);
 // La VkQueue no admite accesos concurrentes: todo vkQueueSubmit/vkQueuePresentKHR pasa por este mutex (solo
 // la llamada: no se espera nada con él). Va después de executor_mutex() si se toman los dos.
 std::mutex& vk_queue_mutex();
-// Lo que el juego suelta (la imagen de una textura, un sampler) puede seguir en un envío pendiente: se
-// destruye cuando la GPU termina el último envío hecho hasta ahora; con la imagen caen sus vistas y
+// Lo que el game suelta (la image de una textura, un sampler) puede seguir en un envío pendiente: se
+// destruye cuando la GPU termina el último envío hecho hasta ahora; con la image caen sus vistas y
 // framebuffers. Quien toca un objeto que el ejecutor puede estar leyendo toma executor_mutex() (el mismo
 // que serializa la ejecución de los comandos).
 std::recursive_mutex& executor_mutex();
 bool publish_virtual_pool(void* pool, Texture* only = nullptr);
 bool publish_virtual_buffers(void* pool);
 void queue_cpu_fence(void* sync);
-// Perfil de cargas: lo que un hilo del juego esperó a executor_mutex() (el ejecutor lo tiene durante todo un envío).
+// Perfil de cargas: lo que un hilo del game esperó a executor_mutex() (el ejecutor lo tiene durante todo un envío).
 void note_executor_lock_wait(uint64_t ns);
 // Toma executor_mutex() con `lock` (sin tomar) y, si estaba ocupado, apunta la espera.
 inline void lock_executor(std::unique_lock<std::recursive_mutex>& lock) {
@@ -347,7 +349,7 @@ inline void lock_executor(std::unique_lock<std::recursive_mutex>& lock) {
     note_executor_lock_wait(static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()));
 }
-void retire_texture_gpu(Texture& t);  // deja la textura sin imagen
+void retire_texture_gpu(Texture& t);  // deja la textura sin image
 void retire_sampler(VkSampler sampler);
 
 }  // namespace nvn

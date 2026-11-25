@@ -1,16 +1,16 @@
 // nn::swkbd: el teclado de software del sistema. La Switch abre su applet; aquí cada teclado se pregunta con un cuadro de
 // texto de Android (host.h, NnsdkText; GameActivity.askText y TextPrompt en la app):
 // - ShowKeyboard (nombre del cazador, del Felyne y del Canyne, main+0x6fa6984): el cuadro sale con el texto inicial del
-//   juego (renombrar), el título y la guía del config y sus longitudes máxima y mínima. El juego espera, como con el
+//   game (renombrar), el título y la guía del config y sus longitudes máxima y mínima. El game espera, como con el
 //   applet. Si puso un TextCheckCallback, se le pasa el texto igual que haría el applet; si lo rechaza, el cuadro vuelve
 //   a salir con su mensaje. Cancelar es el "cancelar" del applet.
-// - InlineKeyboard (el teclado dentro del juego: el nombre del cazador al crearlo, el chat): se inicializa en el primer
-//   Calc como el applet de verdad; cada Appear abre el cuadro con el texto que el juego puso con SetInputText, y el Calc
+// - InlineKeyboard (el teclado dentro del game: el nombre del cazador al crearlo, el chat): se inicializa en el primer
+//   Calc como el applet de verdad; cada Appear abre el cuadro con el texto que el game puso con SetInputText, y el Calc
 //   que ve la respuesta llama a DecidedEnter (o a DecidedCancel).
 // Sin cuadro (desde la terminal, o una app sin él), como antes: un jugador que siempre acepta. El texto inicial si lo hay;
-// si no, la siguiente línea de <datos>/nombre.txt (UTF-8, una por teclado, en orden; la última se repite) o "Flip".
+// si no, la siguiente línea de <data>/nombre.txt (UTF-8, una por teclado, en orden; la última se repite) o "Flip".
 //
-// Los setters de KeyboardConfig escriben los mismos campos que el SDK: el juego también rellena algunos a mano
+// Los setters de KeyboardConfig escriben los mismos campos que el SDK: el game también rellena algunos a mano
 // (longitud máxima, modo de contraseña… main+0x6fa5f3c) y ShowKeyboard los lee de ahí.
 
 #include <algorithm>
@@ -181,7 +181,7 @@ std::string data_dir() {
     return env ? env : "/sdcard/NieR";
 }
 
-// Las líneas de <datos>/nombre.txt (sin el salto de línea final ni espacios al final; las vacías no cuentan).
+// Las líneas de <data>/nombre.txt (sin el salto de línea final ni espacios al final; las vacías no cuentan).
 std::vector<std::string> configured_names() {
     std::vector<std::string> names;
     if (FILE* f = fopen((data_dir() + "/nombre.txt").c_str(), "r")) {
@@ -274,7 +274,7 @@ std::u16string initial_text(const ShowKeyboardArg& arg) {
     return std::u16string(text, length16(text, size_t(config.initial_string_length)));
 }
 
-// Deja el texto en el String del juego, en UTF-16 o UTF-8 según el config, terminado en 0. Devuelve los bytes escritos
+// Deja el texto en el String del game, en UTF-16 o UTF-8 según el config, terminado en 0. Devuelve los bytes escritos
 // sin contar el 0.
 size_t write_result(String* out, const std::u16string& text, bool utf8) {
     auto* dst = static_cast<uint8_t*>(out->ptr);
@@ -346,7 +346,7 @@ bool still_typing(uint32_t serial) {
     return serial && answer(serial, ignored) == 2;
 }
 
-// Pregunta y espera (ShowKeyboard: el juego se queda parado mientras, como con el applet)
+// Pregunta y espera (ShowKeyboard: el game se queda parado mientras, como con el applet)
 int ask_and_wait(const Question& q, std::u16string& text) {
     const uint32_t serial = ask(q);
     if (!serial) return -1;
@@ -459,7 +459,7 @@ void SetTextCheckCallback(ShowKeyboardArg* arg, TextCheckCallback callback) {
     if (callback) arg->keyboard_config.text_check_callback = callback;
 }
 
-// Le pasa el texto al TextCheckCallback del juego como el applet (el String lleva durante la llamada el tamaño del texto,
+// Le pasa el texto al TextCheckCallback del game como el applet (el String lleva durante la llamada el tamaño del texto,
 // con el 0) y deja en message lo que conteste si lo rechaza (en el work buffer de comprobación).
 bool game_accepts(String* out, const ShowKeyboardArg& arg, size_t bytes, std::u16string& message) {
     const KeyboardConfig& config = arg.keyboard_config;
@@ -482,7 +482,7 @@ Result ShowKeyboard(String* out, const ShowKeyboardArg& arg) {
     const std::u16string initial = initial_text(arg);
     if (g_initial_arg == &arg) g_initial_arg = nullptr;
 
-    // Con el cuadro: hasta que el jugador da uno que el juego acepta, o cancela
+    // Con el cuadro: hasta que el jugador da uno que el game acepta, o cancela
     Question q;
     q.header.assign(config.header_text, length16(config.header_text, 64));
     q.guide.assign(config.guide_text, length16(config.guide_text, 256));
@@ -547,14 +547,14 @@ void InputText::Set(const char16_t* text) {
     copy_text(this->text, 501, text);
 }
 
-// --- InlineKeyboard: el estado vive en el work buffer del juego (0x6e0 bytes), como el del SDK ---
+// --- InlineKeyboard: el estado vive en el work buffer del game (0x6e0 bytes), como el del SDK ---
 
 struct InlineKeyboard::Impl {
     State state = State_None;
     bool initialize_pending = true;
     bool decision_pending = false;
     bool released_user_word_pending = false;
-    uint32_t asked = 0;  // la pregunta del cuadro de texto que sigue abierta (0: ninguna)
+    uint32_t asked = 0;  // la pregunta del cuadro de texto que sigue abierta (0: no)
     int32_t cursor_pos = 0;
     void (*finished_initialize)() = nullptr;
     void (*finished_keyboard)() = nullptr;
@@ -584,8 +584,8 @@ void InlineKeyboard::Finalize() {
     impl_ = nullptr;
 }
 
-// Las respuestas del "applet" llegan aquí, como en el SDK: el fin de la inicialización (el juego pone los callbacks
-// después de Initialize, main+0x6fa760c), la de un Appear (el jugador cancela; el juego espera a ver el teclado oculto
+// Las respuestas del "applet" llegan aquí, como en el SDK: el fin de la inicialización (el game pone los callbacks
+// después de Initialize, main+0x6fa760c), la de un Appear (el jugador cancela; el game espera a ver el teclado oculto
 // otra vez para cerrar, main+0x6fa7e80) y la de UnsetUserWordInfo.
 State InlineKeyboard::Calc() {
     if (!impl_) return State_None;
@@ -638,7 +638,7 @@ void InlineKeyboard::Appear(const AppearArg&) {
 void InlineKeyboard::Disappear() {
     if (!impl_) return;
     impl_->decision_pending = false;
-    impl_->asked = 0;  // (si el cuadro sigue abierto, su respuesta ya no va a ninguna parte)
+    impl_->asked = 0;  // (si el cuadro sigue abierto, su respuesta ya no va a no parte)
     if (impl_->state != State_None) impl_->state = State_Hidden;
 }
 
@@ -649,7 +649,7 @@ void InlineKeyboard::SetCursorPos(int pos) {
     if (impl_) impl_->cursor_pos = pos;
 }
 void InlineKeyboard::SetUserWordInfo(const UserWordInfo&) {}
-// El applet avisa con ReleasedUserWordInfo cuando suelta las palabras: el juego puede esperarlo para liberarlas.
+// El applet avisa con ReleasedUserWordInfo cuando suelta las palabras: el game puede esperarlo para liberarlas.
 void InlineKeyboard::UnsetUserWordInfo() {
     if (impl_) impl_->released_user_word_pending = true;
 }
@@ -685,10 +685,10 @@ void InlineKeyboard::SetReleasedUserWordInfoCallback(void (*callback)()) {
     if (impl_) impl_->released_user_word = callback;
 }
 
-// La altura del teclado completo según el SDK (la usa la interfaz del juego para dejarle sitio).
+// La altura del teclado completo según el SDK (la usa la interfaz del game para dejarle sitio).
 int InlineKeyboard::GetMaxHeight() { return 400; }
 
-// Nunca se dibuja: ni ocupa la pantalla táctil ni da imagen.
+// Nunca se dibuja: ni ocupa la screen táctil ni da image.
 bool InlineKeyboard::IsUsedTouchPointByKeyboard(int, int) { return false; }
 int InlineKeyboard::GetTouchRectangles(Rect* first, Rect* second) const {
     if (first) *first = {};
@@ -697,8 +697,8 @@ int InlineKeyboard::GetTouchRectangles(Rect* first, Rect* second) const {
 }
 bool InlineKeyboard::GetImage(void*, size_t) { return false; }
 
-// La ventana del teclado es la pantalla de la Switch, y su imagen RGBA8 de 1280x720 como la pide vi: múltiplo de
-// 128 KB alineado a 4 KB. El juego crea una textura con esto (main+0x6eff9cc) aunque nunca le llegue imagen.
+// La window del teclado es la screen de la Switch, y su image RGBA8 de 1280x720 como la pide vi: múltiplo de
+// 128 KB alineado a 4 KB. El game crea una textura con esto (main+0x6eff9cc) aunque nunca le llegue image.
 void InlineKeyboard::GetWindowSize(int* width, int* height) const {
     *width = 1280;
     *height = 720;

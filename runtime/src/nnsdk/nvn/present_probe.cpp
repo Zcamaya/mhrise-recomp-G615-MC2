@@ -12,9 +12,9 @@
 namespace nvn {
 namespace {
 // --- Detector de destellos (DEPURACIÓN) ---
-// <datos>/capture_flash (en vivo): el fuego del Aknosom salía como un disco amarillo plano que tapaba media pantalla
+// <data>/capture_flash (live): el fuego del Aknosom salía como un disco amarillo plano que tapaba media screen
 // durante ~0,5 s (5-11), demasiado poco para pedir la traza a mano. Cada frame se copian 16x9 texels de la textura de la
-// ventana (dentro de su recorte) a un buffer de la CPU; al volver a ese juego de present (kPresentSlots frames después, con
+// window (dentro de su recorte) a un buffer de la CPU; al volver a ese game de present (kPresentSlots frames después, con
 // su fence ya esperado) se miran: con un sexto o más de amarillo saturado se pide la traza completa del frame siguiente
 // (request_trace). Como mucho una cada 20 s y 4 por partida.
 constexpr int kProbeW = 16, kProbeH = 9;
@@ -121,7 +121,7 @@ void PresentProbe::collect() {
     if (p.output_format != VK_FORMAT_UNDEFINED) log_layers(p);
     if (!p.detect) return;
     const uint32_t bytes = texel_bytes(p.format);
-    // Umbrales (en vivo, <datos>/destello_umbral: "R G Bmáx R-B sextos"): un destello cálido y muy claro. Los primeros
+    // Umbrales (live, <data>/destello_umbral: "R G Bmáx R-B sextos"): un destello cálido y muy claro. Los primeros
     // (230 190 200 40 y un sexto) no saltaron con uno casi blanco del 5-11; por defecto ahora 220 180 235 20.
     struct Thresholds {
         float r = 220, g = 180, b = 235, rb = 20;
@@ -156,7 +156,7 @@ void PresentProbe::collect() {
     }
 }
 
-// Graba la copia de las muestras de la textura de la ventana (en GENERAL, como la lee el blit).
+// Graba la copia de las muestras de la textura de la window (en GENERAL, como la lee el blit).
 static void record_samples(const PresentProbe& p, VkCommandBuffer cmd, VkImage image, VkImageLayout layout, VkFormat format,
                     VkRect2D crop, size_t offset) {
     const uint32_t bytes = texel_bytes(format), w = crop.extent.width, h = crop.extent.height;

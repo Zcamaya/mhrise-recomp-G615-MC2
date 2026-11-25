@@ -1,5 +1,5 @@
 // Funciones de archivo de la libc de Nintendo que reciben una ruta. En la Switch van por nn::fs, así que entienden
-// "montaje:/..." (rom:, save: y lo que monte el juego); aquí esas rutas se traducen a la carpeta del montaje y el
+// "montaje:/..." (rom:, save: y lo que monte el game); aquí esas rutas se traducen a la carpeta del montaje y el
 // resto ("/dev/urandom") se pasa tal cual a Android. El motor lee y guarda con nn::fs: esto lo usan librerías de
 // terceros (la semilla de entropía abre /dev/urandom, abseil busca tzdata, gRPC sus certificados, NPLN su
 // "_npln:/npln_config.json"), que sin el archivo siguen su camino.
@@ -78,7 +78,7 @@ int nngame_stat(const char* path, struct stat* st) {
     return stat64(p.c_str(), reinterpret_cast<struct stat64*>(st));
 }
 
-// El DIR* es el de bionic: readdir y closedir del juego son las suyas.
+// El DIR* es el de bionic: readdir y closedir del game son las suyas.
 DIR* nngame_opendir(const char* path) {
     std::string p = host_path(path);
     if (p.empty()) return errno = ENOENT, nullptr;
@@ -93,7 +93,7 @@ DIR* nngame_opendir(const char* path) {
     return d;
 }
 
-// El FILE* es el de bionic, como stdout/stderr: fread, fputs, vfprintf… del juego van directos a bionic.
+// El FILE* es el de bionic, como stdout/stderr: fread, fputs, vfprintf… del game van directos a bionic.
 FILE* nngame_fopen(const char* path, const char* mode) {
     std::string p = host_path(path);
     if (p.empty()) return errno = ENOENT, nullptr;
