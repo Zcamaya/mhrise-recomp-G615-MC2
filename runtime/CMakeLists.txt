@@ -6,7 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra)
 # Release (tools/build_apk.sh RELEASE=1, la de los jugadores): cada función y dato en su sección para que el enlazador
 # tire lo que nadie usa, funciones idénticas plegadas (solo las que no se comparan por dirección) y sin tabla de
-# símbolos (la dinámica, la que enlaza el game, se queda). Sin LTO: con lo que el game enlaza por nombre, sin probar.
+# símbolos (la dinámica, la que enlaza el game, se queda). Sin LTO por defecto; tools/build_apk.sh LTO=1 crea una
+# variante ThinLTO separada para probar que se conservan todos los símbolos importados por el game.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_compile_options(-ffunction-sections -fdata-sections)
   add_link_options(-Wl,--gc-sections -Wl,--icf=safe -s)

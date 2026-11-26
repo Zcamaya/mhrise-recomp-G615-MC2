@@ -5,9 +5,9 @@
 #
 # Signing: by default the Android debug keystore (~/.android/debug.keystore, created if missing). For your own release
 # key: KEYSTORE=<file> KS_PASS=<password> [KEY_ALIAS=<alias>] tools/build_apk.sh
-# RELEASE=1: the build for players (the release workflow): -O3 without debug info, unused code and duplicate functions
-# dropped, symbols stripped, and an APK that isn't debuggable (ART runs a debuggable app's Java slower). Without it,
-# RelWithDebInfo and a debuggable APK, for testing.
+# RELEASE=1: the build for players: -O3 without debug info, unused code and duplicate functions dropped, symbols
+# stripped, and an APK that isn't debuggable. Without it, RelWithDebInfo and a debuggable APK, for testing.
+# LTO=1: separate ThinLTO Release build/APK for A/B testing; requires RELEASE=1.
 # PACKAGE=<name>: the same app under another package name (with LABEL=<name on the home screen>). By default this source
 # uses io.github.iamwilmar.mhriseport.camon50ultra to install alongside the official app. The Java classes keep their
 # own package; only what Android sees changes, and each package gets its own settings and drivers.
@@ -24,13 +24,26 @@ APKSIGNER="$BT/apksigner"
 if [ ! -e "$D8" ] && [ -f "$BT/d8.bat" ]; then D8="$BT/d8.bat"; fi
 if [ ! -e "$APKSIGNER" ] && [ -f "$BT/apksigner.bat" ]; then APKSIGNER="$BT/apksigner.bat"; fi
 RELEASE="${RELEASE:-0}"
-if [ "$RELEASE" = 1 ]; then
-  BUILD_TYPE=Release BUILD="$ROOT/build/android-release" DEBUG_FLAG=""
-else
-  BUILD_TYPE=RelWithDebInfo BUILD="$ROOT/build/android" DEBUG_FLAG="--debug-mode"
+LTO="${LTO:-0}"
+if [ "$LTO" != 0 ] && [ "$LTO" != 1 ]; then
+  echo "LTO must be 0 or 1" >&2
+  exit 1
 fi
-STAGE="$ROOT/build/apk"
-APK="${APK_OUT:-$ROOT/build/mhriseport.apk}"
+if [ "$LTO" = 1 ] && [ "$RELEASE" != 1 ]; then
+  echo "LTO=1 requires RELEASE=1" >&2
+  exit 1
+fi
+if [ "$RELEASE" = 1 ]; then
+  if [ "$LTO" = 1 ]; then
+    BUILD_TYPE=Release BUILD="$ROOT/build/android-release-lto" STAGE_DEFAULT="$ROOT/build/apk-lto" APK_DEFAULT="$ROOT/build/mhriseport-lto.apk" DEBUG_FLAG=""
+  else
+    BUILD_TYPE=Release BUILD="$ROOT/build/android-release" STAGE_DEFAULT="$ROOT/build/apk" APK_DEFAULT="$ROOT/build/mhriseport.apk" DEBUG_FLAG=""
+  fi
+else
+  BUILD_TYPE=RelWithDebInfo BUILD="$ROOT/build/android" STAGE_DEFAULT="$ROOT/build/apk" APK_DEFAULT="$ROOT/build/mhriseport.apk" DEBUG_FLAG="--debug-mode"
+fi
+STAGE="${APK_STAGE:-$STAGE_DEFAULT}"
+APK="${APK_OUT:-$APK_DEFAULT}"
 PACKAGE="${PACKAGE:-}"
 if [ -z "$PACKAGE" ]; then
   PACKAGE=io.github.iamwilmar.mhriseport.camon50ultra
@@ -49,8 +62,11 @@ done
 [ -d "$ROOT/third_party/sirit" ] || { echo "run tools/setup.sh first" >&2; exit 1; }
 
 mkdir -p "$BUILD"
-cmake -S "$ROOT/runtime" -B "$BUILD" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+GENERATOR_ARGS=()
+if [ -n "${CMAKE_GENERATOR:-}" ]; then GENERATOR_ARGS=(-G "$CMAKE_GENERATOR"); fi
+cmake "${GENERATOR_ARGS[@]}" -S "$ROOT/runtime" -B "$BUILD" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
   -DMHRISE_LUA_DEBUG="$LUA_LAB" \
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION="$([ "$LTO" = 1 ] && echo ON || echo OFF)" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_NDK="$NDK" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static > /dev/null
 if ! cmake --build "$BUILD" -j"$JOBS" > "$BUILD/build.log" 2>&1; then
